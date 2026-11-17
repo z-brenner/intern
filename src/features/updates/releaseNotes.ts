@@ -3,6 +3,20 @@ export interface ReleaseNotes { version: string; changes: readonly string[] }
 
 export const releaseNotes: readonly ReleaseNotes[] = [
   {
+    version: '0.1.0-alpha.20',
+    // Shown whole in a dialog that must not scroll at the app's smallest
+    // window, 800 by 600 (tests/e2e/updates.spec.ts): short lines, the rest
+    // in docs/releases/v0.1.0-alpha.20.md.
+    changes: [
+      'Intern is now ATLAS: Analyze, Title, Label, Approve, Store.',
+      'Names lead with the organization: 2025-03-26 Vistage Malaysia - Termination Letter for Johnny Appleseed.',
+      'A file’s own name is kept when it already says the right thing.',
+      'A missing date comes from the file name or the file’s last-edited date, with a note.',
+      'Review reasons are a few words each. View document (Alt+V) shows the file inside ATLAS.',
+      'Double-click a row to open it. Clear queue and Clear completed are in the ⋯ menu.',
+    ],
+  },
+  {
     version: '0.1.0-alpha.19',
     // Shown whole in a dialog that must not scroll at the app's smallest
     // window, 800 by 600 (tests/e2e/updates.spec.ts): short lines, the rest

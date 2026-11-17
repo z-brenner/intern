@@ -63,7 +63,7 @@ export const MAX_FILENAME_BYTES = 512;
 export function validateFilename(name: string, sourceExtension: string | undefined): string | undefined {
   const problem = validateLeafFilename(name);
   if (problem) return problem;
-  if (!sourceExtension) return 'This file has no extension, so Intern cannot rename it.';
+  if (!sourceExtension) return 'This file has no extension, so ATLAS cannot rename it.';
   const extension = filenameExtension(name);
   if (extension === undefined || asciiLower(extension) !== asciiLower(sourceExtension)) {
     return `The filename must end with “.${sourceExtension}”, the file's own extension.`;

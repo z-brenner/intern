@@ -22,8 +22,8 @@ import type { TypedWaiting } from './savingOverTyped';
   review. Settings says so, above Save, before either is saved.
 */
 
-const ONE = '1 document has a name or a description you typed and did not file. When you save, Intern can rename it under the name it proposed. You can file it first, or take back what you typed. What you typed is kept with the document, but is not filed.';
-const several = (count: number) => `${count} documents have a name or a description you typed and did not file. When you save, Intern can rename them under the names it proposed. You can file them first, or take back what you typed. What you typed is kept with each document, but is not filed.`;
+const ONE = '1 document has a name or a description you typed and did not file. When you save, ATLAS can rename it under the name it proposed. You can file it first, or take back what you typed. What you typed is kept with the document, but is not filed.';
+const several = (count: number) => `${count} documents have a name or a description you typed and did not file. When you save, ATLAS can rename them under the names it proposed. You can file them first, or take back what you typed. What you typed is kept with each document, but is not filed.`;
 
 /** Settings as an older backend sends them: no review level at all. */
 const older: AppSettings = { destination: 'D:\\Filed', destinationLayout: 'flat', startMinimized: false, automaticRename: false, intakeFolder: 'D:\\In', intakeEnabled: true, intakeLocalOnly: true, processOthersUploads: false, machineLabel: 'Front desk', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'openai_compatible', hostedBaseUrl: '', hostedModel: '' };
@@ -58,7 +58,7 @@ describe('the documents a save could rename over what was typed, counted', () =>
     expect(typedWaiting(items, () => true)).toEqual({ ready: 3, review: 3 });
   });
 
-  it('does not count what Intern has no name for or will not name by itself: an unreadable document, an approved one, a staged copy', () => {
+  it('does not count what ATLAS has no name for or will not name by itself: an unreadable document, an approved one, a staged copy', () => {
     const others: QueueItem[] = [
       // Could not be read: it waits in review with no proposal, and a person types its name.
       // The demo and an older backend leave the name out.
@@ -81,7 +81,7 @@ describe('the documents a save could rename over what was typed, counted', () =>
     expect(typedWaiting([...others, row('review-typed', 'review'), row('ready-typed', 'ready')], () => true)).toEqual({ ready: 1, review: 1 });
   });
 
-  it('takes typed as the window does: in the fields now, or set aside when the document changed, and never Intern\'s own proposal', () => {
+  it('takes typed as the window does: in the fields now, or set aside when the document changed, and never ATLAS\'s own proposal', () => {
     const drafts: ReviewDrafts = new Map();
     const earlier: EarlierDrafts = new Map();
     const typed = (id: string) => typedAndNotFiled(drafts, earlier, id);
@@ -106,7 +106,7 @@ describe('the documents a save could rename over what was typed, counted', () =>
   });
 });
 
-describe('whether a save lets Intern rename them', () => {
+describe('whether a save lets ATLAS rename them', () => {
   const typed: TypedWaiting = { ready: 2, review: 5 };
   const settings = (automaticRename: boolean, reviewLevel?: unknown): AppSettings => (reviewLevel === undefined ? { ...older, automaticRename } : { ...older, automaticRename, reviewLevel } as AppSettings);
   // [automatic before, level before, automatic after, level after, the documents counted]
@@ -154,7 +154,7 @@ describe('whether a save lets Intern rename them', () => {
 });
 
 describe('the warning\'s words', () => {
-  it('says how many documents, that Intern can rename them under the names it proposed, what to do first, and where what was typed is afterwards', () => {
+  it('says how many documents, that ATLAS can rename them under the names it proposed, what to do first, and where what was typed is afterwards', () => {
     expect(typedWarning(1)).toBe(ONE);
     expect(typedWarning(2)).toBe(several(2));
     expect(typedWarning(14)).toBe(several(14));
@@ -167,7 +167,7 @@ describe('the warning\'s words', () => {
 
   it('says "can", since not every document in review becomes ready, and has no long dash', () => {
     for (const words of [ONE, several(3)]) {
-      expect(words).toContain('Intern can rename');
+      expect(words).toContain('ATLAS can rename');
       expect(words).not.toMatch(/\bwill\b/);
       expect(words).not.toMatch(/[\u2012-\u2015]/);
     }
@@ -593,7 +593,7 @@ describe('the warning in Settings', () => {
 async function openSettings() {
   fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
   const dialog = await screen.findByRole('dialog', { name: 'Settings' });
-  fireEvent.click(within(dialog).getByText('Naming and filing', { selector: 'summary' }));
+  fireEvent.click(within(dialog).getByText('How ATLAS names files', { selector: 'summary' }));
   return dialog;
 }
 const closeSettings = async (dialog: HTMLElement) => {
@@ -650,7 +650,7 @@ describe('the count Settings is given by the window', () => {
     expect(warning(dialog)).toHaveTextContent(ONE);
     await closeSettings(dialog);
 
-    fireEvent.click(within(panel).getByRole('button', { name: "Back to Intern's proposal" }));
+    fireEvent.click(within(panel).getByRole('button', { name: "Back to ATLAS's proposal" }));
     dialog = await openSettings();
     fireEvent.click(automatic(dialog));
     expect(warning(dialog)).toBeNull();
@@ -766,7 +766,7 @@ describe('the count over rows as the desktop backend sends them', () => {
   kept and marked as renamed with nobody's approval (renamedWithoutApproval),
   and an undo that puts it back in review. No backend ran.
 */
-describe('a document Intern renamed by itself while it had something typed', () => {
+describe('a document ATLAS renamed by itself while it had something typed', () => {
   const TYPED_NAME = '2025-05-01 Letter to Halvorsen about the fixtures';
   const TYPED_SENTENCE = 'Their reply to our notice of 12 April.';
 
@@ -820,7 +820,7 @@ describe('a document Intern renamed by itself while it had something typed', () 
   };
   const kept = () => screen.queryAllByLabelText<HTMLTextAreaElement>('What you had typed');
 
-  it('keeps what was typed with the document, read-only, under Intern\'s name: from review, by way of Balanced', async () => {
+  it('keeps what was typed with the document, read-only, under ATLAS\'s name: from review, by way of Balanced', async () => {
     const { bridge, byItself, renaming, renamed } = await start();
     const panel = await openDetails('Scan 0601.pdf');
     fireEvent.change(within(panel).getByLabelText('Filename'), { target: { value: TYPED_NAME } });
@@ -851,7 +851,7 @@ describe('a document Intern renamed by itself while it had something typed', () 
     expect(panel).toContainElement(kept()[0]);
     expect(within(panel).getByRole('group', { name: 'Kept from before this document changed' })).toHaveTextContent('They are kept here as you had them, name first, and nothing here is filed.');
     // The window says it happened, where it says what an action did, and keeps nothing above the queue.
-    expect(screen.getByRole('group', { name: 'Renamed without you' })).toHaveTextContent("Scan 0601.pdf was renamed under Intern's proposal, without anyone approving it. What you typed for it was not filed, and is kept in its details.");
+    expect(screen.getByRole('group', { name: 'Renamed without you' })).toHaveTextContent("Scan 0601.pdf was renamed under ATLAS's proposal, without anyone approving it. What you typed for it was not filed, and is kept in its details.");
     expect(screen.queryByRole('group', { name: /^Kept from Scan/ })).not.toBeInTheDocument();
 
     // It is with the document wherever that is listed: in Completed, opened again.
@@ -873,7 +873,7 @@ describe('a document Intern renamed by itself while it had something typed', () 
     await byItself(() => renamed(32));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Completed, 1' })).toBeInTheDocument());
     // Said where the outcome of an action is; nothing else: the document has only left the queue for Completed.
-    expect(screen.getByRole('group', { name: 'Renamed without you' })).toHaveTextContent("Scan 0602.pdf was renamed under Intern's proposal, without anyone approving it. What you typed for it was not filed, and is kept in its details.");
+    expect(screen.getByRole('group', { name: 'Renamed without you' })).toHaveTextContent("Scan 0602.pdf was renamed under ATLAS's proposal, without anyone approving it. What you typed for it was not filed, and is kept in its details.");
     expect([...document.querySelector('.toasts')!.children].map((each) => each.getAttribute('aria-label'))).toEqual(['Renamed without you']);
     expect(kept()).toHaveLength(0);
     expect(screen.queryByRole('group', { name: /^Kept from/ })).not.toBeInTheDocument();
@@ -898,7 +898,7 @@ describe('a document Intern renamed by itself while it had something typed', () 
 
   // Intern proposed no name for it, so there is none to rename it under, at
   // either level: the warning would say something untrue of it.
-  it('is not warned of for a document Intern could not read, whatever is typed for it: its name arrives as null', async () => {
+  it('is not warned of for a document ATLAS could not read, whatever is typed for it: its name arrives as null', async () => {
     await start();
     const lease = await openDetails('NEEDS REVIEW - Lease scan.pdf');
     fireEvent.change(within(lease).getByLabelText('Filename'), { target: { value: '2026-01-02 Lease typed by hand' } });

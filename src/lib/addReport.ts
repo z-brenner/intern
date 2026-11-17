@@ -14,7 +14,7 @@ const SKIP_REASONS: Record<string, string> = {
   NEEDS_REVIEW_FILE: 'its name marks it as waiting for review',
   FILE_MISSING: 'not found',
   FOLDER_UNAVAILABLE: 'the folder could not be read',
-  PATH_UNTRUSTED: 'a shortcut or link, which Intern does not follow',
+  PATH_UNTRUSTED: 'a shortcut or link, which ATLAS does not follow',
   SOURCE_LOCKED: 'another program has it open',
   IO_ERROR: 'it could not be read',
   FILE_CHANGED: 'it changed while it was being added',
@@ -26,9 +26,9 @@ const SKIP_REASONS: Record<string, string> = {
   INPUT_FOLDER_NOT_SET: 'no Queue folder is set up yet; choose one in Settings',
   INPUT_FOLDER_UNAVAILABLE: 'your Queue folder could not be opened',
   SYNC_CONFLICT_COPY: 'a OneDrive conflict copy; resolve the conflict first',
-  CLAIM_IO_FAILED: 'Intern could not note in the shared folder that it is working on it',
+  CLAIM_IO_FAILED: 'ATLAS could not note in the shared folder that it is working on it',
   INTAKE_COORDINATION_UNAVAILABLE: 'the Queue folder’s shared bookkeeping could not be written',
-  NOT_IN_INTAKE_FOLDER: 'it is not in the Queue folder Intern is watching',
+  NOT_IN_INTAKE_FOLDER: 'it is not in the Queue folder ATLAS is watching',
 };
 
 /** At most this many skipped files are named; the rest are counted. */
@@ -51,11 +51,11 @@ function heldSentence(reason: string | undefined, held: number, into: string): s
     case 'AWAITING_MICROSOFT':
       return `${one ? 'It joins' : 'They join'} the queue once OneDrive has uploaded ${one ? 'it' : 'them'} and Microsoft confirms ${one ? 'it is' : 'they are'} yours.`;
     case 'UPLOADER_OTHER':
-      return `${held} ${one ? 'was' : 'were'} left in ${into}: Microsoft reports another account uploaded ${one ? 'a file' : 'files'} under ${one ? 'that name' : 'those names'}, so Intern does not process ${one ? 'it' : 'them'} here. To process yours, rename ${one ? 'it' : 'them'} and add ${one ? 'it' : 'them'} again.`;
+      return `${held} ${one ? 'was' : 'were'} left in ${into}: Microsoft reports another account uploaded ${one ? 'a file' : 'files'} under ${one ? 'that name' : 'those names'}, so ATLAS does not process ${one ? 'it' : 'them'} here. To process yours, rename ${one ? 'it' : 'them'} and add ${one ? 'it' : 'them'} again.`;
     case 'LEFT_IN_INPUT_FOLDER':
       return `${held} ${one ? 'stays' : 'stay'} in ${into} and ${one ? 'is' : 'are'} picked up from there.`;
     default:
-      return `${held} ${one ? 'waits' : 'wait'} in ${into} until Intern can confirm who uploaded ${one ? 'it' : 'them'}.`;
+      return `${held} ${one ? 'waits' : 'wait'} in ${into} until ATLAS can confirm who uploaded ${one ? 'it' : 'them'}.`;
   }
 }
 

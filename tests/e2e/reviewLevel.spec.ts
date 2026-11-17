@@ -18,7 +18,7 @@ const LEASE = 'Lease Agreement - 123 Main St.pdf';
 async function levelInSettings(page: Page) {
   await page.getByRole('button', { name: 'Settings' }).click();
   const dialog = page.getByRole('dialog', { name: 'Settings' });
-  await dialog.locator('summary', { hasText: 'Naming and filing' }).click();
+  await dialog.locator('summary', { hasText: 'How ATLAS names files' }).click();
   const level = dialog.getByRole('group', { name: 'Which documents are ready' });
   await expect(level).toBeVisible();
   return { dialog, level, strict: level.getByRole('radio', { name: /^Strict/ }), balanced: level.getByRole('radio', { name: /^Balanced/ }) };
@@ -26,7 +26,7 @@ async function levelInSettings(page: Page) {
 
 test('choosing Balanced in Settings makes the lease ready with a note, the choice is kept, and Strict puts it back', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+  await expect(page.getByRole('main', { name: 'ATLAS' })).toBeVisible();
   const statuses = () => page.locator('.queue-grid [data-column="status"]').allTextContents();
   const checks = () => page.locator('.queue-grid [data-column="check"]').allTextContents();
   // Strict, as the demo has always opened: the lease waits, in its own sentence.
@@ -41,7 +41,7 @@ test('choosing Balanced in Settings makes the lease ready with a note, the choic
   await expect(settings.balanced).not.toBeChecked();
   // It says what Balanced costs before anyone chooses it, and that it decides Rename all ready too.
   await expect(settings.level).toContainText('more of those names will be wrong');
-  await expect(settings.level).toContainText('Ready documents are the ones Rename all ready renames.');
+  await expect(settings.level).toContainText('Ready documents are the ones Rename all ready renames');
   await expect(settings.dialog.getByRole('checkbox', { name: 'Automatically rename ready documents' })).not.toBeChecked();
   // From the keyboard, as any pair of radio buttons: the arrow key moves to Balanced and chooses it.
   await settings.strict.focus();
@@ -57,7 +57,7 @@ test('choosing Balanced in Settings makes the lease ready with a note, the choic
   // Ready with a note: on its row, in the counts, and in its details.
   await expect(queueCell(page, LEASE, 'status')).toHaveText('Ready with a note');
   await expect(queueCell(page, LEASE)).toHaveAccessibleDescription('Ready with a note');
-  await expect(queueCell(page, LEASE, 'check')).toHaveText('Note: Type uncertain +1 more');
+  await expect(queueCell(page, LEASE, 'check')).toHaveText('Note: Type not confirmed +1 more');
   await expect(page.getByRole('button', { name: /needs? review/ })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '4 ready, 1 with a note' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Rename all ready' })).toHaveText('Rename all ready 4');
@@ -67,10 +67,11 @@ test('choosing Balanced in Settings makes the lease ready with a note, the choic
   await expect(queueCell(page, LEASE, 'proposed').locator('mark')).toHaveCount(0);
 
   const panel = await openDetails(page, LEASE);
-  const note = panel.getByRole('region', { name: "Intern's note" });
+  const note = panel.getByRole('region', { name: "ATLAS's note" });
   await expect(note.getByRole('heading', { name: 'Ready with a note' })).toBeVisible();
-  await expect(note).toContainText('This document is ready: nothing holds it. Intern noted this about its reading.');
-  await expect(note).toContainText('The document does not confirm the type in this name as its own.');
+  await expect(note).toContainText('Nothing holds it. ATLAS only noted this about its reading.');
+  await expect(note.getByRole('button', { name: 'Type not confirmed' })).toBeVisible();
+  await expect(note).toContainText('The document does not state the type in this name as its own'); // its why, a press away
   await expect(note).toContainText('The model was unsure of its reading. If you look at this name, start with the date and the parties.');
   await expect(panel.getByRole('heading', { name: 'What to check' })).toHaveCount(0);
   await expect(panel.getByRole('note', { name: 'Part of the name to check' })).toHaveCount(0);
@@ -99,7 +100,7 @@ test('choosing Balanced in Settings makes the lease ready with a note, the choic
   await expect(page.getByRole('button', { name: '3 ready', exact: true })).toBeVisible();
   expect(await statuses()).toEqual(strictStatuses);
   expect(await checks()).toEqual(strictChecks);
-  await expect(panel.getByRole('region', { name: "Intern's note" })).toHaveCount(0);
+  await expect(panel.getByRole('region', { name: "ATLAS's note" })).toHaveCount(0);
   await expect(panel.getByRole('heading', { name: 'What to check' })).toBeVisible();
   await expect(panel.getByRole('button', { name: 'Approve & rename' })).toBeVisible();
 
@@ -122,13 +123,13 @@ test('choosing Balanced in Settings makes the lease ready with a note, the choic
 */
 test('a document renamed with a note is marked in Completed and in the history, and can be listed alone', async ({ page }) => {
   await page.goto('/?reviewLevel=balanced');
-  await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+  await expect(page.getByRole('main', { name: 'ATLAS' })).toBeVisible();
   await expect(queueCell(page, LEASE, 'status')).toHaveText('Ready with a note');
 
   await page.getByRole('button', { name: 'Completed, 2' }).click();
   await expect(page.getByRole('row')).toHaveCount(3);
   await expect(queueCell(page, 'Scan 0098.pdf', 'status')).toHaveText('Completed with a note');
-  await expect(queueCell(page, 'Scan 0098.pdf', 'check')).toHaveText('Note: Type supplied by Intern +1 more');
+  await expect(queueCell(page, 'Scan 0098.pdf', 'check')).toHaveText('Note: Type guessed +1 more');
   await expect(queueCell(page, 'Completed lease.pdf', 'status')).toHaveText('Completed');
   // The longer status fits its column on one line: here, beside the open
   // panel (below), and at the window's narrowest, where the column is too.
@@ -150,9 +151,9 @@ test('a document renamed with a note is marked in Completed and in the history, 
 
   const panel = await openDetails(page, 'Scan 0098.pdf');
   expect(await fits()).toBe(true);
-  const note = panel.getByRole('region', { name: "Intern's note" });
+  const note = panel.getByRole('region', { name: "ATLAS's note" });
   await expect(note.getByRole('heading', { name: 'Renamed with a note' })).toBeVisible();
-  await expect(note).toContainText('Intern had this noted about its reading when the document was renamed.');
+  await expect(note).toContainText('ATLAS noted this about its reading when it was renamed.');
   await expect(note).toContainText('No specific document type was identified.');
   await expect(panel.getByRole('button', { name: 'Undo', exact: true })).toBeVisible();
 
@@ -161,7 +162,7 @@ test('a document renamed with a note is marked in Completed and in the history, 
   const history = page.getByRole('dialog', { name: 'Rename history' });
   const mark = history.getByRole('note');
   await expect(mark).toHaveCount(1);
-  await expect(mark).toHaveText('Note: Type supplied by Intern (+1 more)');
+  await expect(mark).toHaveText('Note: Type guessed (+1 more)');
   await expect(history.getByRole('row').filter({ has: page.getByRole('note') })).toContainText('Scan 0098.pdf');
   await page.keyboard.press('Escape');
   await expect(history).toBeHidden();

@@ -56,3 +56,17 @@ export async function openDetails(originalFilename?: string): Promise<HTMLElemen
   }, { timeout: 3000 });
   return panel!;
 }
+
+/**
+ * The entry `name` of the toolbar's More menu - Copy, Clear queue, Clear
+ * completed - opening the menu first when it is closed.
+ */
+export function moreAction(name: string | RegExp): HTMLElement {
+  const more = screen.getByRole('button', { name: 'More actions' });
+  if (more.getAttribute('aria-expanded') !== 'true') fireEvent.click(more);
+  return screen.getByRole('menuitem', { name });
+}
+
+/** The More menu's Copy entry, which says what it copies: "Copy table" or "Copy selection". */
+export const copyEntry = () => moreAction(/^Copy (table|selection)/);
+

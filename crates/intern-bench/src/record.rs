@@ -559,7 +559,7 @@ mod tests {
         };
         let analysis: DocumentAnalysis = serde_json::from_value(serde_json::json!({
             "filename": "2018-06-14 Minutes.docx", "description": "",
-            "status": "needs_review", "reviewReasons": ["type_inferred"],
+            "status": "needs_review", "reviewReasons": ["type_unsupported"],
             "proposal": {"document_type": "Minutes", "document_date": "2018-06-14",
                 "date_role": null, "parties": [], "party_relation": "none",
                 "description": "", "confidence": 0.9,
@@ -608,7 +608,7 @@ mod tests {
         assert_eq!(flags(&strict), [true, false, false, false, true]);
         assert_eq!(balanced.readiness.as_deref(), Some("ready"));
         assert_eq!(flags(&balanced), [true, true, true, false, false]);
-        assert_eq!(balanced.review_reasons, ["TYPE_INFERRED"], "still said");
+        assert_eq!(balanced.review_reasons, ["TYPE_UNSUPPORTED"], "still said");
 
         // The same reading of a document that is something else: a wrong
         // name held at strict, and filed at balanced.

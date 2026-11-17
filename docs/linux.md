@@ -1,5 +1,7 @@
 # Intern on Linux
 
+ATLAS was called Intern before v0.1.0-alpha.20; this document uses the old name.
+
 Intern builds, runs and is tested on **Ubuntu 24.04, x86-64**. CI builds the
 `.deb` from the pinned runtime on every push, installs it with apt, and starts
 the installed app under Xvfb (the **Linux desktop package and smoke** job). No
@@ -14,7 +16,7 @@ on - WebKitGTK 4.1, the AppIndicator library, `tesseract-ocr`, `libgomp1`,
 and OpenSSL 3:
 
 ```sh
-sudo apt install ./Intern_0.1.0-alpha.19_amd64.deb
+sudo apt install ./Intern_0.1.0-alpha.20_amd64.deb
 intern            # or Intern from the applications menu
 ```
 

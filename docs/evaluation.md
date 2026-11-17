@@ -1,5 +1,7 @@
 # Measuring accuracy: the corpus, the recording, and the baseline
 
+ATLAS was called Intern before v0.1.0-alpha.20; this document uses the old name.
+
 Every claim this project makes about accuracy is a number from
 `intern-evaluate` over the clean-room corpus in `fixtures/`. This page is how
 those numbers are produced, and how CI keeps them from quietly getting worse.
@@ -34,15 +36,15 @@ pipeline's, recorded live with Qwen3.5 9B after the second engine adaptation
 (`e64581e`, merged as `a7d3021`), and `fixtures/corpus-recording-digest.json`
 and `corpus-baseline-digest.json` the digest pipeline's, which a hosted model
 reads through, recorded the same day. Both are replayed with the accurate
-model's review gate, `--min-token-confidence 0.8`
+model's review gate, `--min-token-confidence 0.7`
 (`REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE` in `tiers.rs`), as the app reads,
 and their baselines were written at that gate. CI replays both:
 
 ```text
 intern-evaluate ... --replay fixtures/corpus-recording.json --baseline fixtures/corpus-baseline.json \
-  --min-token-confidence 0.8
+  --min-token-confidence 0.7
 intern-evaluate ... --pipeline digest --replay fixtures/corpus-recording-digest.json \
-  --baseline fixtures/corpus-baseline-digest.json --min-token-confidence 0.8
+  --baseline fixtures/corpus-baseline-digest.json --min-token-confidence 0.7
 ```
 
 ## What replay can and cannot tell you
@@ -145,7 +147,7 @@ pins, starts `llama-server` with the flags the app itself uses (one slot, CPU,
 8,192-token context, the model's own chat template, the prompt cache off,
 `-ub 256`), records with the token probabilities the review gate reads
 (`--token-confidence`), writes the baseline at the accurate model's gate
-(`--min-token-confidence 0.8`, as CI replays it), and stops the server. It records the evidence pipeline, the
+(`--min-token-confidence 0.7`, as CI replays it), and stops the server. It records the evidence pipeline, the
 default; the digest pipeline's recording is made the same way by
 `intern-evaluate --pipeline digest --record fixtures/corpus-recording-digest.json
 --write-baseline fixtures/corpus-baseline-digest.json`. Commit
@@ -201,6 +203,115 @@ commit. A fixture whose reply alone differs is reported and left as it was.
 It splices the file as text, so every entry it did not touch stays
 byte-for-byte as `intern-evaluate` wrote it. The OCR fixtures were last
 re-recorded this way, after OCR began keeping Tesseract's line structure.
+
+## After a retrieval or prompt change
+
+A change to what retrieval sends, or to the prompt, changes the request of
+every document it touches, and those documents replay as `stale_prompt` in
+both recordings of record until they are recorded again. Neither can be
+patched: `intern-bench merge-recordings` refuses a recording made with
+another retrieval configuration or prompt, and a splice would leave the
+fixture recording's header naming the configuration it no longer holds. So
+both are recorded again whole, live, with the pinned accurate model. The
+`--allow-stale` flag is for looking while iterating, never for CI.
+
+The widening of the evidence in November 2026
+([`evidence-retrieval.md`](evidence-retrieval.md#the-chosen-configuration))
+is such a change. Before the recordings were made again, CI's
+`corpus-replay` job read as below. Both were made again on 2026-11-17 -
+the fixture corpus on a four-core Linux machine, InternBench by
+candidate-bench run 44162258206 - and the job replays them with no
+regression:
+
+| Step | Recording | Stale | Result |
+| --- | --- | --- | --- |
+| Replay the corpus and compare with the baseline | `fixtures/corpus-recording.json` | `statement-of-work.pdf`, `settlement-agreement.pdf`: the two fixtures long enough to be excerpted | 2 regressions, exit 2 |
+| Replay the corpus through the digest pipeline and compare with its baseline | `fixtures/corpus-recording-digest.json` | none: the digest pipeline neither retrieves nor shows a file name | passes |
+| Replay InternBench and compare with its baseline | `bench/recording.json` | 19 of 77, every document Stage 4 excerpted: `account-statement`, `annual-report-100p`, `annual-report-excerpt-8p`, `asset-purchase-agreement-25p`, `credit-agreement-50p`, `data-processing-agreement-10p`, `industrial-lease-dated-in-schedule-25p`, `inspection-log-ruled-2p`, `lease-two-column`, `msa-effective-date-in-definitions-12p`, `payroll-register`, `promissory-note`, `property-policy-declarations-mid-60p`, `scan-agreement-10p`, `scan-lease-25p`, `services-agreement`, `sow-under-msa-5p`, `term-loan-parties-apart-40p`, `watershed-monitoring-report-100p` | 19 regressions, exit 2 |
+
+The other 58 InternBench documents and 19 fixtures replay unchanged: they
+went whole and still do. The file name the prompt shows stales nothing:
+neither evaluator passes one - the corpora's file names are their ids, and
+name the answer - and a request without a name is byte for byte the
+request from before names were shown.
+
+**InternBench, on GitHub's runners.** The candidate benchmark workflow
+records InternBench live with the app's flags (see
+[`internbench.md`](internbench.md#candidates-on-github-runners)):
+
+1. Run it on the branch with the change (Actions > Candidate model
+   benchmark on Linux > Run workflow, or
+   `gh workflow run candidate-bench.yml --ref BRANCH -f sets=internbench -f candidates='[...]'`),
+   with the pinned accurate model as the candidate - its entry in
+   `src-tauri/resources/model-manifest.json`:
+
+   ```json
+   [{"label": "qwen3.5-9b",
+     "url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf",
+     "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8"}]
+   ```
+
+   and the defaults otherwise: four threads, no extra server or bench
+   flags. The job takes several hours; it records with token
+   probabilities, since it scores at a gate.
+2. Download the artifact `candidate-qwen3.5-9b-internbench-RUN_ID`, copy its
+   `recording.json` over `bench/recording.json`, and write in its `note`
+   what made it (model, runtime, runner CPU, workflow run, commit), as the
+   note it replaces does.
+3. Write the baseline at the app's gate from it, and compare it with a
+   replay of the old recording made at the commit before the change:
+
+   ```sh
+   cargo run --release --locked -p intern-bench -- run --corpus bench/generated \
+     --gold bench/gold.json --manifest bench/manifest.json \
+     --replay bench/recording.json --min-token-confidence 0.8 \
+     --write-baseline bench/baseline.json --output after.json --markdown after.md
+   cargo run --release --locked -p intern-bench -- compare \
+     --before before.json --after after.json --markdown diff.md
+   ```
+
+4. Commit `bench/recording.json` and `bench/baseline.json` with the change.
+
+On a Linux machine instead, `scripts/run-internbench.sh` makes the same
+recording (`MODEL`, `LLAMA_SERVER` and `INTERN_RUNTIME_DIR` set, and
+`-- --min-token-confidence 0.8` so it records token probabilities) into
+`target/internbench/recording.json`.
+
+**The fixture corpus, on a Linux machine.** No workflow records it; the
+committed recording was made on a four-core Linux machine with the staged
+Linux runtime (see [Recording elsewhere](#recording-elsewhere)):
+
+```sh
+scripts/fetch-linux-assets.sh /tmp/intern-assets
+scripts/stage-linux-runtime.sh /tmp/intern-stage
+cargo build --release --locked -p intern-worker --features windows-native
+cargo build --release --locked -p intern-engine --bin intern-evaluate
+npm run fixtures
+# llama-server with the app's flags, as scripts/run-internbench.sh starts it
+KEY="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+/tmp/intern-stage/runtime/llama-upstream/llama-server --host 127.0.0.1 --port 18090 \
+  --api-key "$KEY" --model Qwen3.5-9B-Q4_K_M.gguf --parallel 1 --ctx-size 8192 \
+  --n-gpu-layers 0 --threads 4 --threads-batch 4 --jinja --no-webui --no-mmproj \
+  --cache-ram 0 -ub 256 --prio -1 --poll 0 --no-repack &
+INTERN_RUNTIME_DIR=/tmp/intern-stage/runtime target/release/intern-evaluate \
+  --fixtures fixtures/generated --expected fixtures/expected.json \
+  --worker target/release/intern-worker \
+  --endpoint http://127.0.0.1:18090/v1/chat/completions --api-key "$KEY" \
+  --model-id intern-local --token-confidence --min-token-confidence 0.8 \
+  --note "Qwen3.5-9B-Q4_K_M.gguf (manifest sha256 03b74727), upstream llama.cpp b11946 ... (what, where, when, from which commit)" \
+  --record fixtures/corpus-recording.json --output live.json
+target/release/intern-evaluate --fixtures fixtures/generated --expected fixtures/expected.json \
+  --replay fixtures/corpus-recording.json --baseline fixtures/corpus-baseline.json \
+  --min-token-confidence 0.8 --output before-baseline.json
+target/release/intern-evaluate --fixtures fixtures/generated --expected fixtures/expected.json \
+  --replay fixtures/corpus-recording.json --write-baseline fixtures/corpus-baseline.json \
+  --min-token-confidence 0.8 --output corpus-report.json
+```
+
+The replay against the old baseline lists every fixture that moved, in
+either direction, for the commit message; then the baseline is written.
+Commit `fixtures/corpus-recording.json` and `fixtures/corpus-baseline.json`
+with the change. The digest pipeline's recording needs nothing.
 
 ## Reading a report
 

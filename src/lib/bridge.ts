@@ -74,6 +74,18 @@ export const SUPPORT_LINKS: Readonly<Record<SupportLinkTarget, string>> = {
   'description-flow': `${GUIDE_URL}#sharepoint-descriptions`,
 };
 
+/** What Clear queue did: how many documents went, and how many it kept, by why. */
+export interface ClearQueueReport {
+  /** Taken out of the queue; their files are where they were. */
+  cleared: number;
+  /** Kept: an earlier rename or copy of theirs did not finish, and their files need checking first. */
+  unsettled: number;
+  /** Kept: being renamed at that moment, which cannot be stopped part-way. */
+  busy: number;
+  /** Kept: still named `NEEDS REVIEW - …`, their own names could not be given back (a program has the file open). */
+  stillMarked: number;
+}
+
 export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
   listItems(): Promise<QueueItem[]>;
   /**
@@ -119,6 +131,21 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
   openItem(id: string): Promise<void>;
   /** Show an item's document selected in its folder. Same id-only contract as `openItem`. */
   revealItem(id: string): Promise<void>;
+  /**
+   * An item's document as its file's bytes, for the window's own viewer to
+   * draw: a PDF, or a PNG or JPEG picture, of at most 50 MB, wherever the
+   * document is now. Refused for any other format (VIEW_UNSUPPORTED), past
+   * the limit (VIEW_TOO_LARGE), and as `openItem` is. Same id-only contract
+   * as `openItem`: the webview reaches no file by path.
+   */
+  documentFile(id: string): Promise<Uint8Array>;
+  /**
+   * The text Intern read from an item's document, page by page: the queue's
+   * own reading while it still has it, or else the document read again now,
+   * which can take a while for a long scan. Same id-only contract as
+   * `openItem`.
+   */
+  documentText(id: string): Promise<DocumentText>;
   getSettings(): Promise<AppSettings>;
   saveSettings(settings: AppSettings): Promise<void>;
   getSetup(): Promise<SetupState>;
@@ -152,6 +179,20 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
    * decision, or already renamed are untouched.
    */
   discardWaiting(): Promise<number>;
+  /**
+   * Clear queue: take every document that is not filed out of the queue -
+   * waiting, being read (stopped first), ready, in review, failed - to start
+   * again from nothing. No file is deleted or moved, and Completed is left
+   * as it is. A document Intern renamed `NEEDS REVIEW - <name>` gets its own
+   * name back. The documents stay in the Queue folder and are not taken in
+   * again until they change, or are added again on purpose
+   * (`queueInputFolder`, Add files).
+   *
+   * Some are kept, and the report says how many and why: a document whose
+   * files need checking first, one being renamed at that moment, and one
+   * whose own name could not be given back.
+   */
+  clearQueue(): Promise<ClearQueueReport>;
   /**
    * Ask GitHub whether a newer signed release exists.
    *
@@ -261,6 +302,26 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
    */
   houseRuleCheck(id: string, shown: HouseRule): Promise<void>;
 }
+
+/** One page of the text Intern read from a document. */
+export interface DocumentTextPage {
+  number: number;
+  text: string;
+  /** Recognized from a picture of the page, so a letter can be misread. */
+  ocr: boolean;
+}
+
+/** The text Intern read from a document (`documentText`). */
+export interface DocumentText {
+  pages: DocumentTextPage[];
+  /** Read again for the viewer, the queue no longer having its own reading. */
+  readNow: boolean;
+  /** The file has changed since Intern read it: this is the file as it is now. */
+  changed: boolean;
+}
+
+/** What the document viewer needs of a bridge. */
+export type DocumentSource = Pick<DesktopBridge, 'documentFile' | 'documentText'>;
 
 /**
  * Optional capability, duck-typed like QueueEventSource: bridges that can push

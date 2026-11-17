@@ -187,13 +187,13 @@ pub(crate) fn startup_failure_text(
         |folder| folder.display().to_string(),
     );
     let mut text = format!(
-        "Intern could not start: {}.\n\nError code: {code}\nData folder: {data_folder}",
+        "ATLAS could not start: {}.\n\nError code: {code}\nData folder: {data_folder}",
         message.trim_end_matches('.')
     );
     if let Some(log) = log {
         text.push_str(&format!("\nThis was saved to {}.", log.display()));
     }
-    text.push_str("\n\nIf restarting Intern does not help, send this message to support.");
+    text.push_str("\n\nIf restarting ATLAS does not help, send this message to support.");
     text
 }
 
@@ -270,7 +270,7 @@ pub fn report_failure(app: &AppHandle, code: &str, message: &str) {
     let mut dialog = app
         .dialog()
         .message(text)
-        .title("Intern could not start")
+        .title("ATLAS could not start")
         .kind(MessageDialogKind::Error);
     if let Some(window) = &window {
         dialog = dialog.parent(window);

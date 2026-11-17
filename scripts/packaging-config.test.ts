@@ -25,30 +25,46 @@ it('packages the license directory as a tree so vcpkg subpaths match the signed 
   expect(smoke).toContain('$EvidencePath');
 });
 
-// nsis_installer_hooks_configured. "Send to > Intern" is created by the
+// nsis_installer_hooks_configured. "Send to > ATLAS" is created by the
 // installer hooks Tauri includes into its NSIS script, removed again on
 // uninstall - but not by the uninstall an update runs, or every update would
 // take it away - and checked both ways by the installed smoke on Windows CI.
-it('adds Send to > Intern at install and removes it at uninstall, but not during an update', async () => {
+// Releases before alpha.20, when the app was called Intern, named it
+// Intern.lnk: every install takes that one away, so an update leaves one
+// entry in Send to, and an uninstall takes either.
+it('adds Send to > ATLAS at install in place of Send to > Intern, and removes both at uninstall, but not during an update', async () => {
   const config = JSON.parse(await readFile('src-tauri/tauri.conf.json', 'utf8'));
   expect(config.bundle.windows.nsis.installerHooks).toBe('windows/hooks.nsh');
-  // The smoke looks for Intern.lnk; the hooks name it after the product.
+  // The install folder, the Start menu entry, the uninstall key and the
+  // data folder keep the name Intern, so an update installs over the
+  // release before it and not beside it. Only the window says ATLAS.
   expect(config.productName).toBe('Intern');
+  expect(config.identifier).toBe('com.intern.app');
+  expect(config.app.windows[0].title).toBe('ATLAS');
 
   const hooks = await readFile('src-tauri/windows/hooks.nsh', 'utf8');
   const macro = (name: string) => new RegExp(`!macro ${name}\\b([\\s\\S]*?)!macroend`).exec(hooks)?.[1] ?? '';
   const install = macro('NSIS_HOOK_POSTINSTALL');
-  expect(install).toContain('CreateShortcut "$SENDTO\\${PRODUCTNAME}.lnk" "$INSTDIR\\${MAINBINARYNAME}.exe"');
+  expect(install).toContain('CreateShortcut "$SENDTO\\ATLAS.lnk" "$INSTDIR\\${MAINBINARYNAME}.exe"');
+  expect(install).toContain('Delete "$SENDTO\\Intern.lnk"');
+  expect(install.indexOf('Delete "$SENDTO\\Intern.lnk"')).toBeLessThan(install.indexOf('CreateShortcut'));
+  // Named outright: the product name is still Intern.
+  expect(hooks).not.toContain('$SENDTO\\${PRODUCTNAME}');
   const uninstall = macro('NSIS_HOOK_POSTUNINSTALL');
   expect(uninstall).toContain('${If} $UpdateMode <> 1');
-  expect(uninstall).toContain('Delete "$SENDTO\\${PRODUCTNAME}.lnk"');
+  expect(uninstall).toContain('Delete "$SENDTO\\ATLAS.lnk"');
+  expect(uninstall).toContain('Delete "$SENDTO\\Intern.lnk"');
   expect(uninstall.indexOf('$UpdateMode <> 1')).toBeLessThan(uninstall.indexOf('Delete'));
   // The template's own uninstall already clears the autostart Run value.
   expect(hooks).not.toMatch(/CurrentVersion\\Run/i);
 
   const smoke = await readFile('scripts/smoke-installer.ps1', 'utf8');
   expect(smoke).toContain('[Environment+SpecialFolder]::SendTo');
+  expect(smoke).toContain('$SendToShortcut = Join-Path $SendToFolder "ATLAS.lnk"');
+  expect(smoke).toContain('$OldSendToShortcut = Join-Path $SendToFolder "Intern.lnk"');
   expect(smoke).toContain('Send to shortcut is missing after install');
+  expect(smoke).toContain('The previous release did not make its Send to shortcut');
+  expect(smoke).toContain('The old Send to shortcut remains after install');
   expect(smoke).toContain('Send to shortcut remains after uninstall');
   // The window is shown before initialization and a failed start shows it
   // too, so a window alone does not prove the app started: the startup error
@@ -171,7 +187,7 @@ it('bundles the Linux runtime as one folder and leaves the Windows layout to Win
   expect(base.bundle.resources['resources/licenses/']).toBe('licenses/');
 });
 
-// The Linux counterpart of Send to > Intern: a launcher that accepts files is
+// The Linux counterpart of Send to > ATLAS: a launcher that accepts files is
 // one a file manager offers under Open With, and one documents can be dropped
 // on. Tauri's own template starts Intern with no files at all.
 it('lets a Linux file manager open documents with Intern', async () => {
@@ -284,8 +300,11 @@ it('removes the root llama.cpp build of releases up to alpha.14 once an update h
   const deleted = [...guarded.matchAll(/^\s*Delete "\$INSTDIR\\([^"\\]+)"$/gm)].map((match) => match[1]);
   expect(deleted.sort()).toEqual([...OLD_ROOT_LLAMA_FILES].sort());
   // Nothing else: no pattern, no folder, nothing under llama-upstream\, and
-  // no delete outside the guard.
-  expect(postinstall.match(/\bDelete\b/g)).toHaveLength(OLD_ROOT_LLAMA_FILES.length);
+  // no delete outside the guard but the Send to shortcut's old name, which
+  // is not in the install folder.
+  expect(postinstall.match(/\bDelete\b/g)).toHaveLength(OLD_ROOT_LLAMA_FILES.length + 1);
+  const unguarded = postinstall.replace(guarded, '');
+  expect([...unguarded.matchAll(/^\s*Delete (.*)$/gm)].map((match) => match[1])).toEqual(['"$SENDTO\\Intern.lnk"']);
   expect(postinstall).not.toMatch(/\*|\?|RMDir|llama-upstream|\/r\b|\/REBOOTOK/i);
   // The Send to shortcut is still written on every install, updates included.
   expect(postinstall.indexOf('CreateShortcut')).toBeGreaterThan(postinstall.indexOf('${EndIf}'));

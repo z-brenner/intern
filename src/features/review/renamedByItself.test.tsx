@@ -268,11 +268,11 @@ describe('what is said of the renames seen', () => {
   });
 
   it('says which document, that nobody approved the name, and where what was typed is, for one', () => {
-    expect(renamedByItselfText([said('Scan 0601')])).toBe("Scan 0601.pdf was renamed under Intern's proposal, without anyone approving it. What you typed for it was not filed, and is kept in its details.");
+    expect(renamedByItselfText([said('Scan 0601')])).toBe("Scan 0601.pdf was renamed under ATLAS's proposal, without anyone approving it. What you typed for it was not filed, and is kept in its details.");
   });
 
   it('says how many for several', () => {
-    expect(renamedByItselfText([said('a'), said('b')])).toBe("2 documents with a name or a description you typed were renamed under Intern's proposals, without anyone approving them. What you typed for each was not filed, and is kept in its details.");
+    expect(renamedByItselfText([said('a'), said('b')])).toBe("2 documents with a name or a description you typed were renamed under ATLAS's proposals, without anyone approving them. What you typed for each was not filed, and is kept in its details.");
     expect(renamedByItselfText([])).toBe('');
   });
 
@@ -343,9 +343,9 @@ describe('the window, when a document typed for is renamed by something other th
   const toast = () => screen.queryByRole('group', { name: 'Renamed without you' });
   const said = () => screen.getByRole('status', { name: 'Action status' });
   /** What is said of one document renamed without the person. */
-  const oneSaid = (name: string) => `${name} was renamed under Intern's proposal, without anyone approving it. What you typed for it was not filed, and is kept in its details.`;
+  const oneSaid = (name: string) => `${name} was renamed under ATLAS's proposal, without anyone approving it. What you typed for it was not filed, and is kept in its details.`;
 
-  it('says nothing while the document is being renamed, then that it was renamed under Intern\'s proposal without anyone approving it, with Undo through the same path as a rename\'s Undo', async () => {
+  it('says nothing while the document is being renamed, then that it was renamed under ATLAS\'s proposal without anyone approving it, with Undo through the same path as a rename\'s Undo', async () => {
     const { bridge, byItself, renaming, renamed } = await start();
     const panel = await typeName('Scan 0601.pdf');
     fireEvent.change(within(panel).getByLabelText('Description'), { target: { value: 'Their reply to our notice.' } });
@@ -447,7 +447,7 @@ describe('the window, when a document typed for is renamed by something other th
   // completed and marked, and the read the check publishes can land while
   // the approval is still being carried out.
   for (const setAside of ['the rename under way', 'a new reading by itself'] as const) {
-    it(`never says the person's approval of Intern's proposal that finishes a parked rename by itself, at any moment (typed text set aside by ${setAside})`, async () => {
+    it(`never says the person's approval of ATLAS's proposal that finishes a parked rename by itself, at any moment (typed text set aside by ${setAside})`, async () => {
       const { bridge, byItself, change, publishRead } = await start(true);
       const { shown, stop } = everythingShown();
       await typeName('Scan 0602.pdf', '2025-05-02 Invoice 4471 from Brightwater');
@@ -510,7 +510,7 @@ describe('the window, when a document typed for is renamed by something other th
     await typeName('Scan 0603.pdf', '2025-05-03 Notice of termination to Contoso');
     fireEvent.click(screen.getByRole('button', { name: 'Details' }));
     await byItself(() => { renamed(32); renamed(34); });
-    await waitFor(() => expect(toast()).toHaveTextContent("2 documents with a name or a description you typed were renamed under Intern's proposals, without anyone approving them. What you typed for each was not filed, and is kept in its details."));
+    await waitFor(() => expect(toast()).toHaveTextContent("2 documents with a name or a description you typed were renamed under ATLAS's proposals, without anyone approving them. What you typed for each was not filed, and is kept in its details."));
     expect(screen.getAllByRole('group', { name: 'Renamed without you' })).toHaveLength(1);
     fireEvent.click(within(toast()!).getByRole('button', { name: 'Undo the renames of these 2 documents' }));
     await waitFor(() => expect(screen.getByRole('group', { name: 'Action result' })).toHaveTextContent('Undid 2 renames.'));
@@ -533,7 +533,7 @@ describe('the window, when a document typed for is renamed by something other th
     expect(toast()).toHaveTextContent(oneSaid('Scan 0602.pdf'));
     // Another renamed by itself: added.
     await byItself(() => renamed(31));
-    await waitFor(() => expect(toast()).toHaveTextContent("2 documents with a name or a description you typed were renamed under Intern's proposals, without anyone approving them."));
+    await waitFor(() => expect(toast()).toHaveTextContent("2 documents with a name or a description you typed were renamed under ATLAS's proposals, without anyone approving them."));
     expect(within(toast()!).getByRole('button', { name: 'Undo the renames of these 2 documents' })).toBeEnabled();
     // Undone from somewhere else: no longer said to be renamed, and not offered to Undo.
     await byItself(() => change(32, { status: 'needs_review', reason: 'UNDONE', filedName: null, filedPath: null, undoable: false, renamedWithoutApproval: false }));

@@ -10,7 +10,7 @@
  */
 import { expect, test, type Page } from '@playwright/test';
 
-const setup = (page: Page) => page.getByRole('main', { name: 'Intern setup' });
+const setup = (page: Page) => page.getByRole('main', { name: 'ATLAS setup' });
 
 /**
  * The same accessibility checks the QA suite makes of the main window, applied
@@ -44,16 +44,16 @@ async function expectAccessibleStep(page: Page, heading: string, stepLabel: stri
   expect(overflow).toBe(0);
 }
 
-test('a person sets up Intern for the fixed SharePoint library without typing any identifier', async ({ page }) => {
+test('a person sets up ATLAS for the fixed SharePoint library without typing any identifier', async ({ page }) => {
   test.slow();
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/?sharePoint=fake');
 
   // Welcome.
   await expect(setup(page)).toBeVisible();
-  await expectAccessibleStep(page, "Your team's documents, filed for you", 'Welcome', 'Set up Intern');
+  await expectAccessibleStep(page, "Your team's documents, filed for you", 'Welcome', 'Set up ATLAS');
   await expect(setup(page)).toContainText(/only documents you upload/i);
-  await page.getByRole('button', { name: 'Set up Intern' }).click();
+  await page.getByRole('button', { name: 'Set up ATLAS' }).click();
 
   // The fake's model is already downloaded, so the model step is skipped.
   await expectAccessibleStep(page, 'Connect your Microsoft account', 'Microsoft account', 'Connect Microsoft account');
@@ -87,15 +87,15 @@ test('a person sets up Intern for the fixed SharePoint library without typing an
   await page.getByRole('button', { name: 'Turn on filing' }).click();
 
   // Finished.
-  await expectAccessibleStep(page, 'Watching Files/Inbox. Filing your documents into Files/Filed.', 'Finished', 'Open Intern');
+  await expectAccessibleStep(page, 'Watching Files/Inbox. Filing your documents into Files/Filed.', 'Finished', 'Open ATLAS');
   await expect(setup(page)).toContainText('Pat Lee');
   await expect(setup(page)).toContainText(/system tray/i);
-  await page.getByRole('button', { name: 'Open Intern' }).click();
+  await page.getByRole('button', { name: 'Open ATLAS' }).click();
 
   // The app.
-  await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+  await expect(page.getByRole('main', { name: 'ATLAS' })).toBeVisible();
   await expect(page.getByRole('navigation', { name: 'Queue navigation' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Set up Intern' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Set up ATLAS' })).toHaveCount(0);
 });
 
 test('a person chooses Queue and Completed folders, with no sign-in, nothing to type, and nothing to skip', async ({ page }) => {
@@ -104,7 +104,7 @@ test('a person chooses Queue and Completed folders, with no sign-in, nothing to 
 
   await expectAccessibleStep(page, 'Your documents, renamed and filed', 'Welcome', 'Choose folders');
   const main = setup(page);
-  await expect(main.getByText('Put files here that you want Intern to process.')).toBeVisible();
+  await expect(main.getByText('Put files here that you want ATLAS to process.')).toBeVisible();
   await expect(main.getByText('Processed files end up here, renamed.')).toBeVisible();
   await expect(main.getByRole('button', { name: 'Not now' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Choose folders' }).click();
@@ -122,7 +122,7 @@ test('a person chooses Queue and Completed folders, with no sign-in, nothing to 
   await expect(main.getByText('Legal - Documents (Contoso SharePoint) › Input')).toBeVisible();
   await expect(main.getByText('Legal - Documents (Contoso SharePoint) › Output')).toBeVisible();
   await page.getByRole('button', { name: 'Done' }).click();
-  await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+  await expect(page.getByRole('main', { name: 'ATLAS' })).toBeVisible();
   // The drop target names the folder a drop is copied into.
   await expect(page.getByRole('region', { name: 'Drag files or folders here to copy them into Input' })).toBeVisible();
 });
@@ -133,7 +133,7 @@ test('both folders are at the top of Settings, and change in a click', async ({ 
   const dialog = page.getByRole('dialog', { name: 'Settings' });
   const folders = dialog.getByRole('group', { name: 'Folders' });
   await expect(folders.getByText('C:\\Intern\\Input')).toBeVisible();
-  await expect(folders.getByText('Put files here that you want Intern to process.')).toBeVisible();
+  await expect(folders.getByText('Put files here that you want ATLAS to process.')).toBeVisible();
   await expect(folders.getByText('C:\\Intern\\Output')).toBeVisible();
   await expect(folders.getByText('Processed files end up here, renamed.')).toBeVisible();
   await expect(folders.getByRole('button', { name: 'Change Queue folder' })).toBeVisible();
@@ -155,6 +155,6 @@ test('both folders are at the top of Settings, and change in a click', async ({ 
 
 test('the default page opens the app, not onboarding', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Set up Intern' })).toHaveCount(0);
+  await expect(page.getByRole('main', { name: 'ATLAS' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Set up ATLAS' })).toHaveCount(0);
 });

@@ -1265,6 +1265,38 @@ fn a_document_put_back_for_want_of_a_model_is_read_only_once() {
     assert_eq!(item.processing_failures, 0);
 }
 
+/// The window's document viewer shows the text Intern read from what the
+/// memo kept of the reading, without reading the document again: the same
+/// pages, for the item that read them, and nothing for an item the memo let
+/// go of or never had.
+#[test]
+fn the_text_a_document_was_read_as_is_kept_for_the_viewer_while_the_memo_holds_it() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["scan.pdf"]);
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(READABLE))]));
+    let model = Arc::new(FakeModel::new(vec![Ok(proposal(0.94, false))]));
+    let pipeline = pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        model,
+        files,
+        AppSettings::default(),
+    );
+    pipeline.enqueue_files(&paths).unwrap();
+    pipeline.run_until_idle().unwrap();
+    let id = pipeline.list().unwrap()[0].id;
+
+    let kept = pipeline.remembered_extraction(id).unwrap().unwrap();
+    assert_eq!(kept.pages, parsed(READABLE).pages);
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 1, "not read again");
+    assert!(pipeline.remembered_extraction(id + 1).unwrap().is_none());
+
+    // Removed from the queue, the memo lets it go, and there is no item.
+    pipeline.remove(id, false).unwrap();
+    assert!(pipeline.remembered_extraction(id).unwrap().is_none());
+}
+
 /// Admits every document on a provider's proof of its bytes, read from a
 /// private snapshot made afresh for every check, as Microsoft's word on an
 /// uploader is: the snapshot's path is new each time, its bytes proven to
@@ -2661,7 +2693,7 @@ fn a_layout_files_into_year_and_type_subfolders_and_undo_removes_the_empty_ones(
             .destination
             .file_name()
             .and_then(|name| name.to_str()),
-        Some("2024-04-12 Employment Agreement between John Smith and Acme Corporation.pdf")
+        Some("2024-04-12 Acme - Employment Agreement with John Smith.pdf")
     );
     assert!(receipt.destination.exists());
     assert_eq!(
@@ -2782,7 +2814,7 @@ fn proposed_names_avoid_collisions_in_the_destination_not_the_source() {
     std::fs::create_dir_all(&filed).unwrap();
     let path = source(&inbox, "scan.pdf");
     std::fs::write(
-        filed.join("2024-04-12 Employment Agreement between John Smith and Acme Corporation.pdf"),
+        filed.join("2024-04-12 Acme - Employment Agreement with John Smith.pdf"),
         b"already filed",
     )
     .unwrap();
@@ -2813,7 +2845,7 @@ fn proposed_names_avoid_collisions_in_the_destination_not_the_source() {
     assert_eq!(ready.status, QueueStatus::Ready);
     assert_eq!(
         ready.proposal.unwrap().filename,
-        "2024-04-12 Employment Agreement between John Smith and Acme Corporation (2).pdf",
+        "2024-04-12 Acme - Employment Agreement with John Smith (2).pdf",
         "the reviewer is shown the name that will actually be used"
     );
 }
@@ -3783,9 +3815,19 @@ fn learning_pipeline(temp: &Path, dates: &[(&str, &str)]) -> (Pipeline, Arc<Reco
     learning_pipeline_reading(temp, dates, &[])
 }
 
+/// The person's own organization, as Settings names it for the pipelines
+/// spellings are learned in ([`reading_pipeline`]), which every reading
+/// there finds besides the document's parties: each name leads with it,
+/// and what follows it - the subject the spellings are read in - gives the
+/// document's parties as the engine's grammar composes them, "between John
+/// Smith and Acme Corporation" as an earlier build named the whole
+/// document.
+const OWN: &str = "Wingtip";
+
 /// [`learning_pipeline`], with readings that carry the evidence pipeline's
 /// validated facts naming `parties` - the default pipeline's readings - or,
-/// given none, no facts at all, as the digest pipeline's.
+/// given none, only the person's own organization ([`OWN`]), as the digest
+/// pipeline's readings name no other party beside the name's.
 fn learning_pipeline_reading(
     temp: &Path,
     dates: &[(&str, &str)],
@@ -3820,19 +3862,16 @@ fn reading_pipeline(
     std::fs::create_dir_all(&filed).unwrap();
     let worker = Arc::new(FakeWorker::new(texts.into_iter().map(Ok).collect()));
     let replies = FakeModel::new(replies.into_iter().map(Ok).collect());
-    let model: Arc<dyn AnalyzerBoundary> = if parties.is_empty() {
-        Arc::new(replies)
-    } else {
-        Arc::new(FactsModel {
-            inner: replies,
-            parties: parties.to_vec(),
-        })
-    };
+    let model: Arc<dyn AnalyzerBoundary> = Arc::new(FactsModel {
+        inner: replies,
+        parties: parties.to_vec(),
+    });
     let settings = SettingsStore::new(temp.join("settings.json"));
     settings
         .save(&AppSettings {
             destination: filed.to_string_lossy().into_owned(),
             destination_layout: layout,
+            our_names: vec![OWN.into()],
             ..AppSettings::default()
         })
         .unwrap();
@@ -3894,13 +3933,13 @@ fn a_respelling_made_twice_in_review_becomes_interns_own_spelling() {
     pipeline.run_until_idle().unwrap();
     assert_eq!(
         record_of(&pipeline, queued[1]).filename,
-        "2024-05-03 Employment Agreement between John Smith and Acme Corporation.pdf"
+        "2024-05-03 Wingtip - Employment Agreement between John Smith and Acme Corporation.pdf"
     );
 
     pipeline
         .approve(
             queued[0],
-            "2024-04-12 Employment Agreement between John Smith and Acme.pdf",
+            "2024-04-12 Wingtip - Employment Agreement between John Smith and Acme.pdf",
             "Employment agreement between John Smith and Acme Corporation.",
         )
         .unwrap();
@@ -3913,14 +3952,14 @@ fn a_respelling_made_twice_in_review_becomes_interns_own_spelling() {
     assert_eq!((rules[0].seen, rules[0].active), (1, false));
     assert_eq!(
         record_of(&pipeline, queued[1]).filename,
-        "2024-05-03 Employment Agreement between John Smith and Acme Corporation.pdf",
+        "2024-05-03 Wingtip - Employment Agreement between John Smith and Acme Corporation.pdf",
         "one edit is a decision about one document"
     );
 
     pipeline
         .approve(
             queued[1],
-            "2024-05-03 Employment Agreement between John Smith and Acme.pdf",
+            "2024-05-03 Wingtip - Employment Agreement between John Smith and Acme.pdf",
             "Employment agreement between John Smith and Acme Corporation.",
         )
         .unwrap();
@@ -3929,7 +3968,8 @@ fn a_respelling_made_twice_in_review_becomes_interns_own_spelling() {
     assert_eq!(rules[0].confirmed, 0, "nobody has checked what it writes");
     let waiting = record_of(&pipeline, queued[2]);
     assert_eq!(
-        waiting.filename, "2024-06-07 Employment Agreement between John Smith and Acme.pdf",
+        waiting.filename,
+        "2024-06-07 Wingtip - Employment Agreement between John Smith and Acme.pdf",
         "the document still waiting is renamed in the queue"
     );
     assert_eq!(waiting.revision, 2);
@@ -3948,7 +3988,7 @@ fn a_respelling_made_twice_in_review_becomes_interns_own_spelling() {
     let proposed = record_of(&pipeline, later);
     assert_eq!(
         proposed.filename,
-        "2024-07-01 Employment Agreement between John Smith and Acme.pdf"
+        "2024-07-01 Wingtip - Employment Agreement between John Smith and Acme.pdf"
     );
     assert_eq!(proposed.house_rules[0].to, "Acme");
     assert_eq!(proposed.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
@@ -3980,7 +4020,8 @@ fn a_respelling_made_twice_in_review_becomes_interns_own_spelling() {
 
 /// A model whose readings carry the evidence pipeline's validated facts:
 /// `parties` are the parties validation can find, and a reading's facts
-/// give each of them its document's text holds.
+/// give each of them its document's text holds, and the person's own
+/// organization ([`OWN`]) always.
 struct FactsModel {
     inner: FakeModel,
     parties: Vec<&'static str>,
@@ -3999,6 +4040,7 @@ impl AnalyzerBoundary for FactsModel {
                 .parties
                 .iter()
                 .filter(|name| source.pages.iter().any(|page| page.text.contains(**name)))
+                .chain([&OWN])
                 .map(|name| ValidatedParty {
                     name: (*name).into(),
                     support: Support::Cited,
@@ -4065,7 +4107,7 @@ fn choosing_another_party_of_the_document_teaches_no_spelling() {
     let first = record_of(&pipeline, queued[0]);
     assert_eq!(
         first.filename,
-        "2024-04-12 Employment Agreement between John Smith and Acme Corporation.pdf"
+        "2024-04-12 Wingtip - Employment Agreement between John Smith and Acme Corporation.pdf"
     );
     assert_eq!(first.party_choices(), vec!["Beacon Staffing LLC"]);
     assert_eq!(
@@ -4078,7 +4120,7 @@ fn choosing_another_party_of_the_document_teaches_no_spelling() {
             .approve(
                 queued[index],
                 &format!(
-                    "{date} Employment Agreement between John Smith and Beacon Staffing LLC.pdf"
+                    "{date} {OWN} - Employment Agreement between John Smith and Beacon Staffing LLC.pdf"
                 ),
                 "Employment agreement between John Smith and Beacon Staffing LLC.",
             )
@@ -4090,13 +4132,13 @@ fn choosing_another_party_of_the_document_teaches_no_spelling() {
     );
     assert_eq!(
         record_of(&pipeline, queued[2]).filename,
-        "2024-06-07 Employment Agreement between John Smith and Acme Corporation.pdf"
+        "2024-06-07 Wingtip - Employment Agreement between John Smith and Acme Corporation.pdf"
     );
 
     pipeline
         .approve(
             queued[2],
-            "2024-06-07 Employment Agreement between John Smith and Acme.pdf",
+            "2024-06-07 Wingtip - Employment Agreement between John Smith and Acme.pdf",
             "Employment agreement between John Smith and Acme Corporation.",
         )
         .unwrap();
@@ -4158,7 +4200,9 @@ fn another_party_typed_in_a_short_form_teaches_no_spelling() {
         pipeline
             .approve(
                 queued[index],
-                &format!("{date} Employment Agreement between John Smith and Beacon Staffing.pdf"),
+                &format!(
+                    "{date} {OWN} - Employment Agreement between John Smith and Beacon Staffing.pdf"
+                ),
                 "Employment agreement between John Smith and Beacon Staffing.",
             )
             .unwrap();
@@ -4169,7 +4213,7 @@ fn another_party_typed_in_a_short_form_teaches_no_spelling() {
     );
     assert_eq!(
         record_of(&pipeline, queued[2]).filename,
-        "2024-06-07 Employment Agreement between John Smith and Acme Corporation.pdf"
+        "2024-06-07 Wingtip - Employment Agreement between John Smith and Acme Corporation.pdf"
     );
 }
 
@@ -4238,14 +4282,14 @@ fn nested_party_chosen_twice(
     let first = record_of(&pipeline, queued[0]);
     assert_eq!(
         first.filename,
-        format!("2024-04-12 Employment Agreement between John Smith and {employer}.pdf")
+        format!("2024-04-12 Wingtip - Employment Agreement between John Smith and {employer}.pdf")
     );
     assert_eq!(first.party_choices(), vec![other]);
     for (index, (date, _)) in dates.iter().take(2).enumerate() {
         pipeline
             .approve(
                 queued[index],
-                &format!("{date} Employment Agreement between John Smith and {chosen}.pdf"),
+                &format!("{date} {OWN} - Employment Agreement between John Smith and {chosen}.pdf"),
                 &format!("Employment agreement between John Smith and {chosen}."),
             )
             .unwrap();
@@ -4260,6 +4304,7 @@ fn nested_party_chosen_twice(
     let filed = temp.path().join("filed");
     SettingsStore::new(temp.path().join("settings.json"))
         .save(&AppSettings {
+            our_names: vec![OWN.into()],
             destination: filed.to_string_lossy().into_owned(),
             destination_layout: DestinationLayout::Flat,
             automatic_rename: true,
@@ -4306,7 +4351,7 @@ fn a_party_whose_name_holds_the_named_ones_teaches_no_spelling() {
     assert!(learned.is_empty(), "learned {learned:?}");
     assert_eq!(
         filed_as,
-        "2024-06-07 Employment Agreement between John Smith and Acme Corporation.pdf"
+        "2024-06-07 Wingtip - Employment Agreement between John Smith and Acme Corporation.pdf"
     );
 
     let (learned, filed_as) = nested_party_chosen_twice(
@@ -4317,7 +4362,7 @@ fn a_party_whose_name_holds_the_named_ones_teaches_no_spelling() {
     assert!(learned.is_empty(), "learned {learned:?}");
     assert_eq!(
         filed_as,
-        "2024-06-07 Employment Agreement between John Smith and Acme Corporation Holdings LLC.pdf"
+        "2024-06-07 Wingtip - Employment Agreement between John Smith and Acme Corporation Holdings LLC.pdf"
     );
 }
 
@@ -4353,7 +4398,9 @@ fn a_party_whose_name_holds_the_named_ones_typed_as_its_own_words_teaches_no_spe
         assert!(learned.is_empty(), "{chosen}: learned {learned:?}");
         assert_eq!(
             filed_as,
-            format!("2024-06-07 Employment Agreement between John Smith and {employer}.pdf"),
+            format!(
+                "2024-06-07 Wingtip - Employment Agreement between John Smith and {employer}.pdf"
+            ),
             "{chosen}"
         );
     }
@@ -4361,7 +4408,7 @@ fn a_party_whose_name_holds_the_named_ones_typed_as_its_own_words_teaches_no_spe
 
 /// What became of agreements whose name gives `named` alone, behind
 /// `relation`, in readings that also name `other`, once the reviewer
-/// approved two of them as "{date} Employment Agreement {approved}" and a
+/// approved two of them as "{date} {OWN} - Employment Agreement {approved}" and a
 /// third, naming `named` alone, was read with automatic renaming on. Filed
 /// by party. [`approved_twice`] gives the same for any parties the name
 /// gives and any approved name.
@@ -4391,7 +4438,7 @@ fn chosen_twice(
 }
 
 /// As [`chosen_twice`], for agreements whose name gives the parties
-/// `named`, behind `relation`, approved twice as "{date} {approved}".
+/// `named`, behind `relation`, approved twice as "{date} {OWN} - {approved}".
 fn approved_twice(
     relation: PartyRelation,
     named: &[&'static str],
@@ -4507,10 +4554,11 @@ fn approved_twice_after(
     assert_eq!(
         first.filename,
         match relation {
-            _ if named.is_empty() => "2024-04-12 Employment Agreement.pdf".to_owned(),
-            PartyRelation::None => format!("2024-04-12 Employment Agreement - {spelled}.pdf"),
+            _ if named.is_empty() => "2024-04-12 Wingtip - Employment Agreement.pdf".to_owned(),
+            PartyRelation::None =>
+                format!("2024-04-12 Wingtip - Employment Agreement - {spelled}.pdf"),
             relation => format!(
-                "2024-04-12 Employment Agreement {} {spelled}.pdf",
+                "2024-04-12 Wingtip - Employment Agreement {} {spelled}.pdf",
                 relation.as_str()
             ),
         }
@@ -4520,7 +4568,7 @@ fn approved_twice_after(
         pipeline
             .approve(
                 queued[index],
-                &format!("{date} {approved}.pdf"),
+                &format!("{date} {OWN} - {approved}.pdf"),
                 "An agreement.",
             )
             .unwrap();
@@ -4563,6 +4611,7 @@ fn approved_twice_after(
     let filed = temp.path().join("filed");
     SettingsStore::new(temp.path().join("settings.json"))
         .save(&AppSettings {
+            our_names: vec![OWN.into()],
             destination: filed.to_string_lossy().into_owned(),
             destination_layout: DestinationLayout::Party,
             automatic_rename: true,
@@ -4648,7 +4697,7 @@ fn another_party_the_document_names_written_in_the_name_teaches_nothing() {
         assert_eq!(
             chosen.third,
             format!(
-                "2024-06-07 Employment Agreement {} {named}.pdf",
+                "2024-06-07 Wingtip - Employment Agreement {} {named}.pdf",
                 relation.as_str()
             ),
             "{approved}"
@@ -4708,7 +4757,10 @@ fn a_party_put_in_a_name_that_gave_none_teaches_no_type() {
         .collect::<Vec<_>>();
     pipeline.run_until_idle().unwrap();
     let first = record_of(&pipeline, queued[0]);
-    assert_eq!(first.filename, "2024-04-12 Employment Agreement.pdf");
+    assert_eq!(
+        first.filename,
+        "2024-04-12 Wingtip - Employment Agreement.pdf"
+    );
     assert_eq!(first.party_choices(), PLACED_PARTIES);
     assert!(first.named_parties("pdf").is_empty());
 
@@ -4716,7 +4768,7 @@ fn a_party_put_in_a_name_that_gave_none_teaches_no_type() {
         pipeline
             .approve(
                 queued[index],
-                &format!("{date} Employment Agreement - Beacon Staffing LLC.pdf"),
+                &format!("{date} {OWN} - Employment Agreement - Beacon Staffing LLC.pdf"),
                 "Employment agreement placed by Beacon Staffing LLC.",
             )
             .unwrap();
@@ -4734,13 +4786,13 @@ fn a_party_put_in_a_name_that_gave_none_teaches_no_type() {
     pipeline.run_until_idle().unwrap();
     assert_eq!(
         record_of(&pipeline, later).filename,
-        "2024-07-01 Employment Agreement between John Smith and Acme Corporation.pdf"
+        "2024-07-01 Wingtip - Employment Agreement between John Smith and Acme Corporation.pdf"
     );
 
     pipeline
         .approve(
             queued[2],
-            "2024-06-07 Employment Contract.pdf",
+            "2024-06-07 Wingtip - Employment Contract.pdf",
             "Employment contract.",
         )
         .unwrap();
@@ -4808,7 +4860,7 @@ fn a_party_chosen_in_review_is_the_party_the_document_is_filed_under() {
     let first = record_of(&pipeline, queued[0]);
     assert_eq!(
         first.filename,
-        "2024-04-12 Employment Agreement with Acme Corporation.pdf"
+        "2024-04-12 Wingtip - Employment Agreement with Acme Corporation.pdf"
     );
     assert_eq!(
         first.party_choices(),
@@ -4816,11 +4868,11 @@ fn a_party_chosen_in_review_is_the_party_the_document_is_filed_under() {
     );
 
     let approved = [
-        "2024-04-12 Employment Agreement with Beacon Staffing LLC.pdf",
-        "2024-05-03 Employment Agreement for John Smith.pdf",
-        "2024-06-07 Employment Agreement with ACME.pdf",
-        "2024-07-19 Employment Agreement for Sales Staff with Acme Corporation.pdf",
-        "2024-08-02 Employment Agreement with Benefits with Acme Corporation.pdf",
+        "2024-04-12 Wingtip - Employment Agreement with Beacon Staffing LLC.pdf",
+        "2024-05-03 Wingtip - Employment Agreement for John Smith.pdf",
+        "2024-06-07 Wingtip - Employment Agreement with ACME.pdf",
+        "2024-07-19 Wingtip - Employment Agreement for Sales Staff with Acme Corporation.pdf",
+        "2024-08-02 Wingtip - Employment Agreement with Benefits with Acme Corporation.pdf",
     ];
     for (id, name) in queued.iter().zip(approved) {
         pipeline.approve(*id, name, "An agreement.").unwrap();
@@ -5000,7 +5052,7 @@ fn a_party_offered_in_review_and_added_beside_the_named_one_is_filed_with_it() {
         assert_eq!(chosen.folders, [reported[0]; 2], "{approved}");
         assert_eq!(chosen.reported, [reported; 2], "{approved}");
         assert_eq!(
-            chosen.third, "2024-06-07 Employment Agreement with Acme Corporation.pdf",
+            chosen.third, "2024-06-07 Wingtip - Employment Agreement with Acme Corporation.pdf",
             "{approved}"
         );
     }
@@ -5049,7 +5101,7 @@ fn a_party_offered_in_review_is_filed_whole_and_apart_from_the_party_kept() {
         assert_eq!(chosen.reported, [reported; 2], "{approved}");
         assert_eq!(
             chosen.third,
-            format!("2024-06-07 Employment Agreement with {named}.pdf"),
+            format!("2024-06-07 Wingtip - Employment Agreement with {named}.pdf"),
             "{approved}"
         );
     }
@@ -5086,7 +5138,7 @@ fn a_longer_party_typed_around_an_offered_one_is_filed_under_what_was_typed() {
         assert_eq!(chosen.reported, [[typed]; 2], "{approved}");
         assert_eq!(
             chosen.third,
-            format!("2024-06-07 Employment Agreement with {named}.pdf"),
+            format!("2024-06-07 Wingtip - Employment Agreement with {named}.pdf"),
             "{approved}"
         );
     }
@@ -5173,7 +5225,7 @@ fn a_party_kept_beside_a_connecting_word_and_more_teaches_nothing() {
         assert_eq!(
             kept.third,
             format!(
-                "2024-06-07 Employment Agreement {} {}.pdf",
+                "2024-06-07 Wingtip - Employment Agreement {} {}.pdf",
                 relation.as_str(),
                 named.join(" and ")
             ),
@@ -5249,7 +5301,7 @@ fn a_party_respelled_into_words_with_a_connecting_word_teaches_nothing() {
         assert_eq!(
             respelled.third,
             format!(
-                "2024-06-07 Employment Agreement {} {}.pdf",
+                "2024-06-07 Wingtip - Employment Agreement {} {}.pdf",
                 relation.as_str(),
                 named.join(" and ")
             ),
@@ -5267,10 +5319,10 @@ fn a_party_respelled_into_words_with_a_connecting_word_teaches_nothing() {
 fn third_named(relation: PartyRelation, named: &[&str]) -> String {
     let parties = named.join(" and ");
     match relation {
-        _ if named.is_empty() => "2024-06-07 Employment Agreement.pdf".to_owned(),
-        PartyRelation::None => format!("2024-06-07 Employment Agreement - {parties}.pdf"),
+        _ if named.is_empty() => "2024-06-07 Wingtip - Employment Agreement.pdf".to_owned(),
+        PartyRelation::None => format!("2024-06-07 Wingtip - Employment Agreement - {parties}.pdf"),
         relation => format!(
-            "2024-06-07 Employment Agreement {} {parties}.pdf",
+            "2024-06-07 Wingtip - Employment Agreement {} {parties}.pdf",
             relation.as_str()
         ),
     }
@@ -5280,7 +5332,7 @@ fn third_named(relation: PartyRelation, named: &[&str]) -> String {
 /// joined to another however the joining words are typed, and a type given
 /// a party are no spelling. Approved twice, each was learned, and the third
 /// agreement, ready, was filed without review under those words:
-/// "2024-06-07 Employment Agreement for Trustee of Acme Corp.pdf" where
+/// "2024-06-07 Wingtip - Employment Agreement for Trustee of Acme Corp.pdf" where
 /// "Trustee of Acme Corporation" is offered, "... with Estate of J Smith"
 /// where "Estate of John Smith" is, "... with Acme Corp – Jane Doe" (an en
 /// dash), "... between John Smith and Jane Doe and Acme Corporation", "...
@@ -5433,7 +5485,7 @@ fn a_rule_an_earlier_build_learned_respelled_into_no_spelling_is_retracted() {
     assert!(edited.learned.is_empty(), "learned {:?}", edited.learned);
     assert_eq!(
         edited.third,
-        "2024-06-07 Employment Agreement to Acme Property.pdf"
+        "2024-06-07 Wingtip - Employment Agreement to Acme Property.pdf"
     );
 }
 
@@ -5460,7 +5512,7 @@ fn a_type_lengthened_before_the_party_behind_another_word_is_filed_under_that_pa
     );
     assert_eq!(
         chosen.third,
-        "2024-06-07 Employment Agreement for Acme Corporation.pdf"
+        "2024-06-07 Wingtip - Employment Agreement for Acme Corporation.pdf"
     );
 }
 
@@ -5501,11 +5553,12 @@ fn a_second_edit_that_also_typed_a_date_keeps_the_date_when_the_apply_fails() {
     pipeline.run_until_idle().unwrap();
     assert_eq!(
         record_of(&pipeline, second_id).filename,
-        "Employment Agreement between John Smith and Acme Corporation.pdf",
+        "Acme - Employment Agreement with John Smith.pdf",
         "no date the document supports"
     );
 
-    let approved = "2024-04-12 Employment Agreement between John Smith and Acme.pdf";
+    // The organization the name leads with, respelled.
+    let approved = "2024-04-12 ACME Corp - Employment Agreement with John Smith.pdf";
     pipeline
         .approve(first_id, approved, "A sentence about the agreement.")
         .unwrap();
@@ -5544,7 +5597,7 @@ fn a_spelling_can_be_used_at_once_and_forgotten_again() {
     pipeline
         .approve(
             queued[0],
-            "2024-04-12 Employment Agreement between John Smith and Acme.pdf",
+            "2024-04-12 Wingtip - Employment Agreement between John Smith and Acme.pdf",
             "A sentence about the agreement.",
         )
         .unwrap();
@@ -5555,7 +5608,7 @@ fn a_spelling_can_be_used_at_once_and_forgotten_again() {
     assert!(pipeline.learned_rules().unwrap()[0].active);
     assert_eq!(
         record_of(&pipeline, queued[1]).filename,
-        "2024-05-03 Employment Agreement between John Smith and Acme.pdf"
+        "2024-05-03 Wingtip - Employment Agreement between John Smith and Acme.pdf"
     );
 
     pipeline.forget_rule(rule.id).unwrap();
@@ -5563,7 +5616,7 @@ fn a_spelling_can_be_used_at_once_and_forgotten_again() {
     let restored = record_of(&pipeline, queued[1]);
     assert_eq!(
         restored.filename,
-        "2024-05-03 Employment Agreement between John Smith and Acme Corporation.pdf"
+        "2024-05-03 Wingtip - Employment Agreement between John Smith and Acme Corporation.pdf"
     );
     assert!(restored.house_rules.is_empty());
     assert_eq!(
@@ -5600,7 +5653,7 @@ fn a_spelling_typed_in_capitals_is_proposed_as_typed() {
     pipeline
         .approve(
             queued[0],
-            "2024-04-12 Employment Agreement between John Smith and ACME CORP.pdf",
+            "2024-04-12 Wingtip - Employment Agreement between John Smith and ACME CORP.pdf",
             "A sentence about the agreement.",
         )
         .unwrap();
@@ -5613,7 +5666,7 @@ fn a_spelling_typed_in_capitals_is_proposed_as_typed() {
     pipeline.use_rule(rule.id).unwrap();
     assert_eq!(
         record_of(&pipeline, queued[1]).filename,
-        "2024-05-03 Employment Agreement between John Smith and ACME CORP.pdf"
+        "2024-05-03 Wingtip - Employment Agreement between John Smith and ACME CORP.pdf"
     );
 }
 
@@ -5656,7 +5709,7 @@ fn respelling_interns_own_spelling(facts: &[&'static str]) {
     pipeline
         .approve(
             queued[0],
-            "2024-04-12 Employment Agreement between John Smith and Acme.pdf",
+            "2024-04-12 Wingtip - Employment Agreement between John Smith and Acme.pdf",
             "A sentence about the agreement.",
         )
         .unwrap();
@@ -5673,7 +5726,7 @@ fn respelling_interns_own_spelling(facts: &[&'static str]) {
     pipeline
         .approve(
             queued[1],
-            "2024-05-03 Employment Agreement between John Smith and Acme Corp.pdf",
+            "2024-05-03 Wingtip - Employment Agreement between John Smith and Acme Corp.pdf",
             "A sentence about the agreement.",
         )
         .unwrap();
@@ -5701,7 +5754,7 @@ fn respelling_interns_own_spelling(facts: &[&'static str]) {
     pipeline
         .approve(
             queued[2],
-            "2024-06-07 Employment Agreement between John Smith and Acme Corporation.pdf",
+            "2024-06-07 Wingtip - Employment Agreement between John Smith and Acme Corporation.pdf",
             "A sentence about the agreement.",
         )
         .unwrap();
@@ -5768,6 +5821,7 @@ impl Probation {
     fn automatic(&self, on: bool) {
         SettingsStore::new(self.temp.path().join("settings.json"))
             .save(&AppSettings {
+                our_names: vec![OWN.into()],
                 destination: self
                     .temp
                     .path()
@@ -5828,7 +5882,7 @@ impl Probation {
         self.pipeline
             .approve(
                 id,
-                &format!("{date} {stem}.pdf"),
+                &format!("{date} {OWN} - {stem}.pdf"),
                 "An employment agreement.",
             )
             .unwrap();
@@ -5881,7 +5935,8 @@ fn a_learned_spelling_waits_until_a_person_says_to_use_it_on_its_own() {
     assert_eq!(held.status, QueueStatus::NeedsReview);
     let record = held.proposal.unwrap();
     assert_eq!(
-        record.filename, "2024-06-07 Employment Agreement between John Smith and Acme.pdf",
+        record.filename,
+        "2024-06-07 Wingtip - Employment Agreement between John Smith and Acme.pdf",
         "the rule's spelling is in the name, for the reviewer to see"
     );
     assert_eq!(record.status, ProposalStatus::NeedsReview);
@@ -5893,7 +5948,7 @@ fn a_learned_spelling_waits_until_a_person_says_to_use_it_on_its_own() {
         rig.filed_as(third),
         Some((
             "John Smith".into(),
-            "2024-06-07 Employment Agreement between John Smith and Acme.pdf".into()
+            "2024-06-07 Wingtip - Employment Agreement between John Smith and Acme.pdf".into()
         ))
     );
     assert_eq!(
@@ -5930,7 +5985,7 @@ fn a_learned_spelling_waits_until_a_person_says_to_use_it_on_its_own() {
         rig.filed_as(fifth),
         Some((
             "John Smith".into(),
-            "2024-08-02 Employment Agreement between John Smith and Acme.pdf".into()
+            "2024-08-02 Wingtip - Employment Agreement between John Smith and Acme.pdf".into()
         )),
         "filed without review, in the spelling checked"
     );
@@ -5997,7 +6052,10 @@ fn a_wrong_rule_cannot_file_a_name_and_is_retracted_in_review() {
     let held = rig.item(third);
     assert_eq!(held.status, QueueStatus::NeedsReview);
     let record = held.proposal.unwrap();
-    assert_eq!(record.filename, format!("2024-06-07 {joined}.pdf"));
+    assert_eq!(
+        record.filename,
+        format!("2024-06-07 Wingtip - {joined}.pdf")
+    );
     assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
     assert_eq!(rig.filed_as(third), None, "the wrong name is not filed");
 
@@ -6013,7 +6071,8 @@ fn a_wrong_rule_cannot_file_a_name_and_is_retracted_in_review() {
         rig.filed_as(third),
         Some((
             "John Smith".into(),
-            "2024-06-07 Employment Agreement between John Smith and Acme Corporation.pdf".into()
+            "2024-06-07 Wingtip - Employment Agreement between John Smith and Acme Corporation.pdf"
+                .into()
         ))
     );
 
@@ -6022,7 +6081,8 @@ fn a_wrong_rule_cannot_file_a_name_and_is_retracted_in_review() {
         rig.filed_as(fourth),
         Some((
             "John Smith".into(),
-            "2024-07-01 Employment Agreement between John Smith and Acme Corporation.pdf".into()
+            "2024-07-01 Wingtip - Employment Agreement between John Smith and Acme Corporation.pdf"
+                .into()
         )),
         "the next agreement keeps its own word, filed without review"
     );
@@ -6051,7 +6111,7 @@ fn a_ready_document_a_new_rule_renames_while_it_waits_goes_to_review() {
     let record = renamed.proposal.unwrap();
     assert_eq!(
         record.filename,
-        "2024-06-07 Employment Agreement between John Smith and Acme.pdf"
+        "2024-06-07 Wingtip - Employment Agreement between John Smith and Acme.pdf"
     );
     assert_eq!(record.status, ProposalStatus::NeedsReview);
     assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
@@ -6099,7 +6159,7 @@ fn a_rule_from_an_earlier_release_is_unchecked_and_holds_the_next_name_it_change
     let record = held.proposal.unwrap();
     assert_eq!(
         record.filename,
-        "2024-04-12 Employment Agreement between John Smith and Acme.pdf"
+        "2024-04-12 Wingtip - Employment Agreement between John Smith and Acme.pdf"
     );
     assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
     assert_eq!(rig.filed_as(first), None);
@@ -6125,7 +6185,7 @@ fn a_ready_document_whose_rule_is_unchecked_by_the_time_it_is_filed_waits_for_a_
     assert_eq!(ready.status, QueueStatus::Ready, "checked");
     assert_eq!(
         ready.proposal.unwrap().filename,
-        "2024-04-12 Employment Agreement between John Smith and Acme.pdf"
+        "2024-04-12 Wingtip - Employment Agreement between John Smith and Acme.pdf"
     );
 
     database
@@ -6168,7 +6228,7 @@ fn a_spelling_put_in_use_from_the_list_waits_until_it_is_used_on_its_own() {
     let record = held.proposal.unwrap();
     assert_eq!(
         record.filename,
-        "2024-05-03 Employment Agreement between John Smith and Acme.pdf"
+        "2024-05-03 Wingtip - Employment Agreement between John Smith and Acme.pdf"
     );
     assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
     assert_eq!(rig.filed_as(second), None, "not filed without review");
@@ -6185,7 +6245,7 @@ fn a_spelling_put_in_use_from_the_list_waits_until_it_is_used_on_its_own() {
         rig.filed_as(fourth),
         Some((
             "John Smith".into(),
-            "2024-07-01 Employment Agreement between John Smith and Acme.pdf".into()
+            "2024-07-01 Wingtip - Employment Agreement between John Smith and Acme.pdf".into()
         ))
     );
 }
@@ -6206,7 +6266,7 @@ fn a_new_spelling_for_a_checked_rule_waits_for_a_check_of_its_own() {
     let record = rig.item(second).proposal.unwrap();
     assert_eq!(
         record.filename,
-        "2024-05-03 Employment Agreement between John Smith and Acme.pdf"
+        "2024-05-03 Wingtip - Employment Agreement between John Smith and Acme.pdf"
     );
     assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
     rig.use_on_its_own();
@@ -6216,7 +6276,7 @@ fn a_new_spelling_for_a_checked_rule_waits_for_a_check_of_its_own() {
     let third = rig.read_next();
     assert_eq!(
         rig.item(third).proposal.unwrap().filename,
-        "2024-06-07 Employment Agreement between John Smith and Acme.pdf"
+        "2024-06-07 Wingtip - Employment Agreement between John Smith and Acme.pdf"
     );
     assert_eq!(rig.item(third).status, QueueStatus::Ready, "checked");
     rig.approve(
@@ -6245,7 +6305,7 @@ fn a_new_spelling_for_a_checked_rule_waits_for_a_check_of_its_own() {
     let record = held.proposal.unwrap();
     assert_eq!(
         record.filename,
-        "2024-08-02 Employment Agreement between John Smith and Acme Corp.pdf"
+        "2024-08-02 Wingtip - Employment Agreement between John Smith and Acme Corp.pdf"
     );
     assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
     assert_eq!(rig.filed_as(fifth), None);
@@ -6361,7 +6421,7 @@ fn a_check_counts_only_for_the_spelling_checked() {
     let record = held.proposal.unwrap();
     assert_eq!(
         record.filename,
-        "2024-07-01 Employment Agreement between John Smith and Acme Corp.pdf"
+        "2024-07-01 Wingtip - Employment Agreement between John Smith and Acme Corp.pdf"
     );
     assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
     assert_eq!(rig.filed_as(fourth), None);
@@ -6385,7 +6445,7 @@ fn ready_under_a_rule_no_longer_checked() -> (Probation, i64) {
     assert_eq!(ready.status, QueueStatus::Ready, "checked");
     assert_eq!(
         ready.proposal.unwrap().filename,
-        "2024-04-12 Employment Agreement between John Smith and Acme.pdf"
+        "2024-04-12 Wingtip - Employment Agreement between John Smith and Acme.pdf"
     );
     database
         .execute("UPDATE house_rules SET confirmed = 0", [])
@@ -6512,6 +6572,7 @@ fn a_spelling_nobody_checked_that_the_name_does_not_show_is_not_used() {
         .unwrap();
     SettingsStore::new(temp.path().join("settings.json"))
         .save(&AppSettings {
+            our_names: vec![OWN.into()],
             destination: temp.path().join("filed").to_string_lossy().into_owned(),
             destination_layout: DestinationLayout::Party,
             automatic_rename: true,
@@ -6532,7 +6593,7 @@ fn a_spelling_nobody_checked_that_the_name_does_not_show_is_not_used() {
         .unwrap();
     let record = item.proposal.unwrap();
     assert_eq!(
-        record.filename, "2024-04-12 Purchase and Assumption Agreement.pdf",
+        record.filename, "2024-04-12 Wingtip - Purchase and Assumption Agreement.pdf",
         "the name gives no party, in either spelling"
     );
     assert_eq!(record.house_rules, Vec::new(), "not used");
@@ -6622,7 +6683,7 @@ fn a_spelling_used_on_its_own_then_files_one_whose_name_does_not_show_it() {
     let record = waiting.proposal.unwrap();
     assert_eq!(
         record.filename,
-        "2024-04-12 Purchase and Assumption Agreement.pdf"
+        "2024-04-12 Wingtip - Purchase and Assumption Agreement.pdf"
     );
     assert_eq!(record.house_rules, Vec::new());
 
@@ -6796,14 +6857,16 @@ fn a_name_a_person_gave_is_kept_when_the_spellings_change() {
     let first = rig.read_next();
     let second = rig.read_next();
     let third = rig.read_next();
-    let typed = "1999-01-01 Employment Agreement between John Smith and Acme Corporation.pdf";
+    let typed =
+        "1999-01-01 Wingtip - Employment Agreement between John Smith and Acme Corporation.pdf";
     rig.pipeline
         .approve(second, typed, "A sentence typed.")
         .unwrap();
     rig.pipeline.undo(second).unwrap();
     assert_eq!(rig.item(second).status, QueueStatus::NeedsReview);
     std::fs::write(rig.temp.path().join("inbox").join("c.pdf"), b"changed").unwrap();
-    let typed_third = "1999-02-02 Employment Agreement between John Smith and Acme Corporation.pdf";
+    let typed_third =
+        "1999-02-02 Wingtip - Employment Agreement between John Smith and Acme Corporation.pdf";
     assert_eq!(
         rig.pipeline
             .approve(third, typed_third, "Another sentence typed.")
@@ -6856,7 +6919,7 @@ fn a_spelling_taken_out_before_anyone_checked_it_is_not_where_the_document_is_fi
         rig.filed_as(third),
         Some((
             "John Smith".into(),
-            "2024-06-07 Employment Agreement between John Smith and Acme Corporation re Probate.pdf"
+            "2024-06-07 Wingtip - Employment Agreement between John Smith and Acme Corporation re Probate.pdf"
                 .into()
         ))
     );
@@ -6916,7 +6979,7 @@ impl Probation {
         self.pipeline
             .approve(
                 id,
-                &format!("{date} Employment Agreement between John Smith and Acme Corporation.pdf"),
+                &format!("{date} {OWN} - Employment Agreement between John Smith and Acme Corporation.pdf"),
                 &record.description,
             )
             .unwrap();
@@ -7080,7 +7143,7 @@ fn a_spelling_from_alpha17_is_unchecked_after_the_update_and_its_ready_rows_wait
     assert_eq!(ready.status, QueueStatus::Ready, "checked");
     assert_eq!(
         ready.proposal.unwrap().filename,
-        "2024-06-07 Employment Agreement between John Smith and Acme.pdf"
+        "2024-06-07 Wingtip - Employment Agreement between John Smith and Acme.pdf"
     );
 
     let rig = updated_from_alpha17(rig, vec![dated_agreement(3)]);
@@ -7169,7 +7232,7 @@ fn a_database_a_development_build_left_opens_with_every_spelling_unchecked() {
         .expect("a reading that kept its words is read");
     assert_eq!(
         record.filename,
-        "2024-06-07 Employment Agreement between John Smith and Acme.pdf"
+        "2024-06-07 Wingtip - Employment Agreement between John Smith and Acme.pdf"
     );
     assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
     assert_eq!(rig.filed_as(third), None);
@@ -7181,7 +7244,7 @@ fn a_database_a_development_build_left_opens_with_every_spelling_unchecked() {
         rig.filed_as(fourth),
         Some((
             "John Smith".into(),
-            "2024-07-01 Employment Agreement between John Smith and Acme.pdf".into()
+            "2024-07-01 Wingtip - Employment Agreement between John Smith and Acme.pdf".into()
         ))
     );
 }
@@ -7246,7 +7309,7 @@ fn taught_wrong_second_unfiled(rig: &mut Probation) -> i64 {
         rig.pipeline
             .approve(
                 second,
-                &format!("{date} {JOINED}.pdf"),
+                &format!("{date} {OWN} - {JOINED}.pdf"),
                 "An employment agreement."
             )
             .is_err()
@@ -8133,7 +8196,7 @@ fn a_spelling_used_on_its_own_files_on_its_own_until_it_is_respelled() {
     assert!(!record.approved);
     assert_eq!(
         record.filename,
-        "2024-06-07 Employment Agreement between John Smith and Acme Corporation.pdf"
+        "2024-06-07 Wingtip - Employment Agreement between John Smith and Acme Corporation.pdf"
     );
     assert_eq!(rig.filed_as(third), None, "the choice files nothing");
 
@@ -8143,7 +8206,8 @@ fn a_spelling_used_on_its_own_files_on_its_own_until_it_is_respelled() {
         rig.filed_as(fourth),
         Some((
             "John Smith".into(),
-            "2024-07-01 Employment Agreement between John Smith and Acme Corporation.pdf".into()
+            "2024-07-01 Wingtip - Employment Agreement between John Smith and Acme Corporation.pdf"
+                .into()
         ))
     );
 
@@ -8235,7 +8299,7 @@ fn statement_of_work_proposal(
 const BOTH_SIDES: [&str; 2] = ["Contoso Worldwide, Inc.", "Ridgeline Cartography LLC"];
 
 /// The firm's own name is on everything it files. Named once in Settings,
-/// it is left out of a name that has someone else to carry, so the name and
+/// it leads the name, written without its legal form, and the subject and
 /// the Party folder say who the document is with - while the analysis, the
 /// evidence, and a document that names only the firm keep the firm.
 #[test]
@@ -8311,17 +8375,17 @@ fn own_names_file_by_counterparty_in_name_and_party_folder() {
     };
     assert_eq!(
         destination(queued[0]),
-        filed
-            .join("Ridgeline Cartography LLC")
-            .join("2026-04-01 Statement of Work with Ridgeline Cartography LLC.pdf"),
-        "named, and filed, by the other side"
+        filed.join("Ridgeline Cartography LLC").join(
+            "2026-04-01 Contoso Worldwide - Statement of Work with Ridgeline Cartography LLC.pdf"
+        ),
+        "led by the firm, and filed by the other side"
     );
     assert_eq!(
         destination(queued[1]),
         filed
             .join("Contoso Worldwide, Inc")
-            .join("2026-05-04 Statement of Work for Contoso Worldwide, Inc.pdf"),
-        "a document that names only the firm keeps the firm"
+            .join("2026-05-04 Contoso Worldwide - Statement of Work.pdf"),
+        "a document that names only the firm is filed under the firm"
     );
 
     let record = record_of(&pipeline, queued[0]);
@@ -8334,10 +8398,13 @@ fn own_names_file_by_counterparty_in_name_and_party_folder() {
         record.analysis.proposal.evidence.parties,
         vec!["between Contoso Worldwide, Inc. and Ridgeline Cartography LLC"]
     );
+    assert!(
+        record.name_view().1.is_empty(),
+        "the firm is in the name, not left out of it"
+    );
     assert_eq!(
-        record.name_view().1,
-        vec!["Contoso Worldwide, Inc."],
-        "and says which side it left out"
+        record.view().entity.map(|entity| entity.words),
+        Some("Contoso Worldwide".to_owned())
     );
     assert!(record_of(&pipeline, queued[1]).name_view().1.is_empty());
     let heard = filing.filed.lock().unwrap();
@@ -8382,10 +8449,12 @@ fn refreshing_own_names_restyles_waiting_but_not_approved() {
         dates
             .iter()
             .map(|(iso, written, confidence)| {
+                // The supplier first: until the firm is named, the name
+                // leads with the first organization.
                 Ok(statement_of_work_proposal(
                     iso,
                     written,
-                    &BOTH_SIDES,
+                    &[BOTH_SIDES[1], BOTH_SIDES[0]],
                     PartyRelation::Between,
                     *confidence,
                 ))
@@ -8415,7 +8484,7 @@ fn refreshing_own_names_restyles_waiting_but_not_approved() {
         .map(|item| item.id)
         .collect::<Vec<_>>();
     pipeline.run_until_idle().unwrap();
-    let both = "Statement of Work between Contoso Worldwide, Inc and Ridgeline Cartography LLC.pdf";
+    let both = "Ridgeline Cartography - Statement of Work with Contoso Worldwide, Inc.pdf";
     assert_eq!(
         record_of(&pipeline, queued[1]).filename,
         format!("2026-05-04 {both}")
@@ -8453,7 +8522,9 @@ fn refreshing_own_names_restyles_waiting_but_not_approved() {
         let renamed = record_of(&pipeline, id);
         assert_eq!(
             renamed.filename,
-            format!("{date} Statement of Work with Ridgeline Cartography LLC.pdf")
+            format!(
+                "{date} Contoso Worldwide - Statement of Work with Ridgeline Cartography LLC.pdf"
+            )
         );
         assert_eq!(renamed.own_names, vec!["Contoso Worldwide, Inc."]);
         assert_eq!(renamed.revision, 2);
@@ -8464,7 +8535,7 @@ fn refreshing_own_names_restyles_waiting_but_not_approved() {
         "the approved name keeps what the person typed"
     );
 
-    // Unnamed again, the waiting documents carry both sides again.
+    // Unnamed again, the waiting documents lead with the supplier again.
     pipeline.refresh_own_names(&[]).unwrap();
     let restored = record_of(&pipeline, queued[1]);
     assert_eq!(restored.filename, format!("2026-05-04 {both}"));
@@ -8509,10 +8580,12 @@ fn naming_the_firm_keeps_the_revision_of_a_name_it_does_not_change() {
         Ok(parsed(AGREEMENT)),
     ]));
     let model = Arc::new(FakeModel::new(vec![
+        // The supplier first: until the firm is named, the name leads with
+        // the first organization.
         Ok(statement_of_work_proposal(
             "2026-04-01",
             "April 1, 2026",
-            &BOTH_SIDES,
+            &[BOTH_SIDES[1], BOTH_SIDES[0]],
             PartyRelation::Between,
             0.94,
         )),
@@ -8547,7 +8620,7 @@ fn naming_the_firm_keeps_the_revision_of_a_name_it_does_not_change() {
     let renamed = record_of(&pipeline, queued[0]);
     assert_eq!(
         renamed.filename,
-        "2026-04-01 Statement of Work with Ridgeline Cartography LLC.pdf"
+        "2026-04-01 Contoso Worldwide - Statement of Work with Ridgeline Cartography LLC.pdf"
     );
     assert_eq!(renamed.revision, 2, "a new name is a new proposal");
     let kept = record_of(&pipeline, queued[1]);
@@ -8593,9 +8666,10 @@ impl DuplicateOracle for SettingsSavedMidway {
     }
 }
 
-/// A document already named by the other side, waiting in the folder it was
-/// found in: naming the firm in Settings composes exactly its own name, and
-/// that name is the document itself, not a file it collides with. Renaming
+/// A document already named the way Intern names the firm's documents,
+/// waiting in the folder it was found in: naming the firm in Settings
+/// composes exactly its own name, and that name is the document itself, not
+/// a file it collides with. Renaming
 /// the waiting documents counted the document's own name as taken, as
 /// composing the first proposal once did, and offered it as "... (2)".
 #[test]
@@ -8603,7 +8677,8 @@ fn naming_the_firm_never_suffixes_a_document_already_named_by_the_other_side() {
     let temp = tempdir().unwrap();
     let inbox = temp.path().join("inbox");
     std::fs::create_dir_all(&inbox).unwrap();
-    let named = "2026-04-01 Statement of Work with Ridgeline Cartography LLC.pdf";
+    let named =
+        "2026-04-01 Contoso Worldwide - Statement of Work with Ridgeline Cartography LLC.pdf";
     let path = source(&inbox, named);
     let worker = Arc::new(FakeWorker::new(vec![Ok(statement_of_work(
         "April 1, 2026",
@@ -8611,7 +8686,7 @@ fn naming_the_firm_never_suffixes_a_document_already_named_by_the_other_side() {
     let model = Arc::new(FakeModel::new(vec![Ok(statement_of_work_proposal(
         "2026-04-01",
         "April 1, 2026",
-        &BOTH_SIDES,
+        &[BOTH_SIDES[1], BOTH_SIDES[0]],
         PartyRelation::Between,
         0.94,
     ))]));
@@ -8631,7 +8706,8 @@ fn naming_the_firm_never_suffixes_a_document_already_named_by_the_other_side() {
     pipeline.run_until_idle().unwrap();
     assert_eq!(
         record_of(&pipeline, id).filename,
-        "2026-04-01 Statement of Work between Contoso Worldwide, Inc and Ridgeline Cartography LLC.pdf"
+        "2026-04-01 Ridgeline Cartography - Statement of Work with Contoso Worldwide, Inc.pdf",
+        "led by the first organization until the firm is named"
     );
 
     let names = vec!["Contoso Worldwide, Inc.".to_owned()];
@@ -8659,8 +8735,8 @@ fn naming_the_firm_never_suffixes_a_document_already_named_by_the_other_side() {
 
 /// The firm named in Settings while a document is being read: the save's
 /// rename of everything waiting runs before the document waits, so the
-/// document reads the names once more when it does, and is named by the
-/// other side like everything else.
+/// document reads the names once more when it does, and is led by the firm
+/// like everything else.
 #[test]
 fn own_names_saved_while_a_document_is_read_name_it_too() {
     let temp = tempdir().unwrap();
@@ -8676,10 +8752,12 @@ fn own_names_saved_while_a_document_is_read_name_it_too() {
          Ridgeline Cartography LLC for the member-map engagement."
     );
     let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(&text))]));
+    // The supplier first: before the firm is named, the name leads with
+    // the first organization.
     let model = Arc::new(FakeModel::new(vec![Ok(statement_of_work_proposal(
         "2026-04-01",
         "April 1, 2026",
-        &BOTH_SIDES,
+        &[BOTH_SIDES[1], BOTH_SIDES[0]],
         PartyRelation::Between,
         0.94,
     ))]));
@@ -8714,10 +8792,9 @@ fn own_names_saved_while_a_document_is_read_name_it_too() {
     );
     assert_eq!(
         record.filename,
-        "2026-04-01 Statement of Work with Ridgeline Cartography LLC.pdf"
+        "2026-04-01 Contoso Worldwide - Statement of Work with Ridgeline Cartography LLC.pdf"
     );
     assert_eq!(record.own_names, vec!["Contoso Worldwide, Inc."]);
-    assert_eq!(record.name_view().1, vec!["Contoso Worldwide, Inc."]);
 }
 
 /// A spelling put to use renames what is waiting for a decision, not a name
@@ -8748,7 +8825,8 @@ fn a_spelling_put_to_use_leaves_an_approved_name_alone() {
 
     let (busy, claimed) = hold_the_queue(&pipeline, &temp.path().join("queue.sqlite3"), &inbox);
     // Approved in the document's own words, and a date of the person's own.
-    let typed = "2024-05-04 Employment Agreement between John Smith and Acme Corporation.pdf";
+    let typed =
+        "2024-05-04 Wingtip - Employment Agreement between John Smith and Acme Corporation.pdf";
     pipeline
         .approve(queued[1], typed, "A sentence about the agreement.")
         .unwrap();
@@ -8758,7 +8836,7 @@ fn a_spelling_put_to_use_leaves_an_approved_name_alone() {
     pipeline
         .approve(
             queued[0],
-            "2024-04-12 Employment Agreement between John Smith and Acme.pdf",
+            "2024-04-12 Wingtip - Employment Agreement between John Smith and Acme.pdf",
             "A sentence about the agreement.",
         )
         .unwrap();
@@ -8767,7 +8845,7 @@ fn a_spelling_put_to_use_leaves_an_approved_name_alone() {
 
     assert_eq!(
         record_of(&pipeline, queued[2]).filename,
-        "2024-06-07 Employment Agreement between John Smith and Acme.pdf",
+        "2024-06-07 Wingtip - Employment Agreement between John Smith and Acme.pdf",
         "the document waiting for a decision takes the spelling"
     );
     assert_eq!(record_of(&pipeline, queued[1]), approved);
@@ -8967,7 +9045,7 @@ fn a_second_scan_of_a_filed_document_waits_and_names_the_filing_it_repeats() {
     let filed_name = first.proposal.as_ref().unwrap().filename.clone();
     assert_eq!(
         filed_name,
-        "2024-04-12 Employment Agreement between John Smith and Acme Corporation.pdf"
+        "2024-04-12 Acme - Employment Agreement with John Smith.pdf"
     );
     pipeline
         .approve(
@@ -9137,7 +9215,7 @@ fn the_closest_fingerprint_with_the_wrong_date_does_not_hide_the_true_duplicate(
     );
     assert_eq!(
         record.near_duplicate_of.as_deref(),
-        Some("2024-04-12 Employment Agreement between John Smith and Acme Corporation.pdf"),
+        Some("2024-04-12 Acme - Employment Agreement with John Smith.pdf"),
         "the filing that shares this document's date, not the nearer one"
     );
 }
@@ -9161,8 +9239,7 @@ fn a_teammates_filing_with_nearly_this_text_is_named_with_their_machine() {
     let teammates = Arc::new(TeammateFilings::default());
     *teammates.similar.lock().unwrap() = Some(SimilarFiling {
         filing: KnownFiling {
-            filename: "2024-04-12 Employment Agreement between John Smith and Acme Corporation.pdf"
-                .into(),
+            filename: "2024-04-12 Acme - Employment Agreement with John Smith.pdf".into(),
             filed_by: Some("Front desk".into()),
         },
         distance: 2,
@@ -9181,17 +9258,14 @@ fn a_teammates_filing_with_nearly_this_text_is_named_with_their_machine() {
     assert_eq!(item.status, QueueStatus::NeedsReview);
     assert_eq!(
         item.proposal.as_ref().unwrap().near_duplicate_of.as_deref(),
-        Some(
-            "2024-04-12 Employment Agreement between John Smith and Acme Corporation.pdf (filed from Front desk)"
-        )
+        Some("2024-04-12 Acme - Employment Agreement with John Smith.pdf (filed from Front desk)")
     );
 
     // The same words filed under another date, on another machine: a new
     // document here too.
     *teammates.similar.lock().unwrap() = Some(SimilarFiling {
         filing: KnownFiling {
-            filename: "2023-04-12 Employment Agreement between John Smith and Acme Corporation.pdf"
-                .into(),
+            filename: "2023-04-12 Acme - Employment Agreement with John Smith.pdf".into(),
             filed_by: Some("Front desk".into()),
         },
         distance: 0,
@@ -10299,8 +10373,7 @@ fn microsoft_proof_gates_automatic_and_approved_apply() {
 
 const SIGNED_AGREEMENT: &str =
     "Employment Agreement signed April 12, 2024 by John Smith and Acme Corporation.";
-const AGREEMENT_NAME: &str =
-    "2024-04-12 Employment Agreement between John Smith and Acme Corporation.pdf";
+const AGREEMENT_NAME: &str = "2024-04-12 Acme - Employment Agreement with John Smith.pdf";
 
 /// A queue over `filesystem`, sharing the queue's own store, with
 /// `documents` agreements to read and automatic renaming off - so every
@@ -10928,7 +11001,7 @@ fn two_documents_proposing_one_name_are_filed_apart() {
             .destination
             .file_name()
             .and_then(|name| name.to_str()),
-        Some("2024-04-12 Employment Agreement between John Smith and Acme Corporation (2).pdf")
+        Some("2024-04-12 Acme - Employment Agreement with John Smith (2).pdf")
     );
 }
 
@@ -11494,13 +11567,13 @@ fn approved_deferred_name_survives_rule_change() {
     pipeline.run_until_idle().unwrap();
     assert_eq!(
         record_of(&pipeline, a).filename,
-        "Employment Agreement between John Smith and Acme Corporation.pdf"
+        "Acme - Employment Agreement with John Smith.pdf"
     );
     // The respelling once, while the queue is free: a decision, not a rule.
     pipeline
         .approve(
             c,
-            "2024-04-12 Employment Agreement between John Smith and Acme.pdf",
+            "2024-04-12 ACME Corp - Employment Agreement with John Smith.pdf",
             "An employment agreement.",
         )
         .unwrap();
@@ -11510,7 +11583,7 @@ fn approved_deferred_name_survives_rule_change() {
     pipeline.enqueue_files(&[source(&inbox, "d.pdf")]).unwrap();
     let busy = QueueStore::open(&database).unwrap();
     let claimed = busy.claim_next().unwrap().unwrap();
-    let typed = "2024-03-01 Employment Agreement between John Smith and Acme Corporation.pdf";
+    let typed = "2024-03-01 Acme - Employment Agreement with John Smith.pdf";
     pipeline
         .approve(a, typed, "An employment agreement.")
         .unwrap();
@@ -11519,7 +11592,7 @@ fn approved_deferred_name_survives_rule_change() {
     pipeline
         .approve(
             b,
-            "2024-05-03 Employment Agreement between John Smith and Acme.pdf",
+            "2024-05-03 ACME Corp - Employment Agreement with John Smith.pdf",
             "An employment agreement.",
         )
         .unwrap();
@@ -11877,12 +11950,12 @@ fn own_names_saved_while_a_rename_by_itself_is_parked_leave_the_name_it_is_filin
         SettingsStore::new(temp.path().join("settings.json"))
             .save(&AppSettings {
                 automatic_rename: true,
-                our_names: vec!["Acme Corporation".into()],
+                our_names: vec!["John Smith".into()],
                 ..AppSettings::default()
             })
             .unwrap();
         pipeline
-            .refresh_own_names(&["Acme Corporation".to_owned()])
+            .refresh_own_names(&["John Smith".to_owned()])
             .unwrap();
 
         let shown = record_of(&pipeline, id);
@@ -11913,7 +11986,7 @@ fn a_spelling_used_while_a_rename_by_itself_is_parked_leaves_the_name_it_is_fili
         .unwrap()
         .execute(
             "INSERT INTO house_rules(kind, from_key, from_value, to_value, seen, created_at, updated_at)
-             VALUES ('party', 'acme corporation', 'Acme Corporation', 'Acme', 1, 1, 1)",
+             VALUES ('party', 'acme corporation', 'Acme Corporation', 'ACME Corp', 1, 1, 1)",
             [],
         )
         .unwrap();
@@ -11944,10 +12017,10 @@ fn a_spelling_used_while_a_rename_by_itself_is_parked_leaves_the_name_it_is_fili
 fn approving_a_name_a_parked_rename_was_not_filing_is_refused_once_it_is_filed() {
     let temp = tempdir().unwrap();
     let (pipeline, id, folder) = parked_by_itself(temp.path(), &["TYPE_INFERRED"]);
-    let recomposed = "2024-04-12 Employment Agreement with John Smith.pdf";
+    let recomposed = "2024-04-12 John Smith - Employment Agreement with Acme Corporation.pdf";
     rewrite_record(temp.path(), id, |record| {
         record["filename"] = json!(recomposed);
-        record["own_names"] = json!(["Acme Corporation"]);
+        record["own_names"] = json!(["John Smith"]);
         record["revision"] = json!(record["revision"].as_u64().unwrap() + 1);
     });
     let shown = record_of(&pipeline, id);
@@ -11983,8 +12056,7 @@ fn approving_a_name_a_parked_rename_was_not_filing_is_refused_once_it_is_filed()
 /// refused.
 #[test]
 fn approving_the_name_a_parked_rename_numbered_is_an_approval_of_what_is_filed() {
-    let numbered =
-        "2024-04-12 Employment Agreement between John Smith and Acme Corporation (2).pdf";
+    let numbered = "2024-04-12 Acme - Employment Agreement with John Smith (2).pdf";
     for (approved, done) in [
         (AGREEMENT_NAME, true),
         (numbered, true),
@@ -12060,12 +12132,12 @@ fn a_rename_check_again_rolls_back_is_named_under_the_names_saved_meanwhile() {
     let before = record_of(&pipeline, id);
     SettingsStore::new(temp.path().join("settings.json"))
         .save(&AppSettings {
-            our_names: vec!["Acme Corporation".into()],
+            our_names: vec!["John Smith".into()],
             ..AppSettings::default()
         })
         .unwrap();
     pipeline
-        .refresh_own_names(&["Acme Corporation".to_owned()])
+        .refresh_own_names(&["John Smith".to_owned()])
         .unwrap();
     assert_eq!(record_of(&pipeline, id).filename, AGREEMENT_NAME);
 
@@ -12081,27 +12153,29 @@ fn a_rename_check_again_rolls_back_is_named_under_the_names_saved_meanwhile() {
     let record = checked.proposal.unwrap();
     assert_eq!(
         record.filename,
-        "2024-04-12 Employment Agreement with John Smith.pdf"
+        "2024-04-12 John Smith - Employment Agreement with Acme Corporation.pdf"
     );
-    assert_eq!(record.own_names, ["Acme Corporation"]);
+    assert_eq!(record.own_names, ["John Smith"]);
     assert!(record.revision > before.revision);
     assert!(!record.approved);
     assert!(path.exists(), "nothing was filed");
 }
 
 /// What the organization's names in Settings make of `AGREEMENT_NAME`.
-const WITHOUT_THE_ORGANIZATION: &str = "2024-04-12 Employment Agreement with John Smith.pdf";
+const LED_BY_THE_ORGANIZATION: &str =
+    "2024-04-12 John Smith - Employment Agreement with Acme Corporation.pdf";
 
-/// Names the organization "Acme Corporation" in the Settings at `settings`,
+/// Names the organization "John Smith" - one person's practice - in the
+/// Settings at `settings`,
 /// keeping the rest as stored, and has `pipeline` compose the waiting names
 /// again: what a Settings save does, on its own thread.
 fn name_the_organization(settings: &Path, pipeline: &Pipeline) {
     let store = SettingsStore::new(settings);
     let mut saved = store.load().unwrap();
-    saved.our_names = vec!["Acme Corporation".into()];
+    saved.our_names = vec!["John Smith".into()];
     store.save(&saved).unwrap();
     pipeline
-        .refresh_own_names(&["Acme Corporation".to_owned()])
+        .refresh_own_names(&["John Smith".to_owned()])
         .unwrap();
 }
 
@@ -12190,7 +12264,7 @@ fn own_names_saved_while_a_filing_looks_for_a_near_duplicate_are_filed_on_the_ne
     let waiting = item_of(&pipeline, id);
     assert_eq!(waiting.status, QueueStatus::Ready);
     assert!(waiting.receipt.is_none(), "no rename began");
-    assert_eq!(waiting.proposal.unwrap().filename, WITHOUT_THE_ORGANIZATION);
+    assert_eq!(waiting.proposal.unwrap().filename, LED_BY_THE_ORGANIZATION);
     assert!(path.exists());
     assert!(!folder.join(AGREEMENT_NAME).exists());
 
@@ -12199,13 +12273,10 @@ fn own_names_saved_while_a_filing_looks_for_a_near_duplicate_are_filed_on_the_ne
     assert_eq!(filed.status, QueueStatus::Completed);
     assert_eq!(
         filed.filed_receipt.unwrap().destination,
-        folder
-            .canonicalize()
-            .unwrap()
-            .join(WITHOUT_THE_ORGANIZATION)
+        folder.canonicalize().unwrap().join(LED_BY_THE_ORGANIZATION)
     );
     let record = filed.proposal.unwrap();
-    assert_eq!(record.filename, WITHOUT_THE_ORGANIZATION);
+    assert_eq!(record.filename, LED_BY_THE_ORGANIZATION);
     assert!(!record.approved, "filed by itself, approved by nobody");
 }
 
@@ -12324,7 +12395,7 @@ fn own_names_saved_while_a_filing_waits_for_another_rename_are_not_filed_over() 
     // at once, which is as right.
     let waiting = item_of(&pipeline, ids[1]);
     let shown = waiting.proposal.unwrap();
-    assert_eq!(shown.filename, WITHOUT_THE_ORGANIZATION);
+    assert_eq!(shown.filename, LED_BY_THE_ORGANIZATION);
     if waiting.status == QueueStatus::Ready {
         assert!(waiting.receipt.is_none(), "no rename began");
         assert!(second.exists());
@@ -12339,7 +12410,7 @@ fn own_names_saved_while_a_filing_waits_for_another_rename_are_not_filed_over() 
         second_folder
             .canonicalize()
             .unwrap()
-            .join(WITHOUT_THE_ORGANIZATION)
+            .join(LED_BY_THE_ORGANIZATION)
     );
 }
 
@@ -12932,4 +13003,509 @@ fn a_receipt_from_a_newer_build_does_not_empty_the_queue() {
         assert!(item.filed_receipt.is_none());
         assert!(item.unsettled_receipt.is_none());
     }
+}
+
+/// Remembers the file name each source it is asked about carries.
+#[derive(Default)]
+struct NameReader {
+    names: Mutex<Vec<Option<String>>>,
+}
+
+impl AnalyzerBoundary for NameReader {
+    fn analyze(
+        &self,
+        source: &DocumentSource,
+        extension: &str,
+        existing_names: &[&str],
+    ) -> Result<DocumentAnalysis, ModelFailure> {
+        self.names.lock().unwrap().push(source.file_name.clone());
+        Ok(analyze_locally(
+            source,
+            proposal(0.94, false),
+            extension,
+            existing_names,
+        ))
+    }
+}
+
+/// The engine is handed the name the file has where the queue found it,
+/// which it may show the model as orientation. The worker reads bytes, not
+/// a name.
+#[test]
+fn the_analyzer_is_told_the_files_name() {
+    let temp = tempdir().unwrap();
+    let document = source(temp.path(), "Host Chair SOW John Smith.pdf");
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(
+        "Employment Agreement signed April 12, 2024 by John Smith and Acme Corporation.",
+    ))]));
+    let model = Arc::new(NameReader::default());
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&document, "named-hash");
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings.save(&AppSettings::default()).unwrap();
+    let pipeline = Pipeline::open(
+        temp.path().join("queue.sqlite3"),
+        worker,
+        Arc::clone(&model) as Arc<dyn AnalyzerBoundary>,
+        files,
+        Arc::new(RecordingEvents::default()),
+        settings,
+    )
+    .unwrap();
+
+    pipeline.enqueue_files(&[document]).unwrap();
+    pipeline.run_until_idle().unwrap();
+
+    assert_eq!(
+        *model.names.lock().unwrap(),
+        vec![Some("Host Chair SOW John Smith.pdf".to_owned())]
+    );
+    assert_eq!(pipeline.list().unwrap()[0].status, QueueStatus::Ready);
+}
+
+/// A queue with no organization named in Settings, reading each of `names`
+/// from its inbox as the agreement [`SIGNED_AGREEMENT`] the canned proposal
+/// reads, and filing in `layout` - into a folder of its own where
+/// `destination`, or where each document is. Returns the queue, the filing
+/// reports it gives and the items, in order.
+fn agreements_named(
+    temp: &Path,
+    names: &[&str],
+    layout: DestinationLayout,
+    automatic_rename: bool,
+    destination: bool,
+) -> (Pipeline, Arc<RecordingFiling>, Vec<i64>) {
+    let inbox = temp.join("inbox");
+    let filed = temp.join("filed");
+    std::fs::create_dir_all(&inbox).unwrap();
+    std::fs::create_dir_all(&filed).unwrap();
+    let worker = Arc::new(FakeWorker::new(
+        names.iter().map(|_| Ok(parsed(SIGNED_AGREEMENT))).collect(),
+    ));
+    let model = Arc::new(FakeModel::new(
+        names.iter().map(|_| Ok(proposal(0.94, false))).collect(),
+    ));
+    let settings = SettingsStore::new(temp.join("settings.json"));
+    settings
+        .save(&AppSettings {
+            automatic_rename,
+            destination: if destination {
+                filed.to_string_lossy().into_owned()
+            } else {
+                String::new()
+            },
+            destination_layout: layout,
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let filing = Arc::new(RecordingFiling::default());
+    let pipeline = Pipeline::with_local_files(
+        temp.join("queue.sqlite3"),
+        worker,
+        model,
+        Arc::new(RecordingEvents::default()),
+        settings,
+    )
+    .unwrap()
+    .with_filing_sink(filing.clone());
+    let paths = names
+        .iter()
+        .map(|name| source(&inbox, name))
+        .collect::<Vec<_>>();
+    let ids = pipeline
+        .enqueue_files(&paths)
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect();
+    pipeline.run_until_idle().unwrap();
+    (pipeline, filing, ids)
+}
+
+/// The document's own filename, where it says what the reading found: one
+/// already named the way Intern names documents, with the reading's date,
+/// is filed under that name without a rename, its words for the type and
+/// all; one with its parts in another order and its date at the end keeps
+/// its words, put in order with the date first. A scanner's name, and a
+/// name with another date, say nothing the name takes.
+#[test]
+fn a_document_named_nearly_right_keeps_the_words_of_its_own_name() {
+    let temp = tempdir().unwrap();
+    let right = "2024-04-12 Acme - Executive Employment Agreement with John Smith.pdf";
+    let names = [
+        right,
+        "John Smith - Senior Employment Agreement - Acme Corporation 12 April 2024.pdf",
+        "scan0001.pdf",
+        "2023-01-31 Acme - Interim Employment Agreement with John Smith.pdf",
+    ];
+    let (pipeline, _, ids) =
+        agreements_named(temp.path(), &names, DestinationLayout::Flat, true, false);
+    let inbox = temp.path().join("inbox");
+
+    let kept = item_of(&pipeline, ids[0]);
+    let record = kept.proposal.as_ref().unwrap();
+    assert_eq!(record.filename, right, "proposed as it is");
+    assert_eq!(kept.status, QueueStatus::Completed);
+    assert!(
+        record.reasons.iter().any(|reason| reason == ALREADY_NAMED),
+        "{:?}",
+        record.reasons
+    );
+    assert!(kept.receipt.is_none(), "no file operation was journaled");
+    assert!(inbox.join(right).exists());
+    assert_eq!(
+        record.analysis.proposal.document_type.as_deref(),
+        Some("Employment Agreement"),
+        "the reading keeps the document's own type"
+    );
+
+    let reordered = record_of(&pipeline, ids[1]);
+    assert_eq!(
+        reordered.filename,
+        "2024-04-12 Acme - Senior Employment Agreement with John Smith.pdf"
+    );
+    assert_eq!(reordered.original_name.as_deref(), Some(names[1]));
+    assert!(
+        inbox.join(&reordered.filename).exists(),
+        "renamed by itself"
+    );
+
+    for id in [ids[2], ids[3]] {
+        let composed = record_of(&pipeline, id).filename;
+        assert!(
+            composed.starts_with("2024-04-12 Acme - Employment Agreement with John Smith"),
+            "the reading's own words: {composed}"
+        );
+    }
+}
+
+/// With no organization named in Settings, the first organization the
+/// document names leads the name, and the Party folder and the filing
+/// report are that organization's too, the other side after it.
+#[test]
+fn the_organization_a_name_leads_with_is_its_party_folder() {
+    let temp = tempdir().unwrap();
+    let (pipeline, filing, ids) = agreements_named(
+        temp.path(),
+        &["a.pdf"],
+        DestinationLayout::Party,
+        false,
+        true,
+    );
+    let record = record_of(&pipeline, ids[0]);
+    assert_eq!(record.filename, AGREEMENT_NAME);
+    assert_eq!(
+        record.named_parties("pdf"),
+        vec!["John Smith"],
+        "a party chosen in review takes the other side's place"
+    );
+    pipeline
+        .approve(ids[0], &record.filename, &record.description)
+        .unwrap();
+    let filed = filing.filed.lock().unwrap();
+    assert_eq!(
+        filed[0].destination,
+        temp.path()
+            .join("filed")
+            .join("Acme Corporation")
+            .join(AGREEMENT_NAME)
+    );
+    assert_eq!(
+        filed[0].proposal.parties,
+        vec!["Acme Corporation", "John Smith"]
+    );
+}
+
+/// The organization a name leads with, respelled twice in review, is
+/// learned as a spelling of the party it stands for, as a party's is, and
+/// the next name leads with it and waits for a person. Where it is the
+/// person's own organization, its name is the one Settings gives: an edit
+/// of it is a decision about that document and teaches nothing.
+#[test]
+fn an_organization_the_name_leads_with_is_respelled_as_its_party_is() {
+    let temp = tempdir().unwrap();
+    let (pipeline, _, ids) = agreements_named(
+        temp.path(),
+        &["a.pdf", "b.pdf", "c.pdf"],
+        DestinationLayout::Flat,
+        false,
+        true,
+    );
+    for id in &ids[..2] {
+        pipeline
+            .approve(
+                *id,
+                "2024-04-12 ACME Corp - Employment Agreement with John Smith.pdf",
+                "An employment agreement.",
+            )
+            .unwrap();
+    }
+    let rules = pipeline.learned_rules().unwrap();
+    assert_eq!(rules.len(), 1, "{rules:?}");
+    assert_eq!(
+        (
+            rules[0].from.as_str(),
+            rules[0].to.as_str(),
+            rules[0].active
+        ),
+        ("Acme Corporation", "ACME Corp", true)
+    );
+    let waiting = record_of(&pipeline, ids[2]);
+    assert!(
+        waiting
+            .filename
+            .starts_with("2024-04-12 ACME Corp - Employment Agreement with John Smith"),
+        "carried as typed, legal form and all: {}",
+        waiting.filename
+    );
+    assert_eq!(waiting.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
+
+    let own = tempdir().unwrap();
+    let (pipeline, _, ids) = agreements_named(
+        own.path(),
+        &["a.pdf", "b.pdf"],
+        DestinationLayout::Flat,
+        false,
+        true,
+    );
+    let names = vec!["Acme Corporation".to_owned()];
+    let settings = SettingsStore::new(own.path().join("settings.json"));
+    let mut saved = settings.load().unwrap();
+    saved.our_names = names.clone();
+    settings.save(&saved).unwrap();
+    pipeline.refresh_own_names(&names).unwrap();
+    assert_eq!(record_of(&pipeline, ids[0]).filename, AGREEMENT_NAME);
+    for id in &ids {
+        pipeline
+            .approve(
+                *id,
+                "2024-04-12 ACME Corp - Employment Agreement with John Smith.pdf",
+                "An employment agreement.",
+            )
+            .unwrap();
+    }
+    assert!(
+        pipeline.learned_rules().unwrap().is_empty(),
+        "the firm's name is Settings' to give"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Clear queue
+// ---------------------------------------------------------------------------
+
+/// Clear queue takes every document that is not filed out of the queue -
+/// waiting, ready, canceled - and touches no file: each is where it was. The
+/// filed document stays filed, in Completed.
+#[test]
+fn clear_queue_takes_out_everything_not_filed_and_leaves_every_file_where_it_is() {
+    let temp = tempdir().unwrap();
+    let paths = ["filed.pdf", "ready.pdf", "canceled.pdf", "waiting.pdf"]
+        .map(|name| source(temp.path(), name));
+    let pipeline = reviewed_queue(temp.path(), Arc::new(StdFileSystem), 3);
+    let filed = ready_document(&pipeline, &paths[0]);
+    pipeline
+        .approve(filed, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    let ready = ready_document(&pipeline, &paths[1]);
+    let canceled = ready_document(&pipeline, &paths[2]);
+    pipeline.cancel(canceled).unwrap();
+    let waiting = pipeline
+        .enqueue_files(std::slice::from_ref(&paths[3]))
+        .unwrap()
+        .remove(0)
+        .id;
+    assert_eq!(status_of(&pipeline, waiting), QueueStatus::Queued);
+
+    let outcome = pipeline.clear_queue().unwrap();
+
+    assert_eq!(outcome.cleared, 3);
+    assert_eq!(outcome.kept(), 0);
+    let left = pipeline.list().unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].id, filed);
+    assert_eq!(left[0].status, QueueStatus::Completed);
+    assert!(!paths[0].exists(), "the filed document stays filed");
+    for path in &paths[1..] {
+        assert!(path.exists(), "{} is where it was", path.display());
+    }
+    assert!(
+        ![ready, canceled, waiting]
+            .iter()
+            .any(|id| left.iter().any(|item| item.id == *id))
+    );
+    // Nothing to clear is no error.
+    assert_eq!(pipeline.clear_queue().unwrap().cleared, 0);
+}
+
+/// A document whose filing did not finish - its copy published, its
+/// original left undeleted - has files that need checking, and Remove asks
+/// to be confirmed for it. Clear queue keeps it and says so; the rest go.
+#[test]
+fn clear_queue_keeps_a_document_whose_files_need_checking() {
+    let temp = tempdir().unwrap();
+    let folders = ["a", "b"].map(|folder| {
+        let folder = temp.path().join(folder);
+        fs::create_dir_all(&folder).unwrap();
+        folder
+    });
+    let parked_path = source(&folders[0], "scan.pdf");
+    let ready_path = source(&folders[1], "letter.pdf");
+    let filesystem = Arc::new(UndeletableOriginalFileSystem::default());
+    let pipeline = reviewed_queue(temp.path(), filesystem.clone(), 2);
+    let parked = ready_document(&pipeline, &parked_path);
+    let ready = ready_document(&pipeline, &ready_path);
+    filesystem.refuse.store(true, Ordering::SeqCst);
+    pipeline
+        .approve(parked, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap_err();
+    assert_eq!(
+        item_of(&pipeline, parked).error_code,
+        Some(ErrorCode::SourceDeleteFailed)
+    );
+
+    let outcome = pipeline.clear_queue().unwrap();
+
+    assert_eq!(outcome.cleared, 1);
+    assert_eq!(outcome.unsettled, 1);
+    assert_eq!(outcome.kept(), 1);
+    let left = pipeline.list().unwrap();
+    assert_eq!(
+        left.iter().map(|item| item.id).collect::<Vec<_>>(),
+        vec![parked]
+    );
+    assert!(!left.iter().any(|item| item.id == ready));
+    assert!(ready_path.exists());
+}
+
+/// The document being read when the queue is cleared is stopped, as Cancel
+/// stops it, and goes with the rest.
+#[test]
+fn clear_queue_stops_the_document_being_read() {
+    let temp = tempdir().unwrap();
+    let reading = source(temp.path(), "reading.pdf");
+    let next = source(temp.path(), "next.pdf");
+    let worker = Arc::new(FakeWorker::blocking(Ok(parsed("unused"))));
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&reading, "reading-hash");
+    files.trust(&next, "next-hash");
+    let pipeline = Arc::new(pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        Arc::new(FakeModel::new(vec![])),
+        files,
+        AppSettings::default(),
+    ));
+    pipeline.enqueue_files(&[reading, next]).unwrap();
+    let running = Arc::clone(&pipeline);
+    let join = thread::spawn(move || running.run_next());
+    while worker.active.load(Ordering::SeqCst) == 0 {
+        thread::yield_now();
+    }
+
+    let outcome = pipeline.clear_queue().unwrap();
+    let _ = join.join().unwrap();
+
+    assert_eq!(worker.cancellations.load(Ordering::SeqCst), 1);
+    assert_eq!(outcome.cleared, 2, "{outcome:?}");
+    assert!(pipeline.list().unwrap().is_empty());
+    // Nothing is left to start on.
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 1);
+}
+
+/// What the intake watcher asks of a claim whose document was cleared: it
+/// was set aside by a person, so the watcher closes the claim as kept - even
+/// one started since, which never saw the document in the queue - and does
+/// not hand the document over again as it is. Removed one at a time, or
+/// still in the queue, a claim is not set aside.
+#[test]
+fn a_cleared_documents_claim_is_set_aside_for_the_intake_watcher() {
+    let temp = tempdir().unwrap();
+    let paths = ["cleared.pdf", "removed.pdf", "filed.pdf"].map(|name| source(temp.path(), name));
+    let pipeline = reviewed_queue(temp.path(), Arc::new(StdFileSystem), 3);
+    let cleared = ready_document(&pipeline, &paths[0]);
+    let removed = ready_document(&pipeline, &paths[1]);
+    let filed = ready_document(&pipeline, &paths[2]);
+    pipeline
+        .approve(filed, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    for (key, id) in [("cleared", cleared), ("removed", removed), ("filed", filed)] {
+        pipeline.record_intake_claim(key, id).unwrap();
+    }
+    pipeline.remove(removed, false).unwrap();
+
+    pipeline.clear_queue().unwrap();
+
+    assert!(matches!(
+        pipeline.find_by_intake_claim("cleared").unwrap(),
+        Some(None)
+    ));
+    assert!(pipeline.intake_claim_set_aside("cleared").unwrap());
+    assert!(!pipeline.intake_claim_set_aside("removed").unwrap());
+    assert!(!pipeline.intake_claim_set_aside("filed").unwrap());
+    assert!(!pipeline.intake_claim_set_aside("never-recorded").unwrap());
+    // It outlives a restart: it is in the queue's own database.
+    drop(pipeline);
+    let store = QueueStore::open(temp.path().join("queue.sqlite3")).unwrap();
+    assert!(store.intake_claim_set_aside("cleared").unwrap());
+}
+
+/// A document Intern could not read was renamed `NEEDS REVIEW - <name>`
+/// where it lies. Cleared, it gets its own name back first, as Keep original
+/// gives it - a file left under that name with no row behind it would be
+/// skipped by every scan for good. One whose name cannot be given back now
+/// (a program has it open) is kept, under the mark, and said so.
+#[test]
+fn clear_queue_gives_an_unreadable_document_its_own_name_back_or_keeps_it() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("Inbox");
+    fs::create_dir_all(&inbox).unwrap();
+    let inbox = inbox.canonicalize().unwrap();
+    let path = source(&inbox, "locked.pdf");
+    let worker = Arc::new(FakeWorker::new(vec![Err(WorkerFailure::reported(
+        "PASSWORD_PROTECTED",
+        "encrypted",
+        false,
+    ))]));
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings
+        .save(&AppSettings {
+            intake_folder: inbox.to_string_lossy().into_owned(),
+            intake_enabled: true,
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let filesystem = Arc::new(HeldOpenFileSystem::default());
+    let pipeline = Pipeline::with_file_system(
+        temp.path().join("queue.sqlite3"),
+        worker,
+        Arc::new(FakeModel::new(vec![])),
+        Arc::new(RecordingEvents::default()),
+        settings,
+        filesystem.clone(),
+    )
+    .unwrap();
+    let id = pipeline
+        .enqueue_files(std::slice::from_ref(&path))
+        .unwrap()
+        .remove(0)
+        .id;
+    pipeline.run_until_idle().unwrap();
+    let marked = inbox.join("NEEDS REVIEW - locked.pdf");
+    assert_eq!(item_of(&pipeline, id).status, QueueStatus::NeedsReview);
+    assert!(marked.exists() && !path.exists());
+
+    filesystem.held.store(true, Ordering::SeqCst);
+    let kept = pipeline.clear_queue().unwrap();
+    assert_eq!((kept.cleared, kept.still_marked), (0, 1));
+    assert_eq!(item_of(&pipeline, id).status, QueueStatus::NeedsReview);
+    assert!(marked.exists());
+
+    filesystem.held.store(false, Ordering::SeqCst);
+    let cleared = pipeline.clear_queue().unwrap();
+    assert_eq!((cleared.cleared, cleared.kept()), (1, 0));
+    assert!(pipeline.list().unwrap().is_empty());
+    assert!(path.exists(), "its own name back");
+    assert!(!marked.exists());
 }

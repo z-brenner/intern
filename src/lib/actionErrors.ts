@@ -9,8 +9,8 @@ import { humanizeReason } from './reasons';
 const ACTION_ERRORS: Record<string, string> = {
   NAME_INVALID: 'That filename cannot be used. Keep the file\'s extension, and leave out / \\ < > : " | ? * and invisible characters.',
   ITEM_NOT_FOUND: 'That document is no longer in the queue.',
-  PATH_UNAVAILABLE: 'The document is not where Intern last saw it. It may have been moved, renamed, or deleted outside Intern.',
-  UNSUPPORTED_FORMAT: 'Intern opens only the document formats it reads.',
+  PATH_UNAVAILABLE: 'The document is not where ATLAS last saw it. It may have been moved, renamed, or deleted outside ATLAS.',
+  UNSUPPORTED_FORMAT: 'ATLAS opens only the document formats it reads.',
   INVALID_TRANSITION: 'That action does not apply to this document in its current state.',
   // Open, read, approve is the review the panel invites, and on Windows the
   // viewer still holds the file it opened: the rename, or an undo, then
@@ -26,7 +26,7 @@ const ACTION_ERRORS: Record<string, string> = {
   // file where it sits to fall back to: without an input folder the add is
   // refused whole, and the sentence says where to choose one.
   INPUT_FOLDER_NOT_SET: 'Nothing was copied: no Queue folder is set up yet. Choose one in Settings, under Folders.',
-  INPUT_FOLDER_UNAVAILABLE: 'Nothing was copied: Intern could not open your Queue folder. Check that it still exists and its drive or OneDrive is connected, or choose another in Settings.',
+  INPUT_FOLDER_UNAVAILABLE: 'Nothing was copied: ATLAS could not open your Queue folder. Check that it still exists and its drive or OneDrive is connected, or choose another in Settings.',
 };
 
 /**
@@ -54,7 +54,7 @@ const APPROVAL_FILE_CHANGED = 'The file changed after it was analyzed, so this n
  * usual sentence would send the person back to Check again, which has just
  * said the same; sorting the files out by hand, and saying so, is the way out.
  */
-const STILL_UNSETTLED = 'Intern checked the files again and still cannot tell which one is the document. Sort them out yourself, then use Remove from queue and choose “I have resolved the files myself”.';
+const STILL_UNSETTLED = 'ATLAS checked the files again and still cannot tell which one is the document. Sort them out yourself, then use Remove from queue and choose “I have resolved the files myself”.';
 
 function refusalCode(error: unknown): string | undefined {
   return typeof error === 'object' && error && 'code' in error && typeof error.code === 'string' ? error.code : undefined;

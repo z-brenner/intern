@@ -497,6 +497,7 @@ mod tests {
                 media_type: "image/png".into(),
                 bytes: vec![1, 2, 3],
             }),
+            file_name: None,
         };
         let kept = without_image_bytes(source);
         let image = kept.page_image.unwrap();

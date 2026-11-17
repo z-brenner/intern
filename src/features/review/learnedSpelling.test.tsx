@@ -26,9 +26,11 @@ describe('a name in the reviewer\'s own spelling', () => {
     await selectRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
 
     const note = screen.getByRole('note', { name: 'Learned spellings applied' });
-    expect(note).toHaveTextContent('Uses your spelling: Contoso Worldwide, Inc. written as Contoso. Forget it in Settings, under Learned spellings.');
-    // Settings has no way to change a spelling, so the note does not send anyone there for one.
-    expect(note.textContent).not.toMatch(/change/i);
+    expect(note).toHaveTextContent(/^Uses your spelling: Contoso Worldwide, Inc\. as Contoso$/);
+    // Where to forget it is a hover away. Settings has no way to change a
+    // spelling, so the note does not send anyone there for one.
+    expect(note).toHaveAttribute('title', 'Forget it in Settings, under Learned spellings.');
+    expect(`${note.textContent} ${note.title}`).not.toMatch(/change/i);
     expect(screen.getByLabelText('Filename')).toHaveValue('2026-04-01 Statement of Work between Ridgeline Cartography LLC and Contoso');
     fireEvent.click(screen.getByText('Analysis details'));
     const evidence = screen.getByRole('heading', { name: 'Evidence' }).closest('section')!;
@@ -36,15 +38,15 @@ describe('a name in the reviewer\'s own spelling', () => {
   });
 
   // A spelling ending in its own period ("Inc.") is the end of the list:
-  // the sentence takes no second one. It read "Receiver, Inc.. Change or
-  // forget it under Settings." - and Settings has no way to change one.
+  // the line takes no second one. It read "Receiver, Inc.. Change or forget
+  // it under Settings." - and Settings has no way to change one.
   it('ends the note with one period after a spelling that ends in one', async () => {
     const abbreviated: QueueItem = { ...respelled, houseRules: [{ kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso, Inc.' }] };
     render(<App bridge={createInMemoryBridge({ items: [abbreviated] })} />);
     await selectRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
 
     const note = screen.getByRole('note', { name: 'Learned spellings applied' });
-    expect(note).toHaveTextContent('Uses your spelling: Contoso Worldwide, Inc. written as Contoso, Inc. Forget it in Settings, under Learned spellings.');
+    expect(note).toHaveTextContent(/^Uses your spelling: Contoso Worldwide, Inc\. as Contoso, Inc\.$/);
     expect(note.textContent).not.toContain('..');
   });
 
@@ -106,31 +108,38 @@ function typeAtTheFocus(text: string) {
 
 /*
   No approval checks a learned spelling, and the review window checks none
-  either. "Use on its own" is asked in Settings only: asked here, the
-  spelling typed into it reached review's own keys, which move on, put the
-  caret in a document's name and file it. A document held for a spelling
-  nobody has checked says why it waits and where "Use on its own" is, and
-  is reviewed like any other.
+  either. "Always use" is chosen in Settings only: asked here, the spelling
+  typed into it reached review's own keys, which move on, put the caret in a
+  document's name and file it. A document held for a spelling nobody has
+  checked says why it waits and where "Always use" is - in the reason's why,
+  and on the line of the spellings used - and is reviewed like any other.
 */
 describe('a document held for a spelling nobody has checked', () => {
-  it('asks nothing and offers no field for a spelling, and says why it waits and where "Use on its own" is', () => {
+  it('asks nothing and offers no field for a spelling, and says why it waits and where "Always use" is', () => {
     render(<ReviewInspector item={held} drawer={false} {...handlers()} />);
-    expect(screen.queryByRole('button', { name: /Use on its own/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole('group', { name: /Use on its own/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Always use|Use on its own/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: /Always use|Use on its own/ })).not.toBeInTheDocument();
     // The name and the description, and no field to type a spelling into.
     expect(screen.getAllByRole('textbox')).toEqual([screen.getByRole('textbox', { name: 'Filename' }), screen.getByRole('textbox', { name: 'Description' })]);
+    // Why it waits, in a few words, and in full a press away.
+    const chip = screen.getByRole('button', { name: 'Uses a learned spelling' });
+    expect(chip).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(chip);
+    expect(chip).toHaveAttribute('aria-expanded', 'true');
+    expect(document.getElementById(chip.getAttribute('aria-controls')!)).toBeVisible();
+    // And beside the name, where "Always use" is.
     const why = screen.getByRole('note', { name: 'Why the name waits' });
-    expect(why).toHaveTextContent('This name waits for you because Intern has not been told to use every one of these spellings on its own: Use on its own is in Settings, under Learned spellings.');
+    expect(why).toHaveTextContent('This name waits for you because ATLAS has not been told to use every one of these spellings on its own: Always use is in Settings, under Learned spellings.');
     // It does not say that approving the name would do instead.
     expect(why.textContent).not.toMatch(/approv/i);
     const applied = screen.getByRole('note', { name: 'Learned spellings applied' });
-    expect(applied).toHaveTextContent('Forget any of them in Settings, under Learned spellings.');
-    expect(applied.textContent).not.toMatch(/change/i);
+    expect(applied).toHaveAttribute('title', 'Forget any of them in Settings, under Learned spellings.');
+    expect(`${applied.textContent} ${applied.title}`).not.toMatch(/change/i);
   });
 
   it('says "this spelling" under a note of one', () => {
     render(<ReviewInspector item={{ ...held, houseRules: [held.houseRules![0]] }} drawer={false} {...handlers()} />);
-    expect(screen.getByRole('note', { name: 'Why the name waits' })).toHaveTextContent('This name waits for you because Intern has not been told to use this spelling on its own: Use on its own is in Settings, under Learned spellings.');
+    expect(screen.getByRole('note', { name: 'Why the name waits' })).toHaveTextContent('This name waits for you because ATLAS has not been told to use this spelling on its own: Always use is in Settings, under Learned spellings.');
   });
 
   it('says nothing of it for a name in your spelling that is not held for it', () => {
@@ -138,6 +147,7 @@ describe('a document held for a spelling nobody has checked', () => {
     expect(screen.queryByRole('note', { name: 'Why the name waits' })).not.toBeInTheDocument();
     rerender(<ReviewInspector item={{ ...held, errorCode: 'LOW_CONFIDENCE', reasonCodes: ['LOW_CONFIDENCE'], reason: humanizeReason('LOW_CONFIDENCE') }} drawer={false} {...handlers()} />);
     expect(screen.queryByRole('note', { name: 'Why the name waits' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Uses a learned spelling' })).not.toBeInTheDocument();
     expect(screen.getByRole('note', { name: 'Learned spellings applied' })).toBeInTheDocument();
   });
 
@@ -154,6 +164,11 @@ describe('a document held for a spelling nobody has checked', () => {
     for (const button of pressable) {
       fireEvent.pointerDown(button, { pointerType: 'mouse' });
       fireEvent.click(button, { detail: 1 });
+      // View document opens the viewer over the window, which reads only and
+      // keeps every key to itself; it is closed again so the presses and keys
+      // below reach the review window, as they would after a person closed it.
+      const viewer = screen.queryByRole('dialog', { name: /SOW final v3\.pdf/i });
+      if (viewer) fireEvent.click(within(viewer).getByRole('button', { name: 'Close document' }));
     }
     fireEvent.click(within(panel).getByText('Analysis details'));
     // The spellings typed, and Enter, on the panel's heading and on nothing.

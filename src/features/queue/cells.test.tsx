@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
 import { createInMemoryBridge, createReviewBatchBridge } from '../../lib/inMemoryBridge';
 import type { QueueItem } from '../../types';
-import { clickCell, detailsToggle, openDetails, queueCell } from './gridTesting';
+import { clickCell, copyEntry, detailsToggle, moreAction, openDetails, queueCell } from './gridTesting';
 
 /*
   The queue table behaves like a spreadsheet's cells: click, Shift+click,
@@ -86,7 +86,8 @@ describe('queue cells', () => {
   it('selects a cell, a rectangle with Shift, and never a Status cell', async () => {
     const grid = await start();
     expect(grid).toHaveAttribute('aria-multiselectable', 'true');
-    expect(screen.getByRole('button', { name: 'Copy table' })).toBeEnabled();
+    expect(copyEntry()).toHaveAccessibleName('Copy table');
+    expect(copyEntry()).toBeEnabled();
 
     clickCell(queueCell('Scan 0102.pdf'));
     expect(selectedCells()).toEqual(['Scan 0102.pdf:original']);
@@ -94,7 +95,7 @@ describe('queue cells', () => {
     // Its row is the selected item; the Details panel stays closed.
     expect(queueCell('Scan 0102.pdf').closest('tr')).toHaveAttribute('aria-current', 'true');
     expect(screen.queryByRole('complementary', { name: 'Review item' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Copy selection' })).toBeInTheDocument();
+    expect(copyEntry()).toHaveAccessibleName('Copy selection');
 
     clickCell(queueCell('Scan 0104.pdf', 'proposed'), { shiftKey: true });
     expect(selectedCells()).toEqual([
@@ -116,7 +117,7 @@ describe('queue cells', () => {
     clickCell(queueCell('Scan 0105.pdf', 'status'));
     expect(selectedCells()).toEqual([]);
     expect(queueCell('Scan 0105.pdf').closest('tr')).toHaveAttribute('aria-current', 'true');
-    expect(screen.getByRole('button', { name: 'Copy table' })).toBeInTheDocument();
+    expect(copyEntry()).toHaveAccessibleName('Copy table');
   });
 
   // Intern selects the first item to decide once the queue is read. A click
@@ -276,7 +277,7 @@ describe('queue cells', () => {
 
     const { data } = copyFrom(document.activeElement!);
     expect(data.get('text/plain')!.split('\r\n')).toEqual([
-      'Scan 1.pdf\t2024-01-02 Lease.pdf\t"Says ""hi""\tthen\nbreaks"\tModel unsure of its reading',
+      'Scan 1.pdf\t2024-01-02 Lease.pdf\t"Says ""hi""\tthen\nbreaks"\tModel unsure',
       'Scan 2 東京.pdf\t2024-02-03 Invoice — Café.pdf\tPlain.\tAll checks passed',
       'Scan 3.pdf\t\t\t',
     ]);
@@ -293,8 +294,8 @@ describe('queue cells', () => {
     const { data } = copyFrom(document.activeElement!);
     expect(data.get('text/plain')).toBe('2024-02-03 Invoice — Café.pdf');
     await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Copied 1 cell.'));
-    // The button, labeled for it, still copies the whole table.
-    expect(screen.getByRole('button', { name: 'Copy table' })).toBeInTheDocument();
+    // The menu's Copy, labeled for it, still copies the whole table.
+    expect(copyEntry()).toHaveAccessibleName('Copy table');
   });
 
   // Copying is the table's only while a cell has focus. A text field reached
@@ -319,7 +320,7 @@ describe('queue cells', () => {
       expect(event.defaultPrevented, field.getAttribute('aria-label') ?? field.tagName).toBe(false);
       expect(data.size).toBe(0);
     }
-    const { event } = copyFrom(screen.getByRole('button', { name: /^Copy/ }));
+    const { event } = copyFrom(copyEntry());
     expect(event.defaultPrevented).toBe(false);
   });
 
@@ -330,13 +331,13 @@ describe('queue cells', () => {
     vi.stubGlobal('navigator', { ...navigator, clipboard: { write, writeText: vi.fn() } });
     await start(tricky);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy table' }));
+    fireEvent.click(moreAction('Copy table'));
 
     await waitFor(() => expect(write).toHaveBeenCalledOnce());
     const item = write.mock.calls[0][0][0] as FakeClipboardItem;
     expect(await item.parts['text/plain'].text()).toBe([
       'Original filename\tProposed filename\tDescription\tCheck',
-      'Scan 1.pdf\t2024-01-02 Lease.pdf\t"Says ""hi""\tthen\nbreaks"\tModel unsure of its reading',
+      'Scan 1.pdf\t2024-01-02 Lease.pdf\t"Says ""hi""\tthen\nbreaks"\tModel unsure',
       'Scan 2 東京.pdf\t2024-02-03 Invoice — Café.pdf\tPlain.\tAll checks passed',
       'Scan 3.pdf\t\t\t',
     ].join('\r\n'));
@@ -353,7 +354,7 @@ describe('queue cells', () => {
     try {
       await start(tricky);
       clickCell(queueCell('Scan 2 東京.pdf', 'check'));
-      const button = screen.getByRole('button', { name: 'Copy selection' });
+      const button = moreAction('Copy selection');
       button.focus();
       fireEvent.click(button);
 
@@ -372,25 +373,28 @@ describe('queue cells', () => {
     await start([tricky[1], { ...tricky[1], id: 'two-b', originalFilename: 'Scan 2b.pdf', proposedFilename: '2024-02-04 Receipt.pdf' }]);
     clickCell(queueCell('Scan 2 東京.pdf'));
     clickCell(queueCell('Scan 2b.pdf', 'description'), { shiftKey: true });
-    expect(screen.getByRole('button', { name: 'Copy selection' })).toBeEnabled();
+    expect(copyEntry()).toHaveAccessibleName('Copy selection');
+    expect(copyEntry()).toBeEnabled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Rename all ready' }));
     await waitFor(() => expect(screen.queryByRole('grid', { name: 'Queue' })).not.toBeInTheDocument());
-    expect(screen.getByRole('button', { name: 'Copy table' })).toBeDisabled();
-    expect(screen.queryByRole('button', { name: 'Copy selection' })).not.toBeInTheDocument();
+    // Nothing left in the view to copy or clear: no More menu at all.
+    expect(screen.queryByRole('button', { name: 'More actions' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Copy selection' })).not.toBeInTheDocument();
 
     // A selection does not come back with the next row; in Completed the filed rows are unselected.
     fireEvent.click(screen.getByRole('button', { name: /^Completed, / }));
     await screen.findByRole('grid', { name: 'Queue' });
     expect(selectedCells()).toEqual([]);
-    expect(screen.getByRole('button', { name: 'Copy table' })).toBeEnabled();
+    expect(copyEntry()).toHaveAccessibleName('Copy table');
+    expect(copyEntry()).toBeEnabled();
   });
 
   it('says so when the clipboard cannot be written', async () => {
     vi.stubGlobal('navigator', { ...navigator, clipboard: undefined });
     await start(tricky);
-    fireEvent.click(screen.getByRole('button', { name: 'Copy table' }));
-    expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('Intern could not copy to the clipboard.');
+    fireEvent.click(moreAction('Copy table'));
+    expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('ATLAS could not copy to the clipboard.');
   });
 
   it('counts what needs review where the Needs Review page used to, and steps through them from the count', async () => {
@@ -437,7 +441,8 @@ describe('queue cells', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Completed, / }));
     await screen.findByRole('gridcell', { name: 'Done.pdf' });
     expect(screen.queryByRole('button', { name: /need(s)? review/ })).not.toBeInTheDocument();
-    expect(within(screen.getByRole('region', { name: 'Queue items' })).getByRole('button', { name: 'Copy table' })).toBeEnabled();
+    expect(within(screen.getByRole('region', { name: 'Queue items' })).getByRole('button', { name: 'More actions' })).toBeEnabled();
+    expect(copyEntry()).toBeEnabled();
     expect(detailsToggle()).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: /^Queue, / }));
     expect(screen.getByRole('button', { name: '1 needs review' })).toBeInTheDocument();

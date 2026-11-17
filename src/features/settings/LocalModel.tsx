@@ -10,9 +10,9 @@ import { describeSetupError } from '../setup/useModelSetup';
  */
 function choices(fast: string, accurate: string): { value: ModelPreference; label: string; hint: string }[] {
   return [
-    { value: 'automatic', label: 'Automatic (recommended)', hint: `${accurate} reads every document. ${fast}, if you have it, stands in only while this computer is short of memory.` },
-    { value: 'accurate', label: 'Most accurate', hint: `${accurate} for every document, whenever memory allows.` },
-    { value: 'fast', label: 'Fastest', hint: `${fast} for every document. About half the time, but every name it gives waits for you to check it.` },
+    { value: 'automatic', label: 'Automatic (recommended)', hint: `${accurate} reads every document. ${fast} only steps in if this computer is short of memory.` },
+    { value: 'accurate', label: 'Most accurate', hint: `${accurate} for every document, memory permitting.` },
+    { value: 'fast', label: 'Fastest', hint: `${fast} for every document. About twice as fast, but every name waits for your check.` },
   ];
 }
 
@@ -51,7 +51,7 @@ function TierLine({ tier, busy, onStart, onPause }: { tier: TierSetup; busy: boo
     <span>{tier.displayName}{size} · {tierStatus(tier)}</span>
     {tier.state === 'downloading' && <DownloadProgress setup={tier} label={`${tier.displayName} download`} />}
     {tier.state === 'failed' && tier.error && <p className="form-error">{tier.error === 'MODEL_SELF_TEST_FAILED'
-      ? 'This model did not pass its check on this computer, so Intern does not use it.'
+      ? 'This model did not pass its check on this computer, so ATLAS does not use it.'
       : describeSetupError(tier.error)}</p>}
     {tier.state === 'downloading' && <button type="button" disabled={busy} onClick={onPause}>Pause download</button>}
     {tier.state === 'required' && <button type="button" disabled={busy} onClick={onStart}>{started ? 'Resume download' : downloadLabel(tier)}</button>}

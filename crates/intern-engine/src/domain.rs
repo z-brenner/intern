@@ -96,6 +96,15 @@ pub struct DocumentSource {
     pub parser_warnings: Vec<ParserWarning>,
     /// Present only when a page could not be read as text at all.
     pub page_image: Option<PageImage>,
+    /// The name the file has where the queue found it ("Host Chair SOW
+    /// John Smith.pdf"), set by the caller just before the document is
+    /// read; extraction never sets it. The evidence prompt may show it to
+    /// the model as orientation, labeled as the file's name and never as a
+    /// line it can cite ([`crate::prompt::file_name_hint`]); nothing else
+    /// reads it, so no fact can come from it. Absent, and not written, for
+    /// every source stored, recorded or built before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_name: Option<String>,
 }
 
 impl DocumentSource {
@@ -104,6 +113,19 @@ impl DocumentSource {
             pages,
             parser_warnings: Vec::new(),
             page_image: None,
+            file_name: None,
+        }
+    }
+
+    /// This source, carrying the name its file has now: the last part of
+    /// `path`, when it has one that is valid Unicode.
+    pub fn with_file_name_of(self, path: &std::path::Path) -> Self {
+        Self {
+            file_name: path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned),
+            ..self
         }
     }
 

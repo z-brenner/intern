@@ -18,12 +18,15 @@ function nameOf(button: HTMLElement): string {
     .map((node) => node.textContent).join('').trim();
 }
 
-/** Every action the inspector offers for `item`, with its More menu opened. */
+/**
+ * Every action the inspector offers for `item`, with its More menu opened.
+ * A reason's chip is no action: it opens the reason's why.
+ */
 function actionSet(item: QueueItem): string[] {
   render(<ReviewInspector item={item} drawer={false} {...handlers()} />);
   const more = screen.queryByRole('button', { name: 'More review actions' });
   if (more) fireEvent.click(more);
-  const names = screen.getAllByRole('button').map(nameOf).filter((name) => name !== 'Close review' && name !== 'Copy description');
+  const names = screen.getAllByRole('button').filter((button) => !button.classList.contains('reason-chip')).map(nameOf).filter((name) => name !== 'Close review' && name !== 'Copy description');
   cleanup();
   return names;
 }

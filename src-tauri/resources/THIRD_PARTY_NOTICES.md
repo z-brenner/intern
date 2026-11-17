@@ -1,6 +1,6 @@
 # Intern third-party notices
 
-Intern 0.1.0-alpha.19 is (c) 2026 Zachary Brenner and is distributed
+Intern 0.1.0-alpha.20 is (c) 2026 Zachary Brenner and is distributed
 under the Elastic License 2.0; see `LICENSE` in the source repository. This
 notice covers the third-party software shipped in, linked into, or downloaded
 by the Windows package. `runtime-assets.json` is the authoritative,
@@ -95,6 +95,7 @@ transitive versions are pinned in the lockfiles.
 | Tauri and Tauri plugins | Apache-2.0 OR MIT |
 | React and React DOM | MIT |
 | Lucide icons | ISC |
+| PDF.js (`pdfjs-dist`), which draws a PDF in the document viewer, with its OpenJPEG decoder | Apache-2.0 (OpenJPEG: BSD-2-Clause) |
 | AnyDoc | see the pinned crate package metadata and source distribution |
 | serde / serde_json | Apache-2.0 OR MIT |
 | image | Apache-2.0 OR MIT |

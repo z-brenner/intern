@@ -18,15 +18,15 @@ const CHOICES: { value: ReviewLevel; label: string; hint: string; cost?: string 
   {
     value: 'strict',
     label: 'Strict (default)',
-    hint: 'A document is ready only when every check passes. Everything else waits for you.',
+    hint: 'Ready only when every check passes. Everything else waits for you.',
   },
   {
     value: 'balanced',
     label: 'Balanced',
-    hint: 'A document can also be ready when the only doubts are about its type or its description, or when the model was unsure of its reading. It still waits for you when Intern could not confirm its date or a party from the document, when its name would have no document type, or when Intern could not read it.',
+    hint: 'Also ready when the only doubts are its type, its description or the model’s own confidence. Still waits when the date or a party cannot be confirmed, the name would have no document type, or ATLAS could not read it.',
     // On a line of its own, in the body's color: it is what the choice
     // costs, and at the end of the paragraph above it was easy to miss.
-    cost: 'So more documents can be renamed without you looking at them, and more of those names will be wrong.',
+    cost: 'More documents are renamed without you looking, and more of those names will be wrong.',
   },
 ];
 
@@ -45,11 +45,11 @@ export function ReviewLevelChoice({ level, onChange }: Props) {
   const id = useId();
   return <fieldset className="review-level" aria-describedby={`${id}-lead ${id}-quick`}>
     <legend>Which documents are ready</legend>
-    <p className="check-hint" id={`${id}-lead`}>Ready documents are the ones Rename all ready renames. With automatic renaming on, below, Intern renames them by itself.</p>
+    <p className="check-hint" id={`${id}-lead`}>Ready documents are the ones Rename all ready renames, or that ATLAS renames by itself if automatic renaming is on.</p>
     {CHOICES.map((choice) => <label key={choice.value} className="check-label">
       <input type="radio" name="review-level" value={choice.value} checked={level === choice.value} onChange={() => onChange(choice.value)} />
       <span>{choice.label}<span className="check-hint">{choice.hint}</span>{choice.cost && <span className="check-hint review-level-cost">{choice.cost}</span>}</span>
     </label>)}
-    <p className="check-hint" id={`${id}-quick`}>At either level, a document the quick model read always waits for you.</p>
+    <p className="check-hint" id={`${id}-quick`}>Either way, a document the quick model read always waits for you.</p>
   </fieldset>;
 }

@@ -43,7 +43,7 @@ describe('the update settings', () => {
     const dialog = await openSettings();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Check for updates' }));
 
-    expect(await within(dialog).findByRole('status', { name: 'Update status' })).toHaveTextContent('Intern on Linux does not update itself. Install the newer release\'s package to update it.');
+    expect(await within(dialog).findByRole('status', { name: 'Update status' })).toHaveTextContent('ATLAS on Linux does not update itself. Install the newer release\'s package to update it.');
     expect(within(dialog).queryByRole('button', { name: /^Install / })).not.toBeInTheDocument();
   });
 

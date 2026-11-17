@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Intern — guide</title>
-<meta name="description" content="How to install and use Intern: first run, OneDrive and SharePoint, watched folders, teams, and troubleshooting.">
+<title>ATLAS — guide</title>
+<meta name="description" content="How to install and use ATLAS: first run, OneDrive and SharePoint, watched folders, teams, and troubleshooting.">
 <style>
   /* ------------------------------------------------------------------ *
    * Same token system and type thesis as the download page: sans for
@@ -571,7 +571,7 @@
 <nav class="nav" aria-label="Primary">
   <div class="shell nav-in">
     <a class="brand" href="./">
-      <span class="brand-mark">Intern</span>
+      <span class="brand-mark">ATLAS</span>
 
     </a>
     <ul class="nav-links">
@@ -587,7 +587,7 @@
 
   <div class="shell masthead">
     <p class="eyebrow">GUIDE</p>
-    <h1>How to use Intern</h1>
+    <h1>How to use ATLAS</h1>
     <p class="deck">
       Everything you will actually run into, in the order you will run into it —
       from the SmartScreen warning to a shared team folder.
@@ -620,7 +620,7 @@
           <p class="sec-num">01</p>
           <h2>Before you start</h2>
         </div>
-        <p class="lead">Intern reads a document and tells you what to call it.</p>
+        <p class="lead">ATLAS reads a document and tells you what to call it.</p>
         <p class="prose">
           For each document it proposes a filename that starts with the date,
           describes what the document concerns, and names the parties involved.
@@ -637,7 +637,7 @@
           </div>
           <div>
             <dt>It stays on your machine</dt>
-            <dd>Reading, OCR, and the AI model all run locally. Intern processes your documents on your computer.</dd>
+            <dd>Reading, OCR, and the AI model all run locally. ATLAS processes your documents on your computer.</dd>
           </div>
         </dl>
 
@@ -645,12 +645,12 @@
           <svg class="ico" aria-hidden="true"><use href="#i-shield"/></svg>
           <div>
             <b>No account, no sign-in, no cloud service.</b>
-            <p>Intern never asks for a password — not even for OneDrive or
+            <p>ATLAS never asks for a password — not even for OneDrive or
             SharePoint, which it reaches through folders already on your disk
             (see <a href="#onedrive">section 06</a>).</p>
             <p>It makes two kinds of network request, and neither carries
             anything about your documents: the one-time model download, which
-            you start, and the update check, which runs when Intern starts and
+            you start, and the update check, which runs when ATLAS starts and
             every 6 hours while it runs, and whenever you press <strong>Check
             for updates</strong>. You can switch the automatic check off
             (<a href="#updates">section 10</a>).</p>
@@ -663,7 +663,7 @@
           <li><strong>Windows 10 or 11</strong>, 64-bit (x86-64).</li>
           <li><strong>About 10 GB of free disk space</strong> for the app and its two AI model files.</li>
           <li><strong>About 8 GB of memory free</strong> for the accurate model; with less, a quicker one reads in its place.</li>
-          <li><strong>No administrator rights.</strong> Intern installs per user.</li>
+          <li><strong>No administrator rights.</strong> ATLAS installs per user.</li>
         </ul>
       </section>
 
@@ -686,7 +686,7 @@
           </li>
           <li>
             <b>Let it install.</b>
-            <p>It installs for your user only — no administrator prompt, no IT ticket.</p>
+            <p>It installs for your user only — no administrator prompt, no IT ticket. The installer, the install folder and the Start menu entry keep the name Intern, which ATLAS was called before alpha.20, so an update installs in place.</p>
           </li>
         </ol>
 
@@ -700,7 +700,7 @@
             it.</p>
             <p>On a PC where <strong>Smart App Control</strong> is on (enforcement
             mode), Windows blocks the installer outright and offers no
-            <strong>Run anyway</strong>. Intern cannot be installed there until
+            <strong>Run anyway</strong>. ATLAS cannot be installed there until
             it is signed.</p>
           </div>
         </div>
@@ -725,12 +725,12 @@
           <h2>First launch</h2>
         </div>
         <p class="lead">The installer deliberately leaves out one thing: the AI models, Qwen3.5&nbsp;9B (5.29&nbsp;GiB) and Qwen3.5&nbsp;4B (2.55&nbsp;GiB).</p>
-        <p class="prose">The first time you open Intern, a setup screen asks to download them. The quicker 4B comes first so you can start at once; every name it gives waits for your check, and the 9B, which names your documents, downloads in the background and reads them again when it arrives. Upgrading from alpha.13 or later downloads nothing: you already have the models. Upgrading from an earlier version, which had Qwen3.5&nbsp;2B, asks for the two new models the same way; the earlier files are not deleted.</p>
+        <p class="prose">The first time you open ATLAS, a setup screen asks to download them. The quicker 4B comes first so you can start at once; every name it gives waits for your check, and the 9B, which names your documents, downloads in the background and reads them again when it arrives. Upgrading from alpha.13 or later downloads nothing: you already have the models. Upgrading from an earlier version, which had Qwen3.5&nbsp;2B, asks for the two new models the same way; the earlier files are not deleted.</p>
 
         <dl class="kv">
           <div>
             <dt>It resumes</dt>
-            <dd>If the connection drops, reopen Intern and the download continues where it stopped.</dd>
+            <dd>If the connection drops, reopen ATLAS and the download continues where it stopped.</dd>
           </div>
           <div>
             <dt>It is verified</dt>
@@ -738,7 +738,7 @@
           </div>
           <div>
             <dt>You can bring your own</dt>
-            <dd><strong>Choose existing model files</strong> points Intern at a copy from another machine and skips the download. This is also how you install on a machine with no internet at all.</dd>
+            <dd><strong>Choose existing model files</strong> points ATLAS at a copy from another machine and skips the download. This is also how you install on a machine with no internet at all.</dd>
           </div>
 
         </dl>
@@ -746,11 +746,11 @@
         <p class="note">Nothing else needs installing. PDF reading, OCR, and inference all ship inside the app.</p>
 
         <h3 class="sym-group">YOUR TWO FOLDERS</h3>
-        <p class="prose">Then Intern asks for two folders. It cannot be used until both are chosen, and there is nothing to skip:</p>
+        <p class="prose">Then ATLAS asks for two folders. It cannot be used until both are chosen, and there is nothing to skip:</p>
         <dl class="kv">
           <div>
             <dt>Queue folder</dt>
-            <dd>Put files here that you want Intern to process. Files you drop on Intern's window, or add with <strong>Add files</strong>, <strong>Add folder</strong>, or <strong>Send to &gt; Intern</strong>, are copied here; the originals stay where they were.</dd>
+            <dd>Put files here that you want ATLAS to process. Files you drop on ATLAS's window, or add with <strong>Add files</strong>, <strong>Add folder</strong>, or <strong>Send to &gt; ATLAS</strong>, are copied here; the originals stay where they were.</dd>
           </div>
           <div>
             <dt>Completed folder</dt>
@@ -869,7 +869,7 @@
           </div>
           <div>
             <dt>Reviewing from the keyboard</dt>
-            <dd><kbd>J</kbd> and <kbd>K</kbd> move through the queue and the arrow keys move between cells of the table. <kbd>Enter</kbd> or <kbd>F2</kbd> opens Details at the proposed name; with Details open, <kbd>Ctrl</kbd>+<kbd>Enter</kbd> approves it, <kbd>Alt</kbd>+<kbd>K</kbd> keeps the original name and <kbd>Delete</kbd> removes the document after asking. <kbd>/</kbd> jumps to the filter. After each decision Intern moves on to the next document still waiting for you. A name or a description you typed stays with its document until you file it, through closing Intern and opening it again; <strong>Back to Intern's proposal</strong>, above the name, takes it back. It is kept on this computer only. When Intern opens again, what you typed is back in the name and the description only if Intern can tell that its window was closed in the ordinary way and the document has not been read again since. Otherwise it is beside the document, read-only, to copy from or discard: after Intern was killed, or the computer lost power or was shut down with Intern open, and after <strong>Quit Intern</strong> in the notification area or the restart an update makes. Whether closing the Windows app's window counts as ordinary has not been checked yet; until it has, expect what you typed beside the document. What you typed in the last minute before an end that was not ordinary can be missing.</dd>
+            <dd><kbd>J</kbd> and <kbd>K</kbd> move through the queue and the arrow keys move between cells of the table. <kbd>Enter</kbd> or <kbd>F2</kbd> opens Details at the proposed name; with Details open, <kbd>Ctrl</kbd>+<kbd>Enter</kbd> approves it, <kbd>Alt</kbd>+<kbd>K</kbd> keeps the original name and <kbd>Delete</kbd> removes the document after asking. <kbd>/</kbd> jumps to the filter. After each decision ATLAS moves on to the next document still waiting for you. A name or a description you typed stays with its document until you file it, through closing ATLAS and opening it again; <strong>Back to ATLAS's proposal</strong>, above the name, takes it back. It is kept on this computer only. When ATLAS opens again, what you typed is back in the name and the description only if ATLAS can tell that its window was closed in the ordinary way and the document has not been read again since. Otherwise it is beside the document, read-only, to copy from or discard: after ATLAS was killed, or the computer lost power or was shut down with ATLAS open, and after <strong>Quit ATLAS</strong> in the notification area or the restart an update makes. Whether closing the Windows app's window counts as ordinary has not been checked yet; until it has, expect what you typed beside the document. What you typed in the last minute before an end that was not ordinary can be missing.</dd>
           </div>
           <div>
             <dt>What needs review</dt>
@@ -880,8 +880,8 @@
             <dd>The table selects like a spreadsheet: click a cell, <kbd>Shift</kbd>+click or drag for a block of them, or <kbd>Ctrl</kbd>+<kbd>A</kbd> for all. <kbd>Ctrl</kbd>+<kbd>C</kbd>, or <strong>Copy selection</strong> above the table, copies the cells so they paste into Excel or Google Sheets one value to a cell. With nothing selected the button is <strong>Copy table</strong> and copies every row shown, with the column headings. The Status column is never copied.</dd>
           </div>
           <div>
-            <dt>Send to Intern</dt>
-            <dd>The installer adds Intern to Explorer's <strong>Send to</strong> menu. Select documents — attachments saved from Outlook, a folder of scans — right-click, and choose <strong>Send to &gt; Intern</strong>. Intern copies them into your Queue folder and queues them, whether or not it is already open. A file Intern cannot read is left out and named in the window with the reason; everything else is copied and queued.</dd>
+            <dt>Send to ATLAS</dt>
+            <dd>The installer adds ATLAS to Explorer's <strong>Send to</strong> menu. Select documents — attachments saved from Outlook, a folder of scans — right-click, and choose <strong>Send to &gt; ATLAS</strong>. ATLAS copies them into your Queue folder and queues them, whether or not it is already open. A file ATLAS cannot read is left out and named in the window with the reason; everything else is copied and queued.</dd>
           </div>
           <div>
             <dt>Your organization's names</dt>
@@ -889,15 +889,15 @@
           </div>
           <div>
             <dt>Every name has a date</dt>
-            <dd>A rename is refused unless the name starts with the document's date as YYYY-MM-DD. When Intern could not verify the date the model read, review shows it, says so, and <strong>Use date &amp; rename</strong> accepts it in one click; <strong>Use this date</strong> puts it in the field to edit first. When the model offered none, every date the document states is a button, with the file's own date last and labeled as such.</dd>
+            <dd>A rename is refused unless the name starts with the document's date as YYYY-MM-DD. When ATLAS could not verify the date the model read, review shows it, says so, and <strong>Use date &amp; rename</strong> accepts it in one click; <strong>Use this date</strong> puts it in the field to edit first. When the model offered none, every date the document states is a button, with the file's own date last and labeled as such.</dd>
           </div>
           <div>
-            <dt>Spellings Intern learns from you</dt>
-            <dd>The document says “Contoso Worldwide, Inc.”; you call it “Contoso”. Respell a party or a document type in review and Intern remembers it. The second time you make the same change it becomes the spelling Intern uses for every later document that names the same thing, and the review panel says <strong>Uses your spelling</strong> under the name. Settings lists everything learned, with <strong>Use now</strong> for a spelling you want at once and <strong>Forget</strong> for one you do not. The evidence always keeps the document's own words.</dd>
+            <dt>Spellings ATLAS learns from you</dt>
+            <dd>The document says “Contoso Worldwide, Inc.”; you call it “Contoso”. Respell a party or a document type in review and ATLAS remembers it. The second time you make the same change it becomes the spelling ATLAS uses for every later document that names the same thing, and the review panel says <strong>Uses your spelling</strong> under the name. Settings lists everything learned, with <strong>Use now</strong> for a spelling you want at once and <strong>Forget</strong> for one you do not. The evidence always keeps the document's own words.</dd>
           </div>
           <div>
             <dt>Duplicates</dt>
-            <dd>A document whose content Intern has already filed is not read again. With a Completed folder set, it is moved there under the original's filed name with <strong>COPY -</strong> in front — <code>COPY - 2026-01-02 Lease.pdf</code>, then <code>COPY - 2026-01-02 Lease (2).pdf</code> — next to the original. <strong>Undo</strong> puts it back, where it waits in review; choose <strong>Process anyway</strong> to process it all the same. Without a Completed folder it waits in review untouched. A second scan, a re-export, or a copy saved again is not the same bytes, so Intern also compares the words: a document that says what a filed one says, dated the same, waits in review with <strong>Filed already as</strong> and the name — on this computer or a teammate's. Approve to file it anyway, keep the original, or remove it.</dd>
+            <dd>A document whose content ATLAS has already filed is not read again. With a Completed folder set, it is moved there under the original's filed name with <strong>COPY -</strong> in front — <code>COPY - 2026-01-02 Lease.pdf</code>, then <code>COPY - 2026-01-02 Lease (2).pdf</code> — next to the original. <strong>Undo</strong> puts it back, where it waits in review; choose <strong>Process anyway</strong> to process it all the same. Without a Completed folder it waits in review untouched. A second scan, a re-export, or a copy saved again is not the same bytes, so ATLAS also compares the words: a document that says what a filed one says, dated the same, waits in review with <strong>Filed already as</strong> and the name — on this computer or a teammate's. Approve to file it anyway, keep the original, or remove it.</dd>
           </div>
           <div>
             <dt>Where files land</dt>
@@ -920,7 +920,7 @@
           <svg class="ico" aria-hidden="true"><use href="#i-repeat"/></svg>
           <div>
             <b>Expect about a minute per document.</b>
-            <p>Intern runs a 9-billion-parameter model, Qwen3.5&nbsp;9B (the
+            <p>ATLAS runs a 9-billion-parameter model, Qwen3.5&nbsp;9B (the
             quicker 4B while memory is short), on your CPU, one document at a
             time. Leave it working through a stack — that pace is
             the price of nothing leaving your machine.</p>
@@ -934,7 +934,7 @@
           <p class="sec-num">06</p>
           <h2>OneDrive &amp; SharePoint</h2>
         </div>
-        <p class="lead">Intern works through the folders the Microsoft sync client already keeps on your disk.</p>
+        <p class="lead">ATLAS works through the folders the Microsoft sync client already keeps on your disk.</p>
         <p class="prose">
           The build published here never talks to Microsoft's servers: it ships
           with no deployment to sign in to, so it never asks you to sign in,
@@ -944,8 +944,8 @@
 
         <figure>
           <svg class="fig-topo" viewBox="0 0 420 398" role="img" aria-labelledby="tp-t tp-d">
-            <title id="tp-t">How Intern reaches a SharePoint library</title>
-            <desc id="tp-d">A SharePoint library syncs to the OneDrive sync client on your machine, which keeps a folder on disk. Intern reads and renames files in that folder only. In the build published here, Intern never connects to Microsoft's servers itself.</desc>
+            <title id="tp-t">How ATLAS reaches a SharePoint library</title>
+            <desc id="tp-d">A SharePoint library syncs to the OneDrive sync client on your machine, which keeps a folder on disk. ATLAS reads and renames files in that folder only. In the build published here, ATLAS never connects to Microsoft's servers itself.</desc>
 
             <rect class="f-dash" x="60.5" y="8.5" width="349" height="75" rx="12"/>
             <rect class="f-knock" x="72" y="1" width="118" height="14"/>
@@ -975,9 +975,9 @@
             <text class="f-micro" x="248" y="255">reads, renames</text>
 
             <rect class="f-card-strong" x="90.75" y="262.75" width="288.5" height="41.5" rx="8"/>
-            <text class="f-box-t" x="235" y="289" text-anchor="middle">Intern</text>
+            <text class="f-box-t" x="235" y="289" text-anchor="middle">ATLAS</text>
 
-            <text class="f-micro" x="235" y="338" text-anchor="middle">the folder is the only thing Intern touches</text>
+            <text class="f-micro" x="235" y="338" text-anchor="middle">the folder is the only thing ATLAS touches</text>
 
             <path class="f-forbid" d="M90 283H32V46h28"/>
             <circle class="f-knock" cx="32" cy="180" r="13"/>
@@ -985,7 +985,7 @@
 
             <path class="f-forbid" d="M40 378h32"/>
             <path class="f-x" d="M50 372l12 12M62 372l-12 12"/>
-            <text class="f-micro" x="82" y="382">Intern never connects to Microsoft&#39;s servers</text>
+            <text class="f-micro" x="82" y="382">ATLAS never connects to Microsoft&#39;s servers</text>
           </svg>
           <figcaption>
             The crossed-out line is the connection the published build does not
@@ -998,7 +998,7 @@
 
         <h3 class="sym-group">CHOOSE YOUR TWO FOLDERS</h3>
         <p class="prose">
-          The first time Intern opens it asks for a Queue folder and an output
+          The first time ATLAS opens it asks for a Queue folder and an output
           folder, and it cannot be used until both are chosen. Later, open
           Settings and use <strong>Change…</strong> beside either folder, or
           <strong>Set up folders step by step…</strong>, under
@@ -1011,15 +1011,15 @@
         <ol class="steps">
           <li>
             <b>Choose your Queue folder.</b>
-            <p>Put files here that you want Intern to process. Intern lists the OneDrive and SharePoint folders already on this computer, such as <em>Legal - Documents</em> or <em>OneDrive – Contoso</em>. Use one, browse to a folder inside it, or choose any folder on this computer. Folders synced with <strong>Sync</strong>, folders added with <strong>Add shortcut to My files</strong>, and your own OneDrive all work. If none is listed, click Sync (or Add shortcut to My files) in SharePoint and choose <strong>Look for OneDrive folders again</strong>.</p>
+            <p>Put files here that you want ATLAS to process. ATLAS lists the OneDrive and SharePoint folders already on this computer, such as <em>Legal - Documents</em> or <em>OneDrive – Contoso</em>. Use one, browse to a folder inside it, or choose any folder on this computer. Folders synced with <strong>Sync</strong>, folders added with <strong>Add shortcut to My files</strong>, and your own OneDrive all work. If none is listed, click Sync (or Add shortcut to My files) in SharePoint and choose <strong>Look for OneDrive folders again</strong>.</p>
           </li>
           <li>
             <b>Choose your Completed folder.</b>
-            <p>Processed files end up here, renamed. Intern can create an <em>Output</em> folder next to the Queue folder, keep the Completed folder you already had, or you choose another — neither folder may be inside the other. Choose the top folder of a synced location and Intern makes an <em>Input</em> and an <em>Output</em> folder inside it, so both stay synced. A Completed folder chosen in a SharePoint library or OneDrive for work also turns on the description records below, for the library's Description column.</p>
+            <p>Processed files end up here, renamed. ATLAS can create an <em>Output</em> folder next to the Queue folder, keep the Completed folder you already had, or you choose another — neither folder may be inside the other. Choose the top folder of a synced location and ATLAS makes an <em>Input</em> and an <em>Output</em> folder inside it, so both stay synced. A Completed folder chosen in a SharePoint library or OneDrive for work also turns on the description records below, for the library's Description column.</p>
           </li>
           <li>
             <b>Decide about what is already there.</b>
-            <p>If the Queue folder already holds files, Intern asks once whether to process them too. The default is only new files.</p>
+            <p>If the Queue folder already holds files, ATLAS asks once whether to process them too. The default is only new files.</p>
           </li>
         </ol>
 
@@ -1028,8 +1028,8 @@
           <div>
             <b>Pick a Queue folder that only you add documents to.</b>
             <p>Choosing it — in setup, or with <strong>Change…</strong> in
-            Settings — is how Intern knows the documents in it are yours, so it
-            does not ask Microsoft who uploaded them. Intern then keeps running
+            Settings — is how ATLAS knows the documents in it are yours, so it
+            does not ask Microsoft who uploaded them. ATLAS then keeps running
             in the system tray and starts when you sign in, so documents are
             filed while its window is closed.</p>
           </div>
@@ -1041,7 +1041,7 @@
           OneDrive to download documents, OneDrive not running, or no longer
           synced — with the one button that fixes each. A document whose
           contents are still in the cloud is never renamed or moved until
-          OneDrive has downloaded it. Intern labels a folder you pick “Synced
+          OneDrive has downloaded it. ATLAS labels a folder you pick “Synced
           with OneDrive – …”, “Synced with SharePoint – …”, or “On a network
           share – …”, and Settings lists every <strong>synced location</strong>
           on this computer, because the folder a library syncs to has a name
@@ -1051,10 +1051,10 @@
 
         <h3 class="sym-group" id="sharepoint-descriptions">DESCRIPTIONS IN A SHAREPOINT COLUMN</h3>
         <p class="prose">
-          Alongside the filename, Intern writes one sentence saying what the
+          Alongside the filename, ATLAS writes one sentence saying what the
           document concerns. It leaves that sentence in a small record beside
           each document it files, and a Power Automate flow copies it into the
-          library's <strong>Description</strong> column. Intern makes no
+          library's <strong>Description</strong> column. ATLAS makes no
           network request for this: OneDrive uploads the record like any other
           file, and the flow runs in your own Microsoft 365 account.
         </p>
@@ -1095,7 +1095,7 @@
             <summary>Some files show a cloud icon in Explorer instead of a green tick</summary>
             <div class="answer">
               <p>
-                That is Files On-Demand, and it is handled. The read Intern
+                That is Files On-Demand, and it is handled. The read ATLAS
                 performs is exactly what makes OneDrive fetch the content. If the
                 machine is offline, the document waits and is picked up once the
                 content arrives, rather than being failed.
@@ -1103,7 +1103,7 @@
             </div>
           </details>
           <details>
-            <summary>I have files named “conflicted copy” — will Intern rename those too?</summary>
+            <summary>I have files named “conflicted copy” — will ATLAS rename those too?</summary>
             <div class="answer">
               <p>
                 No. Files like <code>report (Jane's conflicted copy …)</code>, or
@@ -1111,7 +1111,7 @@
                 bookkeeping — not new documents.
               </p>
               <p>
-                Intern counts them in Settings and leaves them alone. Resolve the
+                ATLAS counts them in Settings and leaves them alone. Resolve the
                 conflict in the folder and the surviving file is picked up.
               </p>
             </div>
@@ -1125,7 +1125,7 @@
           <p class="sec-num">07</p>
           <h2>The Queue folder</h2>
         </div>
-        <p class="lead">Intern always watches the Queue folder: whatever is put there is processed, however it got there.</p>
+        <p class="lead">ATLAS always watches the Queue folder: whatever is put there is processed, however it got there.</p>
 
         <ol class="steps">
           <li>
@@ -1151,8 +1151,8 @@
         <p class="prose">Two rules are enforced when you save, rather than discovered while running:</p>
 
         <ul class="bullets">
-          <li><strong>Intern needs both folders.</strong></li>
-          <li><strong>Neither folder may be inside the other.</strong> A processed file landing back in the Queue folder would be picked up as new work, so Intern refuses that up front, and the other way round too when you choose the folders.</li>
+          <li><strong>ATLAS needs both folders.</strong></li>
+          <li><strong>Neither folder may be inside the other.</strong> A processed file landing back in the Queue folder would be picked up as new work, so ATLAS refuses that up front, and the other way round too when you choose the folders.</li>
         </ul>
 
         <dl class="kv">
@@ -1162,7 +1162,7 @@
           </div>
           <div>
             <dt>Half-copied files</dt>
-            <dd>A file is only picked up once its size and modified time have held still for about ten seconds, so a file still being copied is never read. <strong>Scan now</strong> does not shorten that wait. A file you drop on the window or add is different: Intern makes the copy itself, checks it, and queues it at once.</dd>
+            <dd>A file is only picked up once its size and modified time have held still for about ten seconds, so a file still being copied is never read. <strong>Scan now</strong> does not shorten that wait. A file you drop on the window or add is different: ATLAS makes the copy itself, checks it, and queues it at once.</dd>
           </div>
           <div>
             <dt>Folders you cannot open</dt>
@@ -1179,7 +1179,7 @@
         </div>
         <p class="lead">A team Inbox that files what your colleagues upload needs a build your administrator provisioned.</p>
         <p class="prose">
-          In that build Intern connects your Microsoft work account and reads,
+          In that build ATLAS connects your Microsoft work account and reads,
           from Microsoft's own file metadata, who uploaded each document — never
           its content. Only documents you upload directly into the Inbox,
           unchanged, are filed for you. Anything uploaded by someone else, or
@@ -1253,7 +1253,7 @@
             <div class="answer">
               <p>
                 That is <strong>Smart App Control</strong> in enforcement mode,
-                which blocks unsigned installers outright. The Intern installer is
+                which blocks unsigned installers outright. The ATLAS installer is
                 not Authenticode signed yet, so it cannot be installed on that PC
                 until it is. Turning Smart App Control off is a decision about
                 the whole computer, not one to make for one app.
@@ -1264,7 +1264,7 @@
             <summary>The model download stopped partway through</summary>
             <div class="answer">
               <p>
-                Reopen Intern — the download resumes where it stopped. The file is
+                Reopen ATLAS — the download resumes where it stopped. The file is
                 verified against its exact length and SHA-256 before it is ever
                 used, so a broken download cannot be used by accident.
               </p>
@@ -1274,7 +1274,7 @@
             <summary>Check for updates fails</summary>
             <div class="answer">
               <p>
-                It is the only network call Intern makes besides the model
+                It is the only network call ATLAS makes besides the model
                 download (or Microsoft, in a build provisioned for a team), so check your connectivity. An
                 update that is not signed by this project's key is refused
                 outright — that is deliberate.
@@ -1282,7 +1282,7 @@
             </div>
           </details>
           <details>
-            <summary>Intern must not contact anything on its own</summary>
+            <summary>ATLAS must not contact anything on its own</summary>
             <div class="answer">
               <p>
                 Untick <strong>Check for updates automatically</strong> in
@@ -1303,7 +1303,7 @@
             <summary>Approve says every rename needs a date</summary>
             <div class="answer">
               <p>
-                Intern never files an undated document. Start the filename with
+                ATLAS never files an undated document. Start the filename with
                 the document's date as YYYY-MM-DD — or, when the review panel
                 offers the date the model read, use <strong>Use date &amp;
                 rename</strong>. A document with no date anywhere can be kept
@@ -1312,11 +1312,11 @@
             </div>
           </details>
           <details>
-            <summary>Intern says a document was filed already, but it is a different one</summary>
+            <summary>ATLAS says a document was filed already, but it is a different one</summary>
             <div class="answer">
               <p>
                 The two say nearly the same words and carry the same date, which
-                is what a second scan or a re-export looks like. Intern will not
+                is what a second scan or a re-export looks like. ATLAS will not
                 file it on its own, but it is your call: <strong>Approve &amp;
                 rename</strong> files it beside the other. Two documents that
                 differ in their date are never confused this way.
@@ -1324,11 +1324,11 @@
             </div>
           </details>
           <details>
-            <summary>Intern keeps using a spelling I do not want</summary>
+            <summary>ATLAS keeps using a spelling I do not want</summary>
             <div class="answer">
               <p>
                 It learned it from two of your own edits. Open Settings,
-                find the spelling under <strong>Spellings Intern has
+                find the spelling under <strong>Spellings ATLAS has
                 learned</strong>, and choose <strong>Forget</strong>: documents
                 still waiting go back to the document's own words at once, and
                 names already applied stay as they are. Changing a learned
@@ -1365,7 +1365,7 @@
             <div class="answer">
               <p>
                 Something still has the file open: the program you opened it in
-                to check it, or the sync client, mid-upload. Intern already
+                to check it, or the sync client, mid-upload. ATLAS already
                 waited a few seconds for it to let go, then put the rename back
                 as it was. Close the document, or let the sync finish, and
                 approve it again.
@@ -1381,7 +1381,7 @@
           <details>
             <summary>A file in my Queue folder is called NEEDS REVIEW - …</summary>
             <div class="answer">
-              <p>Intern could not read it: a password, a damaged file, one too large to read, or one the model could not answer for. It waits in the queue for review with the reason shown, renamed so you can see it in the folder too, and Intern never picks it up as a new document. <strong>Retry</strong> reads it again (after you remove a password, say), or type a name for it and approve it to file it. <strong>Keep original</strong> takes the prefix off again; <strong>Remove from queue</strong> leaves the file as it is.</p>
+              <p>ATLAS could not read it: a password, a damaged file, one too large to read, or one the model could not answer for. It waits in the queue for review with the reason shown, renamed so you can see it in the folder too, and ATLAS never picks it up as a new document. <strong>Retry</strong> reads it again (after you remove a password, say), or type a name for it and approve it to file it. <strong>Keep original</strong> takes the prefix off again; <strong>Remove from queue</strong> leaves the file as it is.</p>
             </div>
           </details>
           <details>
@@ -1411,7 +1411,7 @@
               </p>
               <p>
                 No runs at all usually means the trigger points at a different
-                site or library than the one Intern files into. A run that
+                site or library than the one ATLAS files into. A run that
                 ends <em>Cancelled</em> means the document never appeared at
                 the path in its record — it was moved or the rename was undone.
                 A record can arrive before its document; the flow waits up to
@@ -1439,7 +1439,7 @@
             <div class="answer">
               <p>
                 The Queue folder was typed into Settings in an earlier release,
-                so Intern does not know the documents in it are yours and is
+                so ATLAS does not know the documents in it are yours and is
                 waiting for Microsoft to say who uploaded them — which the
                 published build cannot ask. In Settings, under
                 <strong>Folders</strong>, choose <strong>Change…</strong> beside
@@ -1458,7 +1458,7 @@
               <ul class="bullets">
                 <li>Is it a supported format? Is it zero bytes?</li>
                 <li>Is it still copying or syncing in? A file is only picked up once its size and modified time have held still for about ten seconds.</li>
-                <li>Is it a dot-file, an Office lock file starting with <code>~$</code>, or Intern's own history export (<code>intern-history….csv</code>)? Those are ignored on purpose.</li>
+                <li>Is it a dot-file, an Office lock file starting with <code>~$</code>, or ATLAS's own history export (<code>intern-history….csv</code>)? Those are ignored on purpose.</li>
                 <li>Did another machine claim it? Settings shows the counts.</li>
               </ul>
               <p>Then try <strong>Scan now</strong>.</p>
@@ -1469,7 +1469,7 @@
             <div class="answer">
               <p>
                 Both folders must exist, and the Completed folder must be outside
-                the Queue folder. Intern refuses the loop at save time and tells
+                the Queue folder. ATLAS refuses the loop at save time and tells
                 you which rule was hit.
               </p>
             </div>
@@ -1488,12 +1488,12 @@
         <h3 class="sym-group">GOOD TO KNOW</h3>
         <div class="symptoms">
           <details>
-            <summary>Where does Intern keep its own data?</summary>
+            <summary>Where does ATLAS keep its own data?</summary>
             <div class="answer">
               <p>
                 In per-user app data. Your documents stay where they are.
                 Uninstalling removes the app but leaves both your documents and
-                Intern's data alone.
+                ATLAS's data alone.
               </p>
             </div>
           </details>
@@ -1517,7 +1517,7 @@
           <p class="sec-num">10</p>
           <h2>Updates</h2>
         </div>
-        <p class="lead">Intern checks for a newer release when it starts and every 6 hours while it runs.</p>
+        <p class="lead">ATLAS checks for a newer release when it starts and every 6 hours while it runs.</p>
         <p class="prose">
           The check asks GitHub for the release manifest and sends nothing about
           your documents: no filenames, no contents, no identifier. A found
@@ -1527,10 +1527,10 @@
           is accepted; anything else is refused. Installing waits for renames:
           once the download is in, the queue pauses so it starts no more,
           and a rename part-way through its move, even one that began during
-          the download, finishes before Intern closes for the installer.
+          the download, finishes before ATLAS closes for the installer.
         </p>
         <ul class="bullets">
-          <li><strong>To stop the automatic check</strong>, untick <strong>Check for updates automatically (when Intern starts and every 6 hours)</strong> in Settings → Updates and save.</li>
+          <li><strong>To stop the automatic check</strong>, untick <strong>Check for updates automatically (when ATLAS starts and every 6 hours)</strong> in Settings → Updates and save.</li>
           <li><strong>To check right now</strong>, press <strong>Check for updates</strong> in the same place. It works whether the automatic check is on or off.</li>
         </ul>
         <p class="note"><a href="./">Back to the download page</a></p>
@@ -1543,7 +1543,7 @@
 <footer class="site-foot">
   <div class="shell foot-in">
     <div>
-      <p class="foot-mark">Intern</p>
+      <p class="foot-mark">ATLAS</p>
       <p class="foot-copy">© 2026 Zachary Brenner. All rights reserved. Source-available under the <a href="https://github.com/z-brenner/intern/blob/main/LICENSE">Elastic License 2.0</a>.</p>
     </div>
     <nav class="foot-nav" aria-label="Footer">

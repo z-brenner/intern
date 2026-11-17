@@ -1,6 +1,8 @@
-# Intern
+# ATLAS
 
-Intern reads a document and tells you what to call it.
+**A**nalyze · **T**itle · **L**abel · **A**pprove · **S**tore
+
+ATLAS reads a document and tells you what to call it.
 
 Every pair below is copied from the scored corpus in
 [docs/model-bakeoff.md](docs/model-bakeoff.md) — the left column is what the
@@ -16,6 +18,12 @@ The first line is the point of the whole thing: `2026-04-09` was the date the
 statement of work was signed, and `2026-04-01` is the date it takes effect. Only
 one of those is what the document *is*.
 
+Those are the names the corpus scores. The name a document is filed under
+leads with the organization it is for - `2026-04-01 Ridgeline Cartography -
+Statement of Work with Contoso Worldwide, Inc.pdf`, or, with Contoso named as
+your organization, `2026-04-01 Contoso Worldwide - Statement of Work with
+Ridgeline Cartography LLC.pdf` (see [The filename](#the-filename)).
+
 Alongside the name it produces one sentence saying what the document actually
 concerns, composed from the facts it found, and the line of the document behind
 every one of them. If anything is unsupported, the document goes to review
@@ -27,14 +35,14 @@ it names.
 
 ## What leaves your machine
 
-Intern processes document text, extracted pages, OCR output and model prompts
+ATLAS processes document text, extracted pages, OCR output and model prompts
 on your computer. There is no telemetry or automatic cloud
-inference fallback. This is the complete list of what Intern sends anywhere:
+inference fallback. This is the complete list of what ATLAS sends anywhere:
 
 | Request | When | What it carries |
 | --- | --- | --- |
 | Model download | Once, when you start it (or never, if you choose existing model files) | A request for each pinned model file. Nothing about the machine or its documents. |
-| Update check | When Intern starts, every 6 hours while it runs, and when you press **Check for updates**. The automatic check can be switched off in Settings. | A request for the GitHub release manifest. Nothing about the machine or its documents. |
+| Update check | When ATLAS starts, every 6 hours while it runs, and when you press **Check for updates**. The automatic check can be switched off in Settings. | A request for the GitHub release manifest. Nothing about the machine or its documents. |
 | Microsoft sign-in and Graph (`login.microsoftonline.com`, `graph.microsoft.com`) | Only in a build an administrator provisioned for the SharePoint deployment | Sign-in and its renewal, then account and file metadata for upload verification, never document content. The build published here has none. |
 
 The first two are all a default install ever sends, and neither carries
@@ -45,7 +53,7 @@ found update is never installed by the check itself: installing is always a
 separate, explicit click, and only ever happens if the update is signed by this
 project's key — anything else is refused.
 
-Intern no longer offers API-key setup or automatic hosted processing.
+ATLAS no longer offers API-key setup or automatic hosted processing.
 Existing hosted-model settings are retired when you update.
 
 **Microsoft upload verification** is the account connection for the
@@ -57,7 +65,7 @@ does not search audit logs. Unknown uploaders stay held. See
 [upload verification](docs/microsoft-upload-verification.md) and the
 [administrator guide](docs/sharepoint-deployment.md).
 
-Intern reads documents as text: native PDF text first, OCR when a page has none,
+ATLAS reads documents as text: native PDF text first, OCR when a page has none,
 and no vision model. The projector for this model is 668,227,264 bytes — 637 MiB,
 a second download larger than half the model itself, before anyone names a
 single document, for a path almost nothing takes. A page that neither text
@@ -65,11 +73,15 @@ extraction nor OCR can read goes to review rather than being guessed at.
 
 ## Install and first run
 
-Windows 10 or 11, x86-64. Download `Intern_0.1.0-alpha.19_x64-setup.exe` from the
+Windows 10 or 11, x86-64. Download `Intern_0.1.0-alpha.20_x64-setup.exe` from the
 [latest release](https://github.com/z-brenner/intern/releases/latest) and run it;
 earlier versions are on the [releases page](https://github.com/z-brenner/intern/releases).
+ATLAS was called Intern before v0.1.0-alpha.20 and installs over it in place,
+keeping its queue, settings and models; the installer is still named
+`Intern_<version>_x64-setup.exe`. The install folder and Start menu entry keep
+the name Intern so updates install in place.
 It installs per-user, so it does not ask for administrator rights, and
-uninstalling it leaves your documents and Intern's own data alone. That data,
+uninstalling it leaves your documents and ATLAS's own data alone. That data,
 in `%LOCALAPPDATA%\com.intern.app`, holds the models, the queue, settings and
 logs, and in `slots` up to 348 MB of the models' saved state for their
 instructions (one 174 MB file a model), which can be deleted at any time.
@@ -78,7 +90,7 @@ instructions (one 174 MB file a model), which can be deleted at any time.
 code-signing certificate. Windows SmartScreen shows "Windows protected your PC"
 and calls it an unrecognized app; to continue, choose **More info** and then
 **Run anyway**. On a PC where **Smart App Control** is on (enforcement mode),
-Windows blocks the installer outright and offers no Run anyway, so Intern
+Windows blocks the installer outright and offers no Run anyway, so ATLAS
 cannot be installed there until it is signed. Nothing in this release removes
 those warnings, and you should not take an unrecognized-app warning lightly —
 so verify the download instead of trusting it. Every published installer
@@ -86,7 +98,7 @@ carries a keyless Sigstore build-provenance attestation naming the repository,
 workflow, and commit that produced those exact bytes:
 
 ```sh
-gh attestation verify Intern_0.1.0-alpha.19_x64-setup.exe --repo z-brenner/intern \
+gh attestation verify Intern_0.1.0-alpha.20_x64-setup.exe --repo z-brenner/intern \
   --signer-workflow z-brenner/intern/.github/workflows/release.yml
 ```
 
@@ -98,7 +110,7 @@ truncated download, but it proves nothing about origin: it sits on the same page
 as the installer, so whoever could replace one could replace both. The
 attestation is the part that establishes where the file came from.
 
-On first launch Intern shows a setup screen and asks to download the one thing
+On first launch ATLAS shows a setup screen and asks to download the one thing
 the installer deliberately leaves out: the local models. The model that names
 your documents is **Qwen3.5 9B** (5.29 GiB). So that a new install can start
 sooner, setup first fetches **Qwen3.5 4B** (2.55 GiB), a quicker model, and
@@ -109,13 +121,13 @@ the 9B reads those documents again once it can - unless you have acted on them
 first. Both downloads are resumable, they transfer no
 document information, and a file becomes active only after its exact length
 and SHA-256 match the manifest built into the installer. If you already have
-the files, **Choose existing model files** points Intern at either or both and
+the files, **Choose existing model files** points ATLAS at either or both and
 skips those downloads. Nothing else needs installing — PDF text extraction,
 OCR, and inference all ship inside the app.
 
 Upgrading from a build that had Qwen3.5 2B, or it and Bonsai 2 2B, setup asks
 for the two new models the same way: the 4B first, then the 9B behind the
-window. The earlier models' files are not deleted; nothing in Intern ever
+window. The earlier models' files are not deleted; nothing in ATLAS ever
 deletes a model file. The 9B needs about 8 GB of memory free to load, which a
 16 GB laptop has with a browser open and not with a browser and an office
 suite at work; then the 4B, which needs about 6.5 GB, reads in its place, its
@@ -132,10 +144,10 @@ while the computer is short of memory; **Most accurate** asks for Qwen3.5 9B
 whenever memory allows; **Fastest** reads everything with the 4B. One model is
 loaded at a time, and it is unloaded after ten minutes without a document.
 
-Then Intern asks for **two folders**, and it cannot be used until both are
+Then ATLAS asks for **two folders**, and it cannot be used until both are
 chosen — there is no skipping it:
 
-- **Queue folder** — put files here that you want Intern to process.
+- **Queue folder** — put files here that you want ATLAS to process.
 - **Completed folder** — processed files end up here, renamed. Neither folder
   may be inside the other.
 
@@ -146,40 +158,50 @@ has no Queue folder is asked on its next launch, with its Completed folder
 offered again.
 
 Put documents in the Queue folder, or drag documents or a folder onto the
-window — Intern **copies** what you drop into the Queue folder and leaves the
+window — ATLAS **copies** what you drop into the Queue folder and leaves the
 original where it was — PDFs, Word documents
 (`.docx`, `.doc`, `.rtf`, `.odt`), Excel workbooks and exports (`.xlsx`,
 `.xls`, `.ods`, `.csv`), PowerPoint decks (`.pptx`, `.ppt`, `.odp`), `.eml` and
 Outlook `.msg` emails, plain text, Markdown, and scanned images. Names
-Intern can support with verbatim text from the document appear ready to apply;
+ATLAS can support with verbatim text from the document appear ready to apply;
 anything else goes to review with the reason shown. Nothing on disk is renamed
 until you approve it, either one item at a time or with **Rename all ready**;
 approving moves the document out of the Queue folder into the Completed folder
-under its new name, and a rename can be undone - with two exceptions Intern
+under its new name, and a rename can be undone - with two exceptions ATLAS
 makes on its own in the Queue folder, both of which say so in the file's
-name. A document Intern cannot read (a password, a damaged or mislabeled
+name. A document ATLAS cannot read (a password, a damaged or mislabeled
 file, one too large to read, one the model could not answer for) stays in the
 queue for review and its file is renamed in place to `NEEDS REVIEW - <name>`,
 so the folder shows it too. When the failure could as well be the model's or
-the reader's (an unusable answer, a time-out, a crash), Intern first checks
+the reader's (an unusable answer, a time-out, a crash), ATLAS first checks
 the machine - by reading other documents, or with its own self-test - and
 blames the document only if it fails again once the machine is known to work;
 an outage stops the queue and renames nothing. Retry reads it again, or type
 a name for it and approve that, and Keep original takes the prefix off again.
-A document whose bytes Intern has already filed is moved into the output
+A document whose bytes ATLAS has already filed is moved into the output
 folder as `COPY - <the original's filed name>`, with ` (2)`, ` (3)` for
 further copies, and Undo puts it back. The **History** view in Completed lists
-every rename and undo Intern has ever applied, exportable as CSV. A long queue has a filter box
+every rename and undo ATLAS has ever applied, exportable as CSV. A long queue has a filter box
 above it that narrows the rows by original name, proposed name, or a word
 from the description.
+
+The review panel leads with the document and what to check in it. **View
+document** (Alt+V, or V when no field has the cursor) opens the document
+inside ATLAS: a PDF or a PNG or JPEG picture as it is, and any document as
+the text ATLAS read from it, page by page, with the lines and the parties
+the proposed name rests on marked; Escape closes it. Nothing leaves the
+computer for it, and a file over 50 MB is shown only as its text. **Open**
+and **Show in folder** still hand the document to its own program or its
+folder. What to check is a row of a few words each - "Party unclear", "Date
+order unclear", "Model unsure" - and pressing one shows why.
 
 Clicking a row selects it; the **Details** button above the table opens the
 review panel for the selected row, and it stays open, following the selection,
 until it is closed. A name or a description typed there and not filed stays
 with its document - through closing the panel, making the window narrower or
-wider, going on to other documents, and closing Intern - until you file the
+wider, going on to other documents, and closing ATLAS - until you file the
 document, decide it some other way, have it read again, or take it back. If
-the document changes by itself meanwhile - Intern reads it again, or another
+the document changes by itself meanwhile - ATLAS reads it again, or another
 computer files it - the panel
 shows it as it now is, and what you had typed is kept beside it, read-only,
 until you discard it. If that happens while you are typing, or the panel
@@ -199,20 +221,20 @@ moment. In a tall window the next document's buttons can be drawn in
 another place than the last one's, and a click on them less than half a
 second after they show is not taken either. This was tried in the browser
 build of the window; nobody has yet run the Windows app's own window with it.
-**Back to Intern's proposal**, above the name while it differs, drops what
+**Back to ATLAS's proposal**, above the name while it differs, drops what
 you typed for a document. **Rename all ready** leaves alone a ready
 document whose name or description you typed and did not file, and says so.
 What you typed and did not file is stored as you type it, on this computer
-only, in the window's own storage, and is there when Intern is opened again.
-It is back in the fields only when Intern can tell that its window was
+only, in the window's own storage, and is there when ATLAS is opened again.
+It is back in the fields only when ATLAS can tell that its window was
 closed in the ordinary way - the window notes that in the same storage as
 it closes - and the document still has the reading you typed over.
 Otherwise it is beside the document, read-only, for you to copy from or
-discard: when the document was read again while Intern was closed, and
-whenever that note is missing. It is missing after Intern was killed, or
-the computer lost power or was shut down with Intern open; and after
-**Quit Intern** in the notification area or the restart an update makes,
-which end Intern without closing its window (where Intern keeps running in
+discard: when the document was read again while ATLAS was closed, and
+whenever that note is missing. It is missing after ATLAS was killed, or
+the computer lost power or was shut down with ATLAS open; and after
+**Quit ATLAS** in the notification area or the restart an update makes,
+which end ATLAS without closing its window (where ATLAS keeps running in
 the background, closing the window only hides it, and Quit is the one way
 out). Whether the Windows app leaves the note when its window is closed in
 the ordinary way has not been observed yet: until it has, expect what you
@@ -220,30 +242,51 @@ typed beside the document rather than in its fields. After an end that was
 not ordinary, what you typed in the last half minute or more can be
 missing, and a name you had taken back or filed can be there again, beside
 the document. One case can still put an older name back in its field:
-Intern closed in the ordinary way, opened again, a name taken back in the
+ATLAS closed in the ordinary way, opened again, a name taken back in the
 first seconds after opening (5 seconds, measured in the browser build; no
-longer at 9), and Intern killed at once. Look at a name that came back
+longer at 9), and ATLAS killed at once. Look at a name that came back
 before you file it. The cursor is put in no field for what comes back. What
 was typed for a document that is no longer in the queue is dropped, and
-**Discard waiting** and **Clear history** drop it at once for the documents
+**Clear queue** and **Clear completed** drop it at once for the documents
 they remove. A name longer than 1,000 characters or a description longer
-than 5,000 is not stored, and lasts only while Intern is open.
+than 5,000 is not stored, and lasts only while ATLAS is open.
 In a window narrower than 1100 pixels the panel is a drawer over the queue,
-and it opens only when you ask for it there. Everything still in progress is
-in **Queue**, with a count of what needs review in its toolbar. The table selects cells like a
-spreadsheet (click, Shift+click, drag, Ctrl+A), and Ctrl+C or **Copy** puts
-them on the clipboard as both tab-separated text and an HTML table, so they
-paste into Excel or Google Sheets one value to a cell. Status is never copied.
+and it opens only when you ask for it there. A double-click on a row, or
+Enter on it, opens the panel for that row at its name. Everything still in
+progress is in **Queue**, with a count of what needs review in its toolbar. The table selects cells like a
+spreadsheet (click, Shift+click, drag, Ctrl+A), and Ctrl+C or **Copy** in the
+**More** (…) menu puts them on the clipboard as both tab-separated text and an
+HTML table, so they paste into Excel or Google Sheets one value to a cell.
+Status is never copied.
+
+To start from scratch, **More › Clear queue** takes every document that is not
+filed out of the queue - waiting, being read, ready, in review or failed - after
+asking; **More › Clear completed** does the same for the Completed list and its
+rename history. Neither deletes or moves a file. A document ATLAS had renamed
+`NEEDS REVIEW - <name>` gets its own name back. Cleared documents stay in the
+Queue folder and are not picked up again unless they change, or you add them
+again with **Add files**. A document whose earlier rename did not finish, or
+whose own name cannot be given back because a program has it open, is kept,
+and ATLAS says how many and why.
 
 Every rename carries a date. A name that does not start with the document's
 date as `YYYY-MM-DD` is refused, in the inspector and again in the queue, so
-nothing undated is ever filed. When the model read a date that Intern could
+nothing undated is ever filed. When the model read a date that ATLAS could
 not find written in the document, review shows the date, says it is
 unverified, and accepts it in one click — into the name to edit, or straight
 through to the rename. When the model offered none, every date the document
 states is one click away, and the file's own last-modified date is the last,
 labeled resort. The date a reviewer gives a name is the date the document
 is filed under: the year folder and the description record follow it.
+
+When the only doubt about a document's date is that it states none, ATLAS
+dates it from the file instead of waiting for you: the date its original
+filename states (`Scan 2024-03-08.pdf`), or else the day the file was last
+modified. A document added through ATLAS is copied with that time kept, so
+it is the original's, not the day you added it. Such a document is **Ready
+with a note** that says where the date came from ("Date taken from the
+file's last-modified date."), so it can be found and checked afterwards.
+With neither date to go on, it waits for you as before.
 
 Filed documents can be **arranged into subfolders** of the Completed folder —
 by year, by year and document type, by type, or by first party — with
@@ -252,16 +295,16 @@ arrive and removed again when an undo empties them, and a document missing
 the fact a layout keys on goes into `Undated` or `Unsorted` rather than the
 root, so what still needs a hand stays visible.
 
-Intern can also **run in the background**: with the setting on, closing the
-window keeps Intern in the system tray — the Queue folder is still processed — and
-**Start Intern when you sign in** makes it a quiet always-on service. Both are
+ATLAS can also **run in the background**: with the setting on, closing the
+window keeps ATLAS in the system tray — the Queue folder is still processed — and
+**Start ATLAS when you sign in** makes it a quiet always-on service. Both are
 off by default. The tray icon's tooltip says how many documents need review
 or are ready to rename, so a glance answers whether the window is worth
 opening.
 
-The installer also puts Intern in Explorer's **Send to** menu: select
+The installer also puts ATLAS in Explorer's **Send to** menu: select
 documents — attachments saved from Outlook, a folder of scans — right-click,
-and choose **Send to > Intern**. Intern copies them into the Queue folder and
+and choose **Send to > ATLAS**. ATLAS copies them into the Queue folder and
 queues them, whether or not it is already open. Every way of adding — Add
 files, Add folder, a drop, Send to — copies into the Queue folder: a folder is
 flattened, a name already taken gets " (2)", " (3)", a file already in the
@@ -272,30 +315,30 @@ name, so the folder never holds half a copy (one a crash leaves behind is
 swept away an hour later, by the computer that made it); it joins the queue at once
 rather than after the watcher's settle time. Two identical files in one drop
 are copied once. An add is
-never refused as a batch: a file Intern cannot read (a `.zip`, an empty file,
+never refused as a batch: a file ATLAS cannot read (a `.zip`, an empty file,
 an Office lock file, a scan another program still has open) is left out and
 named in the window, with the reason, and everything else is copied and
 queued. With no Queue folder set up, an add is refused and points to
 Settings; nothing is ever processed where it sits. Documents sent with **Send
-to > Intern** before setup has chosen the folders wait, and are copied in as
+to > ATLAS** before setup has chosen the folders wait, and are copied in as
 soon as it has. Installing an update
-restarts Intern without sending those documents again.
+restarts ATLAS without sending those documents again.
 
-If Intern cannot start, a dialog says why and names its data folder
+If ATLAS cannot start, a dialog says why and names its data folder
 (`%LOCALAPPDATA%\com.intern.app`), and the same is written to
 `logs\startup-error.log` there. A crash leaves one line in `logs\intern.log`:
 where and when it happened, never what the document said.
 
 ### Linux (Ubuntu 24.04)
 
-Intern also builds, runs, and is tested on Ubuntu 24.04, x86-64, as a `.deb`
+ATLAS also builds, runs, and is tested on Ubuntu 24.04, x86-64, as a `.deb`
 that CI builds from the same pinned runtime and smoke-tests installed. No Linux
 build is published as a release yet, and Linux builds do not update
 themselves. Install a package from a CI run's `intern-linux-…` artifact, or
 build one, with apt:
 
 ```sh
-sudo apt install ./Intern_0.1.0-alpha.19_amd64.deb
+sudo apt install ./Intern_0.1.0-alpha.20_amd64.deb
 ```
 
 apt brings what it depends on (WebKitGTK, AppIndicator, `tesseract-ocr`,
@@ -309,24 +352,24 @@ window at all), and the rest of what differs.
 
 ## Queue and Completed folders, OneDrive, and SharePoint
 
-Intern has one way in: a document is processed because it is in the **Queue
-folder**, which Intern always watches, and it is filed into the **output
+ATLAS has one way in: a document is processed because it is in the **Queue
+folder**, which ATLAS always watches, and it is filed into the **output
 folder**. Documents that appear in the Queue folder — put there in Explorer,
 synced down by OneDrive, or copied in by a drop — are analyzed and, once
-approved (or by Intern itself, if you turn on **Automatically rename ready
+approved (or by ATLAS itself, if you turn on **Automatically rename ready
 documents**), moved to the Completed folder under their new name.
 
 ### Choosing the folders
 
-Without an administrator's deployment, Intern's first launch asks for both
+Without an administrator's deployment, ATLAS's first launch asks for both
 folders. Nothing asks for a tenant, a site, or an account.
 
-1. **Choose your Queue folder.** Intern lists the OneDrive and SharePoint
+1. **Choose your Queue folder.** ATLAS lists the OneDrive and SharePoint
    folders already on this computer, such as *Legal - Documents (Contoso
    SharePoint)* or *OneDrive – Contoso*. Use one, browse to a folder inside it,
    or choose any folder on the computer. Folders synced with **Sync**, folders
    added with **Add shortcut to My files**, and your own OneDrive all work.
-2. **Choose your Completed folder.** Intern creates a Completed folder next to
+2. **Choose your Completed folder.** ATLAS creates a Completed folder next to
    the Queue folder, keeps the Completed folder you already had, or you choose
    another — neither folder may be inside the other. Chosen whole, a synced
    location gets an *Input* and an *Output* folder inside it, so both stay
@@ -336,12 +379,12 @@ folders. Nothing asks for a tenant, a site, or an account.
    an install from an earlier release keeps its own choices for everything
    but the folders.
 3. **Decide about what is already there.** If the Queue folder already holds
-   documents, Intern asks once whether to process them too. The default is
+   documents, ATLAS asks once whether to process them too. The default is
    only new files.
 
 Pick a Queue folder that **only you add documents to**: choosing it — in
-setup, or with **Change…** in Settings — is how Intern knows the documents in
-it are yours, so it does not ask Microsoft who uploaded them. Intern then keeps
+setup, or with **Change…** in Settings — is how ATLAS knows the documents in
+it are yours, so it does not ask Microsoft who uploaded them. ATLAS then keeps
 running in the system tray and starts when you sign in. Settings shows both
 folders at the top, each with **Change…**, and how the Queue folder is doing —
 up to date, waiting for OneDrive to download documents, OneDrive not running,
@@ -369,9 +412,9 @@ says the copy is waiting rather than queued. A same-user upload of an
 unchanged file is expected to verify, but that has not been proven against a
 live tenant.
 
-Intern supports one shared library: `Files` on
+ATLAS supports one shared library: `Files` on
 `teamcontoso.sharepoint.com/sites/InternTestSite`, watching `Files/Inbox` and
-filing into `Files/Filed`. In a build provisioned for it, Intern opens with a
+filing into `Files/Filed`. In a build provisioned for it, ATLAS opens with a
 short guided setup. It downloads the model if needed, connects your Microsoft
 work account (you confirm the name and email Microsoft returns), asks OneDrive
 to sync the library, and turns on filing, running in the background and at
@@ -414,7 +457,7 @@ skipped rather than stopping the scan.
 
 ### The description in a SharePoint column
 
-Alongside the filename, Intern writes one sentence saying what the document
+Alongside the filename, ATLAS writes one sentence saying what the document
 concerns. With **Write a description record for each filed document** turned
 on, every rename into the Completed folder also writes a small JSON record under
 `<Completed folder>\.intern\descriptions\` — the filename, its path in the
@@ -429,7 +472,7 @@ imported with *Import Package (Legacy)*, asks only for a SharePoint
 connection, a site, and a library; it has not yet been verified in a real
 tenant, so [`docs/sharepoint-descriptions.md`](docs/sharepoint-descriptions.md)
 also has the same flow as a step-by-step recipe. Settings lists the four
-steps. Intern still makes no network request for this; the flow runs in your
+steps. ATLAS still makes no network request for this; the flow runs in your
 own tenant, under the SharePoint connection of whoever imports it. Records for
 documents filed before the setting was turned on can be written from
 Settings, and the rename history's CSV export carries the same sentence in its
@@ -446,7 +489,7 @@ document
   -> filename + description + review decision
 ```
 
-The distillation stage is the part that matters. Intern does **not** send the
+The distillation stage is the part that matters. ATLAS does **not** send the
 model the first few pages and the last few pages. It reads every block on every
 page, scores each one for how much it helps answer "what is this, when does it
 take effect, who is it between", and keeps the best blocks **in document order**
@@ -455,26 +498,33 @@ whose effective date is on page five reaches the model exactly as well as one
 whose date is on page one.
 
 Kept text is verbatim, which is what makes the safety check real: the model has
-to quote the document, and Intern checks the quoted facts against the document
-before they can rename anything.
+to quote the document, and ATLAS checks the quoted facts against the document
+before they can rename anything. The file's current name, when a person chose
+it ("Host Chair SOW John Smith.pdf", not "scan0001.pdf"), goes to the model as a
+hint about which document this is, never as evidence: a fact only the name
+states is not used.
 
 Full details, thresholds, and measurements are in
 [`docs/architecture.md`](docs/architecture.md).
 
 ### Which documents are ready
 
-Settings, under **Naming and filing**, has a choice of two levels. The level
+Settings, under **How ATLAS names files**, has a choice of two levels. The level
 decides which documents are ready: the ones **Rename all ready** renames, and
-the ones Intern renames by itself when **Automatically rename ready
+the ones ATLAS renames by itself when **Automatically rename ready
 documents** is on.
 
-- **Strict**, the default and what every earlier release did: a document is
-  ready only when every check passes.
+- **Strict**, the default: a document is ready only when every check passes,
+  apart from a few minor ones that do not touch the name's facts - a date
+  taken from the file as above, a type taken from the document's own title or
+  layout, a description that is not one clean sentence or says more than the
+  document does (ATLAS then files no description rather than an unchecked
+  one). Each of those is shown as a note.
 - **Balanced**: a document can also be ready when the only doubts are about
   its type or its description, or when the model was unsure of the words it
-  read. It still waits for you when Intern could not confirm its date or a
+  read. It still waits for you when ATLAS could not confirm its date or a
   party from the document, when its name would have no document type, when
-  the quick model read it, or when Intern could not read it. The queue's own
+  the quick model read it, or when ATLAS could not read it. The queue's own
   holds stand at both levels: a near duplicate, a spelling you have not
   checked, a file that changed.
 
@@ -489,16 +539,22 @@ corporate records, and how Balanced does on yours has not been measured. The
 report is [`bench/reports/review-levels-2026-11`](bench/reports/review-levels-2026-11/README.md).
 
 A ready document with a doubt says so: its status is **Ready with a note**,
-and Details shows the note first. Once Intern has renamed it by itself it is
+and Details shows the note first. Once ATLAS has renamed it by itself it is
 **Completed with a note**, and Completed has a **with a note** filter that
-lists those: names nobody approved, which Intern gave by itself while its
-reading had a note, so they can be found and checked later. A name Intern
-gave by itself with no note, every one at Strict among them, is not listed.
+lists those: names nobody approved, which ATLAS gave by itself while its
+reading had a note, so they can be found and checked later. A name ATLAS
+gave by itself with no note is not listed.
 Approving a name, one at a time or with Rename all ready, clears its notes.
 
+The percentage beside a name is how sure ATLAS is of that name: the lower of
+the model's own rating and how probable it found the words of the date and
+the parties, never more than 50% for a document waiting for you, and a little
+less for every note or reason on it. It is green when the document is ready
+and amber when it waits, whatever the number.
+
 Changing the level judges the documents waiting in the queue again from what
-Intern has already read; nothing is read again. To Balanced: a document only
-Balanced calls ready becomes ready, and with automatic renaming on Intern
+ATLAS has already read; nothing is read again. To Balanced: a document only
+Balanced calls ready becomes ready, and with automatic renaming on ATLAS
 renames it shortly after the save, not while the queue is paused and not in
 the middle of reading a backlog. Back to Strict: a ready document nobody
 approved that Strict would hold goes back to review; a document already
@@ -506,12 +562,12 @@ renamed stays renamed, and Undo still works on it. At Balanced, of two scans
 of one document only the first is renamed by itself and the other waits as
 a near duplicate, also where Strict would have renamed both.
 
-Intern does not know what you typed in Details and did not file. When a save
+ATLAS does not know what you typed in Details and did not file. When a save
 would let it rename such a document - turning on automatic renaming while
 one is ready, or choosing Balanced with automatic renaming on while one
-waits - Settings says how many above **Save**. Save anyway, and Intern can
+waits - Settings says how many above **Save**. Save anyway, and ATLAS can
 rename them under its own names; what you typed stays beside each document,
-read-only, and is not filed. When Intern renames such a document while the
+read-only, and is not filed. When ATLAS renames such a document while the
 window is open, with nobody approving it, a message says so when the window
 sees the rename happen, and offers **Undo** for that rename. After a save
 that changes the level, a message says how many documents waiting in the
@@ -523,8 +579,25 @@ a note as ready. Choose Strict before going back to one.
 ## The filename
 
 ```text
-YYYY-MM-DD <what the document is> <the party or parties>.<original extension>
+YYYY-MM-DD <Entity> - <Subject>.<original extension>
+
+2026-10-16 Vistage International - Host Chair SOW for John Smith.pdf
+2024-11-09 EGN Denmark - Incorporation Email Communications.pdf
+2025-04-30 Nimbus Orchard Supply - Invoice.pdf
+2026-12-29 Notice of Termination - John Smith.pdf
 ```
+
+The entity is the organization the document is filed for: your own, where
+Settings names it under **Your organization** and the document names it;
+otherwise the first organization among the document's parties, or the one
+that issued it where the name is about the other side (a termination notice
+"for John Smith" is the employer's). It is written without its legal form -
+`Vistage Malaysia`, not `Vistage Malaysia Sdn. Bhd.` - and where you list
+several of your organization's names (`Vistage International`, `Vistage
+Malaysia`, `EGN Denmark`), the one that matches the document most specifically
+leads. The subject is what the document is, the connecting word, and the
+other side (`Host Chair SOW for John Smith`); it never repeats the entity. A
+document that names only people keeps the plain shape, the last line above.
 
 The date is the one that *defines* the document, not the first, last, or
 easiest one to find: an agreement's effective date, a notice's notice date, an
@@ -539,6 +612,18 @@ is read from the document's own wording around it (`Effective Date:`,
 model's habit, and a document the model could not type but whose title names
 a type (`MUTUAL NON-DISCLOSURE AGREEMENT`, `Board Meeting Minutes`) is named
 from the title and sent to review with the reason shown.
+
+A file that arrives already named well keeps its words. A name already in this
+shape, with the document's date, is kept as it is, and the file is not
+renamed. One without the date in front - `Vistage Malaysia - Employment
+Termination Letter for Johnny Appleseed 26.03.2025` - or with its parts in
+another order - `Host Chair SOW - John Smith - Vistage International` - keeps
+its words for the type, put in order with the date first. Only a name that
+agrees with what ATLAS read counts: it must name the organization and the
+other side, its words must give the document's type, and any date in it must
+be the document's (written one way only - `03.04.2025` could be either). A
+scanner's or a camera's name (`scan0001`, `IMG_1234`, `Document1`) says
+nothing and is ignored.
 
 Names are sanitized for Windows, keep the original extension, shed the least
 identifying detail first when they would be too long to scan, and get a numeric
@@ -556,7 +641,7 @@ shared filed marker). Undo puts it back in the Queue folder, where it waits in
 review as a duplicate and is not moved again; **Process anyway** reads it like
 any other document. Without a Completed folder, a duplicate waits in review
 untouched, as before. A second scan of the same page, a PDF exported twice, or a copy
-saved again with new metadata is not identical bytes, so Intern also
+saved again with new metadata is not identical bytes, so ATLAS also
 fingerprints the text it extracted and holds every new document against what
 it has filed - on this machine and, through the shared filed index, on
 teammates' machines. Two documents that share their words are not always one
@@ -567,35 +652,36 @@ it anyway, keep the original, or remove it.
 [`docs/prior-art.md`](docs/prior-art.md) says where the idea came from and
 what was left on the table.
 
-### Spellings Intern learns from you
+### Spellings ATLAS learns from you
 
 The document says "Contoso Worldwide, Inc."; you call it "Contoso". Respell a
-party or a document type in review and Intern remembers it. The second time you
-make the same change it becomes the spelling Intern uses. One edit is a
-decision about one document; two are a preference.
+party or a document type in review and ATLAS remembers it. The second time you
+make the same change it becomes the spelling ATLAS uses. One edit is a
+decision about one document; two are a preference. The organization a name
+leads with is respelled the same way, except your own, which is spelled as
+Settings names it.
 
 A spelling in use still fills in names, but every name it changes waits for
 you in review, even with automatic renaming on, until you choose "Use on its
 own" for that spelling. Approving a name the spelling changed does not count:
 the name may be right for that document - an agreement that names Jane Doe
 itself is rightly "John Smith, Jane Doe" - and still be wrong for the next,
-and Intern cannot tell that reliably from a document's text. So a name it
+and ATLAS cannot tell that reliably from a document's text. So a name it
 changes keeps waiting, document after document, until you say the spelling is
 right for every one of them. If a name is right, approve it; if it is not,
-put the document's own word back, changing nothing else, and Intern forgets
-the spelling. Until you choose "Use on its own", a spelling is used only where
+put the document's own word back, changing nothing else, and ATLAS forgets
+the spelling. Until you choose "Always use", a spelling is used only where
 the name shows it: a document whose name leaves out the party it respells (a
 long party left out for length, the third party of a "between") is filed and
 reported under the document's own words, and does not wait for it.
 
-"Use on its own" is in Settings, under Learned spellings, for every spelling in
+"Always use" is in Settings, under Learned spellings, for every spelling in
 use that you have not chosen it for. A name waiting for such a spelling says so
 in the review window, under "Uses your spelling", and points you to Settings;
 the review window itself does not ask, so nothing typed while you review can
-reach it. "Use on its own" first says, in plain words, what it does - every
-later document Intern reads as naming the word will be named with the spelling,
-and may be filed under that name without your check. You then type the spelling
-to confirm it; "Use on its own" stays off until you have, so no stray click can
+reach it. "Always use" first says, in plain words, what it does - from now on ATLAS
+writes the word as the spelling and may file the name without asking you. You then type the spelling
+to confirm it; "Always use" stays off until you have, so no stray click can
 choose it, and a paste does not count. While it asks, what you type in Settings
 goes into it unless you are typing in another field. Case, accents, spaces and
 punctuation do not matter: "contoso ltd" confirms "Contoso Ltd.", and "Soren"
@@ -610,11 +696,11 @@ different spelling for the same word, learned later, waits for its own choice.
 Spellings learned before alpha.18 wait for one too.
 
 Settings lists everything learned, with "Use now" for a spelling seen once
-that you want at once (the names it changes still wait until you choose "Use
-on its own"), "Use on its own", and "Forget" for one you do not want. The
+that you want at once (the names it changes still wait until you choose "Always
+use"), "Always use", and "Forget" for one you do not want. The
 review panel says "Uses your spelling" whenever a name differs from the
 evidence under it. The evidence itself always keeps the document's own words:
-a learned spelling changes what Intern calls a thing, never what it found.
+a learned spelling changes what ATLAS calls a thing, never what it found.
 
 ## Development
 
@@ -720,7 +806,7 @@ from a release that put a build there deletes it (the installer hooks,
 Tauri produces a per-user NSIS installer. To smoke-test a clean installer:
 
 ```powershell
-./scripts/smoke-installer.ps1 -InstallerPath target/release/bundle/nsis/Intern_0.1.0-alpha.19_x64-setup.exe
+./scripts/smoke-installer.ps1 -InstallerPath target/release/bundle/nsis/Intern_0.1.0-alpha.20_x64-setup.exe
 ```
 
 The smoke test also starts the installed server with `--version` from its own
@@ -751,7 +837,7 @@ llama.cpp build the app runs that model's tier on, and
 `scripts/validate-model-evaluation.mjs` gates on date, type, and party
 accuracy, on description specificity, on never filing a document under a date
 the corpus marks as a trap, and on the review rate. Specificity is held over the
-documents Intern names, as the date is, so a scan sent to review with a short,
+documents ATLAS names, as the date is, so a scan sent to review with a short,
 honest description does not fail it. Publishing is a deliberate
 `workflow_dispatch` against a chosen main commit, never a side effect of
 merging; the release job still refuses any commit but the one it was dispatched
@@ -761,13 +847,13 @@ sequence, and [`SECURITY.md`](SECURITY.md) says how to report a vulnerability.
 
 ## License
 
-Intern is © 2026 Zachary Brenner, and is **source-available** under the
+ATLAS is © 2026 Zachary Brenner, and is **source-available** under the
 [Elastic License 2.0](LICENSE) — not an OSI-approved open-source license.
 
-Read, audit, build, run, modify, and redistribute it freely. Intern makes
+Read, audit, build, run, modify, and redistribute it freely. ATLAS makes
 strong claims about what it does and does not do with your documents; the
 source is published so those claims can be checked rather than taken on faith.
-What the license reserves to the copyright holder is providing Intern to
+What the license reserves to the copyright holder is providing ATLAS to
 third parties as a hosted or managed service, and circumventing its license or
 functionality restrictions.
 

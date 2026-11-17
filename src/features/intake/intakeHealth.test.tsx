@@ -26,7 +26,7 @@ describe('folder activity', () => {
     const local = status({ cloud: null, oneDriveRunning: null });
     const view = render(<IntakeHealthNotice status={{ ...local, arriving: 1, unreadableDocuments: 1 }} myFolder={false} bridge={createInMemoryBridge()} />);
     expect(screen.queryByRole('status', { name: 'Folder health' })).toBeNull();
-    expect(screen.getByRole('status', { name: 'Folder activity' })).toHaveTextContent('1 document arriving… 1 document could not be read. Intern keeps trying; check that it opens on this computer.');
+    expect(screen.getByRole('status', { name: 'Folder activity' })).toHaveTextContent('1 document arriving… 1 document could not be read. ATLAS keeps trying; check that it opens on this computer.');
     view.unmount();
 
     // A backend from before these counts existed sends neither.

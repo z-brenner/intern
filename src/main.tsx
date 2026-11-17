@@ -7,7 +7,7 @@ import './styles/base.css';
 const root = document.getElementById('root');
 
 if (!root) {
-  throw new Error('Intern could not find its root element.');
+  throw new Error('ATLAS could not find its root element.');
 }
 
 // Before anything is drawn, so every control that acts is seen as it appears.

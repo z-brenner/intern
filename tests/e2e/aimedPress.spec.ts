@@ -111,19 +111,32 @@ for (const size of [WIDE, NARROW]) {
   });
 }
 
-test('a press on its way to the name does nothing on "Discard what I had", which came there as the document was read again', async ({ page }) => {
+test('a press on its way through the panel does nothing on "Discard what I had", which came there as the document was read again', async ({ page }) => {
   await page.setViewportSize(WIDE);
-  let aimedAt = { x: 0, y: 0 };
   let heldDown: string | null = '';
   const kept = page.getByRole('textbox', { name: 'What you had typed' });
-  await withinTheSettleTime(page, async () => {
+  /** The name typed over, and the panel it is in. */
+  const typeInTheName = async () => {
     await page.goto('/?queue=changes');
     const panel = await openDetails(page, LEASE);
     const name = panel.getByRole('textbox', { name: 'Filename' });
     await name.click();
     await page.keyboard.press('Control+End');
     await page.keyboard.type(' v2 signed');
-    aimedAt = middle(await name.boundingBox());
+    return panel;
+  };
+  // Where "Discard what I had" comes is the panel's layout's to say: the
+  // re-reading is rehearsed once to find it, and the press is aimed there.
+  // Before the re-reading something else of the panel is there, which a
+  // press on its way across the panel would reach.
+  const rehearsal = await typeInTheName();
+  await byItself(page, 'read again');
+  const aimedAt = middle(await rehearsal.getByRole('button', { name: 'Discard what I had' }).boundingBox());
+  // What was typed is kept across launches; the rehearsal's is not the journey's.
+  await page.evaluate(() => window.localStorage.clear());
+  await withinTheSettleTime(page, async () => {
+    await typeInTheName();
+    expect(await buttonAt(page, aimedAt)).not.toBe('Discard what I had');
     await untilSettled(page);
     await byItself(page, 'read again');
     await expect(kept).toBeFocused();

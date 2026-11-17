@@ -59,9 +59,9 @@ export function OnboardingFlow({ bridge, selection, pendingSetup, initialSetup, 
   };
   const current = STEPS.findIndex(([id]) => id === step);
 
-  return <main className="onboarding" aria-label="Intern setup">
+  return <main className="onboarding" aria-label="ATLAS setup">
     <aside className="onboarding-rail">
-      <p className="onboarding-wordmark">Intern</p>
+      <p className="onboarding-wordmark">ATLAS</p>
       <ol aria-label="Setup steps">
         {STEPS.map(([id, label], index) => <li key={id} className={index < current ? 'done' : index === current ? 'current' : undefined} aria-current={index === current ? 'step' : undefined}>
           <span className="onboarding-rail-mark" aria-hidden="true">{index + 1}</span>{label}{index < current && <span className="sr-only"> (done)</span>}
@@ -71,9 +71,9 @@ export function OnboardingFlow({ bridge, selection, pendingSetup, initialSetup, 
     <section className="onboarding-panel">
       {step === 'welcome' && <>
         <h1 ref={heading} tabIndex={-1}>Your team's documents, filed for you</h1>
-        <p>Intern watches your team's Inbox in SharePoint, reads each new document privately on this computer, gives it a clear name, and moves it to Filed.</p>
+        <p>ATLAS watches your team's Inbox in SharePoint, reads each new document privately on this computer, gives it a clear name, and moves it to Filed.</p>
         <p>It handles only documents you upload yourself. Documents uploaded by anyone else are left alone.</p>
-        <div className="onboarding-actions"><button type="button" className="primary" onClick={() => setStep(ready ? 'microsoft' : 'model')}>Set up Intern</button></div>
+        <div className="onboarding-actions"><button type="button" className="primary" onClick={() => setStep(ready ? 'microsoft' : 'model')}>Set up ATLAS</button></div>
       </>}
       {step === 'model' && <ModelStep heading={heading} model={model} />}
       {step === 'microsoft' && <MicrosoftStep heading={heading} bridge={bridge} onConfirmed={() => setStep('sync')} />}
@@ -121,7 +121,7 @@ function ModelStep({ heading, model }: { heading: HeadingRef; model: ReturnType<
   const accurate = setup?.tiers?.find((tier) => tier.tier === 'accurate');
   return <>
     <h1 ref={heading} tabIndex={-1}>Get the local model</h1>
-    <p>Intern reads documents with a model that runs on this computer, so your documents are never sent anywhere to be read. It downloads once{setup && setup.totalBytes > 0 ? ` (${formatBytes(setup.totalBytes)})` : ''}{accurate && accurate.state !== 'ready' ? `, and the accurate one${accurate.totalBytes > 0 ? ` (${formatBytes(accurate.totalBytes)})` : ''} follows in the background while you work; until it arrives, every name waits for you to check it` : ''}.</p>
+    <p>ATLAS reads documents with a model that runs on this computer, so your documents are never sent anywhere to be read. It downloads once{setup && setup.totalBytes > 0 ? ` (${formatBytes(setup.totalBytes)})` : ''}{accurate && accurate.state !== 'ready' ? `, and the accurate one${accurate.totalBytes > 0 ? ` (${formatBytes(accurate.totalBytes)})` : ''} follows in the background while you work; until it arrives, every name waits for you to check it` : ''}.</p>
     {!setup && !operationError && <p role="status" aria-live="polite" aria-label="Model setup status">Checking the local model…</p>}
     {operationError && <p className="onboarding-alert" role="alert">{operationError}</p>}
     {canceled && !operationError && <p role="status" aria-live="polite" aria-label="Model setup status">Download canceled. Your progress was saved.</p>}
@@ -215,7 +215,7 @@ function MicrosoftStep({ heading, bridge, onConfirmed }: { heading: HeadingRef; 
   const account = status?.connected ? status.account : null;
   return <>
     <h1 ref={heading} tabIndex={-1}>Connect your Microsoft account</h1>
-    <p>Intern uses your work Microsoft account to tell which documents in the Inbox you uploaded. Through Microsoft it checks only file details, such as who uploaded a document; it reads documents only from this computer.</p>
+    <p>ATLAS uses your work Microsoft account to tell which documents in the Inbox you uploaded. Through Microsoft it checks only file details, such as who uploaded a document; it reads documents only from this computer.</p>
     {problem && <OnboardingProblemNotice problem={problem} />}
     {account ? <>
       <div className="onboarding-account">
@@ -312,11 +312,11 @@ function SyncStep({ heading, bridge, onLibrary, onSwitchAccount }: { heading: He
   const retryFirst = Boolean(problem) && !problem?.switchAccount && !problem?.getOneDrive && !offerSync;
   return <>
     <h1 ref={heading} tabIndex={-1}>Sync the Files library</h1>
-    <p>Intern works on your team's Files library through OneDrive, so documents stay on this computer while they are read. Intern asks OneDrive to sync the InternTestSite Files library for you.</p>
+    <p>ATLAS works on your team's Files library through OneDrive, so documents stay on this computer while they are read. ATLAS asks OneDrive to sync the InternTestSite Files library for you.</p>
     {problem && <OnboardingProblemNotice problem={problem} />}
     {waiting && <>
       <p>OneDrive may ask you to confirm. If it does, choose Sync.</p>
-      <p className="onboarding-waiting" role="status" aria-live="polite" aria-label="Library sync">Waiting for OneDrive to add the Files library. Intern checks again every few seconds. You can close Intern and finish later.</p>
+      <p className="onboarding-waiting" role="status" aria-live="polite" aria-label="Library sync">Waiting for OneDrive to add the Files library. ATLAS checks again every few seconds. You can close ATLAS and finish later.</p>
     </>}
     {support.error && <p className="onboarding-alert" role="alert">{support.error}</p>}
     {!waiting && !problem && !needsSync && <p role="status" aria-live="polite" aria-label="Library sync">Looking for the Files library on this computer…</p>}
@@ -339,7 +339,7 @@ function ActivateStep({ heading, bridge, onLibrary }: { heading: HeadingRef; bri
   });
   return <>
     <h1 ref={heading} tabIndex={-1}>Turn on filing</h1>
-    <p>OneDrive has the Files library on this computer. When you turn on filing, Intern will:</p>
+    <p>OneDrive has the Files library on this computer. When you turn on filing, ATLAS will:</p>
     <ul className="onboarding-list">
       <li>watch Files/Inbox for documents you upload</li>
       <li>give each one a clear name and move it to Files/Filed</li>
@@ -378,11 +378,11 @@ function FinishedStep({ heading, bridge, library, onLibrary, onComplete }: { hea
       <strong>{library.account.displayName}</strong>
       <span>{library.account.email}</span>
     </div>
-    <p>Intern starts automatically when you sign in to Windows and keeps running in the system tray when its window is closed.</p>
+    <p>ATLAS starts automatically when you sign in to Windows and keeps running in the system tray when its window is closed.</p>
     <p>Only documents you upload directly into Files/Inbox are filed. Everyone else's documents are left alone.</p>
     {problem && <OnboardingProblemNotice problem={problem} />}
     <div className="onboarding-actions">
-      <button type="button" className="primary" disabled={busy} onClick={finish}>Open Intern</button>
+      <button type="button" className="primary" disabled={busy} onClick={finish}>Open ATLAS</button>
     </div>
   </>;
 }

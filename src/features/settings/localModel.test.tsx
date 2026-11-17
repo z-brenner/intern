@@ -10,7 +10,7 @@ import { accuracyStatus } from './LocalModel';
 async function openSettings() {
   fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
   const dialog = await screen.findByRole('dialog', { name: 'Settings' });
-  fireEvent.click(within(dialog).getByText('Local processing', { selector: 'summary' }));
+  fireEvent.click(within(dialog).getByText('Model', { selector: 'summary' }));
   return dialog;
 }
 
@@ -37,9 +37,9 @@ describe('the local model setting', () => {
     const local = within(dialog).getByRole('group', { name: 'Local model' });
 
     expect(within(local).getByLabelText(/Automatic \(recommended\)/)).toBeChecked();
-    expect(within(local).getByText(/Qwen3\.5 9B reads every document\. Qwen3\.5 4B, if you have it, stands in only while this computer is short of memory\./)).toBeVisible();
+    expect(within(local).getByText(/Qwen3\.5 9B reads every document\. Qwen3\.5 4B only steps in if this computer is short of memory\./)).toBeVisible();
     // Fastest says what it costs: every quick reading waits for a check.
-    expect(within(local).getByText(/Qwen3\.5 4B for every document\. About half the time, but every name it gives waits for you to check it\./)).toBeVisible();
+    expect(within(local).getByText(/Qwen3\.5 4B for every document\. About twice as fast, but every name waits for your check\./)).toBeVisible();
     expect(within(local).getByLabelText(/Most accurate/)).not.toBeChecked();
     expect(within(local).getByLabelText(/Fastest/)).not.toBeChecked();
     // Each model, its size, and where it is.
@@ -90,7 +90,7 @@ describe('the local model setting', () => {
     const dialog = await openSettings();
     const accurate = within(dialog).getByRole('listitem', { name: 'Qwen3.5 9B' });
     expect(accurate).toHaveTextContent('Not usable');
-    expect(accurate).toHaveTextContent('did not pass its check on this computer, so Intern does not use it');
+    expect(accurate).toHaveTextContent('did not pass its check on this computer, so ATLAS does not use it');
     expect(within(accurate).getByRole('button', { name: 'Download again' })).toBeEnabled();
   });
 });

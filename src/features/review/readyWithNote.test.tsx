@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
-import { describeNotes, humanizeReason } from '../../lib/reasons';
+import { describeNotes, humanizeReason, noteWhy, reasonLines } from '../../lib/reasons';
 import { TauriBridge } from '../../lib/tauriBridge';
 import type { HistoryEntry, QueueItem } from '../../types';
 import { openDetails, queueCell } from '../queue/gridTesting';
@@ -29,6 +29,20 @@ const inReview: QueueItem = { id: 'review', originalFilename: 'Scan 0303.pdf', s
 const renamed: QueueItem = { ...noted, id: 'renamed', originalFilename: 'Scan 0298.pdf', status: 'completed', filedName: noted.proposedFilename, filedPath: `C:\\Filed\\${noted.proposedFilename}`, undoable: true, keptOriginal: false };
 const renamedPlain: QueueItem = { ...plain, id: 'renamed-plain', originalFilename: 'Scan 0299.pdf', status: 'completed', filedName: plain.proposedFilename, undoable: true, keptOriginal: false };
 
+/**
+ * What a note says, chip by chip: each code's few words, and the sentence it
+ * opens, which is its tooltip as well.
+ */
+function noteSays(note: HTMLElement): Array<{ label: string; why: string }> {
+  return within(within(note).getByRole('list', { name: 'ATLAS noted' })).getAllByRole('button').map((chip) => ({
+    label: chip.textContent ?? '',
+    why: chip.getAttribute('title') ?? '',
+  }));
+}
+
+/** The chips `codes` make, as a note says them. */
+const chipsOf = (labels: string[], noteCodes: string[]) => noteCodes.map((code, index) => ({ label: labels[index], why: noteWhy(code) }));
+
 async function start(items: QueueItem[], extra: Parameters<typeof createInMemoryBridge>[0] = {}) {
   const base = createInMemoryBridge({ items, ...extra });
   const bridge = { ...base, approve: vi.fn(base.approve) };
@@ -46,11 +60,11 @@ describe('a ready row with a note, in the queue', () => {
     // The arrow keys step over Status, so the filename's cell carries it.
     expect(queueCell('Scan 0301.pdf')).toHaveAccessibleDescription('Ready with a note');
     const check = queueCell('Scan 0301.pdf', 'check');
-    expect(check).toHaveTextContent('Note: Type supplied by Intern +1 more');
+    expect(check).toHaveTextContent('Note: Type guessed +1 more');
     expect(check.querySelector('.check-label')).toHaveClass('noted');
     // Not the stylesheet's boxed notice, which `note` is.
     expect(check.querySelector('.check-label')).not.toHaveClass('note');
-    expect(check).toHaveAttribute('title', describeNotes(codes));
+    expect(check).toHaveAttribute('title', reasonLines(codes, { note: true }));
     // Not a review's amber, and no part of the name marked to check.
     expect(check.querySelector('.check-label')).not.toHaveClass('review');
     expect(queueCell('Scan 0301.pdf', 'proposed').querySelector('mark')).toBeNull();
@@ -76,7 +90,7 @@ describe('a ready row with a note, in the queue', () => {
     fireEvent.click(ready);
     const rows = screen.getAllByRole('row').slice(1);
     expect(rows.map((row) => row.querySelector('[data-column="original"]')?.textContent)).toEqual(['Scan 0301.pdf', 'Scan 0302.pdf']);
-    expect(rows[0]).toHaveTextContent('Note: Type supplied by Intern');
+    expect(rows[0]).toHaveTextContent('Note: Type guessed');
   });
 
   it('says nothing of notes on the ready count when no ready row has one', async () => {
@@ -85,7 +99,7 @@ describe('a ready row with a note, in the queue', () => {
     expect(screen.queryByRole('button', { name: /with a note/ })).not.toBeInTheDocument();
   });
 
-  it('is not what Intern selects at launch: that is the first document needing review', async () => {
+  it('is not what ATLAS selects at launch: that is the first document needing review', async () => {
     await start([noted, plain, inReview]);
     await waitFor(() => expect(queueCell('Scan 0303.pdf').closest('tr')).toHaveAttribute('aria-current', 'true'));
   });
@@ -96,8 +110,8 @@ describe('a ready row with a note, in the queue', () => {
     await waitFor(() => expect(bridge.approve).toHaveBeenCalledTimes(2));
     expect(bridge.approve).toHaveBeenCalledWith('noted', noted.proposedFilename, noted.description);
     const result = await screen.findByRole('group', { name: 'Action result' });
-    expect(result.querySelector('p')).toHaveTextContent(/^Renamed 2 documents\. 1 had a note from Intern\.$/);
-    expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Renamed 2 documents. 1 had a note from Intern.');
+    expect(result.querySelector('p')).toHaveTextContent(/^Renamed 2 documents\. 1 had a note from ATLAS\.$/);
+    expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Renamed 2 documents. 1 had a note from ATLAS.');
     // An approval clears a document's reasons, as the backend's does: renamed by the person, it carries no note.
     fireEvent.click(screen.getByRole('button', { name: /^Completed, / }));
     expect(queueCell('Scan 0301.pdf', 'status')).toHaveTextContent(/^Completed$/);
@@ -113,13 +127,16 @@ describe('a ready row with a note, in the queue', () => {
 });
 
 describe('a ready row with a note, in the Details panel', () => {
-  it('says first that it is ready and what Intern noted, as a note and not as what to check', async () => {
+  it('says first that it is ready and what ATLAS noted, as a note and not as what to check', async () => {
     await start([noted, plain, inReview]);
     const panel = await openDetails('Scan 0301.pdf');
-    const note = within(panel).getByRole('region', { name: "Intern's note" });
+    const note = within(panel).getByRole('region', { name: "ATLAS's note" });
     expect(within(note).getByRole('heading', { name: 'Ready with a note' })).toBeVisible();
-    expect(note).toHaveTextContent('This document is ready: nothing holds it. Intern noted this about its reading.');
-    expect(note).toHaveTextContent(describeNotes(codes));
+    expect(note).toHaveTextContent('Nothing holds it. ATLAS only noted this about its reading.');
+    // A few words a note, each opening its sentence: the note's, never a review's instruction.
+    expect(noteSays(note)).toEqual(chipsOf(['Type guessed', 'Model unsure'], codes));
+    fireEvent.click(within(note).getByRole('button', { name: 'Model unsure' }));
+    expect(within(note).getByText(/If you look at this name, start with the date and the parties\./)).toBeVisible();
     // Before the name it is about.
     expect(note.compareDocumentPosition(within(panel).getByLabelText('Filename')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // Nothing of a review: no "What to check", no instruction, no part of the name or the evidence marked.
@@ -161,27 +178,27 @@ describe('a ready row with a note, in the Details panel', () => {
     expect(await screen.findByRole('group', { name: 'Action result' })).toHaveTextContent('Renamed 1 document.');
   });
 
-  // "The model was unsure of its reading" in the note, and "100%" under
-  // Analysis details: the same pair a review has, explained the same way.
-  it('explains the model\'s own figure beside a note that the model was unsure', async () => {
+  // The confidence is one figure, consistent with the status (the
+  // backend's): beside a note that the model was unsure it is shown once,
+  // and no paragraph about the model's own figure is needed.
+  it('shows the confidence once beside a note that the model was unsure, and explains nothing about it', async () => {
     await start([noted, { ...noted, id: 'typed', originalFilename: 'Scan 0304.pdf', reasonCodes: ['TYPE_INFERRED'], reason: humanizeReason('TYPE_INFERRED') }]);
     const panel = await openDetails('Scan 0301.pdf');
     fireEvent.click(within(panel).getByText('Analysis details'));
-    expect(within(panel).getByText("Model's own confidence").closest('p')).toHaveTextContent('100%');
-    expect(within(panel).getByRole('note', { name: "About the model's own confidence" })).toBeInTheDocument();
-    // A note about the type alone has nothing to reconcile.
+    expect(within(panel).getAllByText('Confidence')).toHaveLength(1);
+    expect(within(panel).getByText('Confidence').closest('p')).toHaveTextContent('100%');
+    expect(panel).not.toHaveTextContent(/model's own/i);
     await openDetails('Scan 0304.pdf');
-    expect(within(panel).getByRole('region', { name: "Intern's note" })).toHaveTextContent(describeNotes(['TYPE_INFERRED']));
-    expect(within(panel).queryByRole('note', { name: "About the model's own confidence" })).not.toBeInTheDocument();
+    expect(noteSays(within(panel).getByRole('region', { name: "ATLAS's note" }))).toEqual(chipsOf(['Type guessed'], ['TYPE_INFERRED']));
   });
 
   it('shows a ready document with nothing noted, and one in review, as it always did', async () => {
     await start([noted, plain, inReview]);
     const panel = await openDetails('Scan 0302.pdf');
-    expect(within(panel).queryByRole('region', { name: "Intern's note" })).not.toBeInTheDocument();
+    expect(within(panel).queryByRole('region', { name: "ATLAS's note" })).not.toBeInTheDocument();
     expect(panel.querySelector('.source-file .status')).toHaveTextContent(/^Ready$/);
     await openDetails('Scan 0303.pdf');
-    expect(within(panel).queryByRole('region', { name: "Intern's note" })).not.toBeInTheDocument();
+    expect(within(panel).queryByRole('region', { name: "ATLAS's note" })).not.toBeInTheDocument();
     expect(within(panel).getByRole('heading', { name: 'What to check' }).closest('section')).toHaveTextContent(humanizeReason('DATE_AMBIGUOUS'));
     expect(within(panel).getByRole('button', { name: /Approve & rename/ })).toBeEnabled();
   });
@@ -193,9 +210,9 @@ describe('a ready row with a note, in the Details panel', () => {
     expect(items[0]).toMatchObject({ status: 'ready', reasonCodes: codes });
     await start(items);
     expect(queueCell('Scan 0401.pdf', 'status')).toHaveTextContent('Ready with a note');
-    expect(queueCell('Scan 0401.pdf', 'check')).toHaveTextContent('Note: Type supplied by Intern +1 more');
+    expect(queueCell('Scan 0401.pdf', 'check')).toHaveTextContent('Note: Type guessed +1 more');
     const panel = await openDetails('Scan 0401.pdf');
-    expect(within(panel).getByRole('region', { name: "Intern's note" })).toHaveTextContent(describeNotes(codes));
+    expect(noteSays(within(panel).getByRole('region', { name: "ATLAS's note" }))).toEqual(chipsOf(['Type guessed', 'Model unsure'], codes));
   });
 });
 
@@ -208,16 +225,16 @@ describe('a document renamed with a note, afterwards', () => {
     expect(queueCell('Scan 0298.pdf', 'status')).toHaveTextContent('Completed with a note');
     expect(queueCell('Scan 0298.pdf')).toHaveAccessibleDescription('Completed with a note');
     const check = queueCell('Scan 0298.pdf', 'check');
-    expect(check).toHaveTextContent('Note: Type supplied by Intern +1 more');
-    expect(check).toHaveAttribute('title', describeNotes(codes));
+    expect(check).toHaveTextContent('Note: Type guessed +1 more');
+    expect(check).toHaveAttribute('title', reasonLines(codes, { note: true }));
     expect(queueCell('Scan 0299.pdf', 'status')).toHaveTextContent(/^Completed$/);
     expect(queueCell('Scan 0299.pdf', 'check')).toHaveTextContent('—');
 
     const panel = await openDetails('Scan 0298.pdf');
-    const note = within(panel).getByRole('region', { name: "Intern's note" });
+    const note = within(panel).getByRole('region', { name: "ATLAS's note" });
     expect(within(note).getByRole('heading', { name: 'Renamed with a note' })).toBeVisible();
-    expect(note).toHaveTextContent('Intern had this noted about its reading when the document was renamed.');
-    expect(note).toHaveTextContent(describeNotes(codes));
+    expect(note).toHaveTextContent('ATLAS noted this about its reading when it was renamed.');
+    expect(noteSays(note)).toEqual(chipsOf(['Type guessed', 'Model unsure'], codes));
     expect(within(panel).queryByRole('heading', { name: 'Note' })).not.toBeInTheDocument();
     // What a filed document is offered, and no more.
     expect(within(panel).getByRole('button', { name: 'Undo' })).toBeEnabled();
@@ -235,7 +252,7 @@ describe('a document renamed with a note, afterwards', () => {
     await start(items);
     fireEvent.click(screen.getByRole('button', { name: /^Completed, / }));
     expect(queueCell('Scan 0501.pdf', 'status')).toHaveTextContent('Completed with a note');
-    expect(queueCell('Scan 0501.pdf', 'check')).toHaveTextContent('Note: Type supplied by Intern +1 more');
+    expect(queueCell('Scan 0501.pdf', 'check')).toHaveTextContent('Note: Type guessed +1 more');
     expect(queueCell('Scan 0502.pdf', 'status')).toHaveTextContent(/^Completed$/);
     expect(queueCell('Scan 0503.pdf', 'status')).toHaveTextContent(/^Completed$/);
     expect(queueCell('Scan 0503.pdf', 'check').querySelector('.check-label')).toHaveClass('quiet');
@@ -270,7 +287,7 @@ describe('a document renamed with a note, afterwards', () => {
     // Back in the queue it waits for a decision, its codes and the undo as why.
     fireEvent.click(screen.getByRole('button', { name: /^Queue, / }));
     expect(queueCell('Scan 0298.pdf', 'status')).toHaveTextContent('Needs review');
-    expect(queueCell('Scan 0298.pdf', 'check')).toHaveTextContent('Type supplied by Intern +2 more');
+    expect(queueCell('Scan 0298.pdf', 'check')).toHaveTextContent('Type guessed +2 more');
   });
 
   it('is not offered when no filed document has a note: one kept under its original name, with a review\'s codes, has none', async () => {
@@ -280,7 +297,7 @@ describe('a document renamed with a note, afterwards', () => {
     expect(screen.queryByRole('button', { name: /with a note/ })).not.toBeInTheDocument();
     expect(queueCell('Scan 0297.pdf', 'status')).toHaveTextContent(/^Completed$/);
     // As before: the codes it kept, quietly.
-    expect(queueCell('Scan 0297.pdf', 'check')).toHaveTextContent('Date could be day- or month-first');
+    expect(queueCell('Scan 0297.pdf', 'check')).toHaveTextContent('Date order unclear');
     expect(queueCell('Scan 0297.pdf', 'check').querySelector('.check-label')).toHaveClass('quiet');
   });
 
@@ -292,9 +309,9 @@ describe('a document renamed with a note, afterwards', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Rename history' });
     const marks = await within(dialog).findAllByRole('note');
     expect(marks).toHaveLength(1);
-    expect(marks[0]).toHaveAccessibleName(`Intern's note on ${renamed.filedName}`);
-    expect(marks[0]).toHaveTextContent('Note: Type supplied by Intern (+1 more)');
-    expect(marks[0]).toHaveAttribute('title', describeNotes(codes));
+    expect(marks[0]).toHaveAccessibleName(`ATLAS's note on ${renamed.filedName}`);
+    expect(marks[0]).toHaveTextContent('Note: Type guessed (+1 more)');
+    expect(marks[0]).toHaveAttribute('title', reasonLines(codes, { note: true }));
     expect(marks[0].closest('tr')).toHaveTextContent('Scan 0298.pdf');
   });
 
@@ -331,9 +348,9 @@ describe('a note that the type is a general word', () => {
     expect(queueCell('Scan 0601.pdf', 'status')).toHaveTextContent('Ready with a note');
     expect(queueCell('Scan 0601.pdf', 'proposed')).toHaveTextContent(name);
     expect(queueCell('Scan 0601.pdf', 'check')).toHaveTextContent(/^Note: No specific type$/);
-    expect(queueCell('Scan 0601.pdf', 'check')).toHaveAttribute('title', 'No specific document type was identified.');
+    expect(queueCell('Scan 0601.pdf', 'check')).toHaveAttribute('title', 'No specific type: No specific document type was identified.');
     const panel = await openDetails('Scan 0601.pdf');
-    expect(within(panel).getByRole('region', { name: "Intern's note" })).toHaveTextContent('No specific document type was identified.');
+    expect(within(panel).getByRole('region', { name: "ATLAS's note" })).toHaveTextContent('No specific document type was identified.');
     expect(document.body).not.toHaveTextContent('No document type');
 
     fireEvent.click(screen.getByRole('button', { name: /^Completed, / }));
@@ -373,7 +390,7 @@ describe('a document with notes that is being renamed, or was completed under th
     { id: 44, originalFilename: 'Scan 0704.pdf', status: 'completed', proposedFilename: '2024-03-06 Notice.pdf', filedName: null, filedPath: null, keptOriginal: true, parked: false, undoable: false, approved: false, reason: 'TYPE_INFERRED, LOW_CONFIDENCE', proposalRevision: '1' },
   ];
 
-  it('says what Intern noted while the document is renamed, and tells nobody to check it', async () => {
+  it('says what ATLAS noted while the document is renamed, and tells nobody to check it', async () => {
     const items = await fromBackend(sent);
     expect(items[0]).toMatchObject({ status: 'processing', stage: 'filing', reasonCodes: codes });
     await start(items);
@@ -383,7 +400,7 @@ describe('a document with notes that is being renamed, or was completed under th
     expect(note).toHaveTextContent(describeNotes(codes));
     expect(panel).not.toHaveTextContent(instruction);
     // Not ready and not renamed: no "with a note" of either kind, and nothing of a review.
-    expect(within(panel).queryByRole('region', { name: "Intern's note" })).not.toBeInTheDocument();
+    expect(within(panel).queryByRole('region', { name: "ATLAS's note" })).not.toBeInTheDocument();
     expect(within(panel).queryByRole('heading', { name: 'What to check' })).not.toBeInTheDocument();
   });
 
@@ -395,7 +412,7 @@ describe('a document with notes that is being renamed, or was completed under th
     const check = queueCell(row, 'check');
     expect(check).toHaveTextContent('Already had this name +2 more');
     expect(check.querySelector('.check-label')).toHaveClass('quiet');
-    expect(check).toHaveAttribute('title', `${alreadyNamed} ${describeNotes(codes)}`);
+    expect(check).toHaveAttribute('title', `Already had this name: ${alreadyNamed}\n${reasonLines(codes, { note: true })}`);
     // Nothing was renamed, so it is not among those renamed with a note.
     expect(screen.queryByRole('button', { name: /with a note/ })).not.toBeInTheDocument();
 
@@ -404,9 +421,10 @@ describe('a document with notes that is being renamed, or was completed under th
     const note = within(panel).getByRole('heading', { name: 'Note' }).closest('section')!;
     expect(note).toHaveTextContent(`${alreadyNamed} ${describeNotes(codes)}`);
     expect(panel).not.toHaveTextContent(instruction);
-    // "The model was unsure" beside its own 100%: explained, as on a review and on a note.
+    // The confidence beside it is one figure, with nothing to explain.
     fireEvent.click(within(panel).getByText('Analysis details'));
-    expect(within(panel).getByRole('note', { name: "About the model's own confidence" })).toBeInTheDocument();
+    expect(within(panel).getAllByText('Confidence')).toHaveLength(1);
+    expect(panel).not.toHaveTextContent(/model's own/i);
   });
 
   it('leaves a document already named with nothing noted, and one a person kept, as they were', async () => {
@@ -416,8 +434,8 @@ describe('a document with notes that is being renamed, or was completed under th
     const panel = await openDetails('2024-03-07 Invoice INV-7 from Litware Inc.pdf');
     expect(within(panel).getByRole('heading', { name: 'Note' }).closest('section')).toHaveTextContent(new RegExp(`^Note${alreadyNamed.replace(/[.]/g, '\\.')}$`));
     // A person's Keep original leaves the review's codes on the record; that row is the released one's.
-    expect(queueCell('Scan 0704.pdf', 'check')).toHaveTextContent('Type supplied by Intern +1 more');
-    expect(queueCell('Scan 0704.pdf', 'check')).toHaveAttribute('title', humanizeReason(codes.join(', ')));
+    expect(queueCell('Scan 0704.pdf', 'check')).toHaveTextContent('Type guessed +1 more');
+    expect(queueCell('Scan 0704.pdf', 'check')).toHaveAttribute('title', reasonLines(codes));
     await openDetails('Scan 0704.pdf');
     expect(within(panel).getByRole('heading', { name: 'Note' }).closest('section')).toHaveTextContent(humanizeReason(codes.join(', ')));
   });

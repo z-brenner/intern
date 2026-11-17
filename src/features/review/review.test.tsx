@@ -91,7 +91,7 @@ describe('review actions', () => {
     fireEvent.change(screen.getByLabelText('Filename'), { target: { value: '2023-09-15 Lease.PDF' } });
     fireEvent.click(screen.getByRole('button', { name: /Approve & rename/i }));
 
-    expect(screen.getByRole('alert')).toHaveTextContent('Leave \u201c.pdf\u201d off: Intern adds the extension itself.');
+    expect(screen.getByRole('alert')).toHaveTextContent('Leave \u201c.pdf\u201d off: ATLAS adds the extension itself.');
     expect(approve).not.toHaveBeenCalled();
   });
 
@@ -263,13 +263,13 @@ describe('review actions', () => {
     expect(inspector).not.toHaveTextContent('Renamed to');
   });
 
-  it('says plainly when the document is no longer where Intern saw it', async () => {
-    const openItem = vi.fn(async () => { throw { code: 'PATH_UNAVAILABLE', message: 'the document is not where Intern last saw it' }; });
+  it('says plainly when the document is no longer where ATLAS saw it', async () => {
+    const openItem = vi.fn(async () => { throw { code: 'PATH_UNAVAILABLE', message: 'the document is not where ATLAS last saw it' }; });
     render(<App bridge={{ ...createInMemoryBridge(), openItem }} />);
     await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Open' }));
 
-    expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('It may have been moved, renamed, or deleted outside Intern.');
+    expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('It may have been moved, renamed, or deleted outside ATLAS.');
     // Opening is not a decision: the item is still there to decide.
     expect(screen.getByRole('button', { name: /Approve & rename/i })).toBeEnabled();
   });
@@ -762,7 +762,7 @@ describe('review actions', () => {
     // only unlocks once background mode is on.
     expect(await screen.findByLabelText('Start minimized')).toBeDisabled();
     fireEvent.click(screen.getByLabelText('Run in background'));
-    fireEvent.click(screen.getByLabelText('Start Intern when you sign in'));
+    fireEvent.click(screen.getByLabelText('Start ATLAS when you sign in'));
     fireEvent.click(screen.getByLabelText('Start minimized'));
     fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
 
@@ -803,7 +803,7 @@ describe('review actions', () => {
     render(<App bridge={{ ...base, saveSettings }} />);
     fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
 
-    fireEvent.click(await screen.findByText('Naming and filing', { selector: 'summary' }));
+    fireEvent.click(await screen.findByText('How ATLAS names files', { selector: 'summary' }));
     const layout = await screen.findByLabelText('Arrange filed documents');
     expect(layout).toHaveValue('flat');
     fireEvent.change(layout, { target: { value: 'year_type' } });
@@ -884,7 +884,7 @@ describe('review actions', () => {
 
     // The seeded queue has exactly one completed item that still carries its sentence.
     expect(await screen.findByRole('status', { name: 'Backfill status' })).toHaveTextContent('1 record written.');
-    await waitFor(() => expect(status).toHaveTextContent('1 record written since Intern started'));
+    await waitFor(() => expect(status).toHaveTextContent('1 record written since ATLAS started'));
   });
 
   it('explains a records-without-destination refusal in plain words', async () => {

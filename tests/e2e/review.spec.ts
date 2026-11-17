@@ -259,7 +259,7 @@ for (const size of [{ width: 1400, height: 900 }, { width: 800, height: 600 }]) 
   queue's row and to Rename all ready.
 */
 const HELD = 'SOW final v3.pdf';
-const CONTOSO = 'Use on its own: Contoso Worldwide, Inc. written as Contoso';
+const CONTOSO = 'Always use: Contoso Worldwide, Inc. written as Contoso';
 const focusInSettings = (page: Page) => page.evaluate(() => Boolean(document.activeElement?.closest('[role="dialog"][aria-label="Settings"]')));
 
 for (const size of [{ width: 1400, height: 900 }, { width: 800, height: 600 }]) {
@@ -712,7 +712,7 @@ test('Analyze again starts from the new reading, with nothing kept beside it', a
   await openDetails(page, LEASE);
   await expect(name).toHaveValue(proposed);
   await expect(page.getByRole('textbox', { name: 'What you had typed' })).toHaveCount(0);
-  await expect(panel.getByRole('button', { name: "Back to Intern's proposal" })).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: "Back to ATLAS's proposal" })).toHaveCount(0);
 });
 
 /*
@@ -722,12 +722,12 @@ test('Analyze again starts from the new reading, with nothing kept beside it', a
   while its row still read "... and TenantCo Inc". Ctrl+Z in the field shown
   again gives nothing back. "Back to Intern's proposal" does.
 */
-test('a name spoiled and kept through Escape is taken back with "Back to Intern\'s proposal", and Enter then files the proposal', async ({ page }) => {
+test('a name spoiled and kept through Escape is taken back with "Back to ATLAS\'s proposal", and Enter then files the proposal', async ({ page }) => {
   await page.setViewportSize(NARROW);
   await page.goto('/');
   const drawer = page.getByRole('dialog', { name: 'Review item' });
   const name = drawer.getByRole('textbox', { name: 'Filename' });
-  const back = drawer.getByRole('button', { name: "Back to Intern's proposal" });
+  const back = drawer.getByRole('button', { name: "Back to ATLAS's proposal" });
   await queueCell(page, LEASE).click();
   await page.keyboard.press('Enter');
   await expect(name).toBeFocused();

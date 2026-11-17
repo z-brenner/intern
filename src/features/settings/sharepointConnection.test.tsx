@@ -84,7 +84,7 @@ describe('SharePoint connection in Settings', () => {
     const folders = screen.getByRole('group', { name: 'Folders' });
     expect(within(folders).getByText(managedSettings.intakeFolder)).toBeVisible();
     expect(within(folders).getByText(managedSettings.destination)).toBeVisible();
-    expect(within(folders).getByText(/cannot be changed here/)).toBeVisible();
+    expect(within(folders).getByText(/manages these folders through SharePoint/)).toBeVisible();
     expect(screen.queryByRole('button', { name: /^Change (input|output) folder$/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Set up folders step by step…' })).not.toBeInTheDocument();
     expect(screen.queryByRole('group', { name: 'Synced locations on this computer' })).not.toBeInTheDocument();
@@ -93,7 +93,7 @@ describe('SharePoint connection in Settings', () => {
     expect(screen.queryByLabelText("This machine's name")).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/private local intake/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Run in background')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Start Intern when you sign in')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Start ATLAS when you sign in')).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/tenant|client|application ID|drive|folder ID/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Verify folder pairing' })).not.toBeInTheDocument();
     expect(screen.queryByRole('group', { name: 'Microsoft upload identity' })).not.toBeInTheDocument();
@@ -103,7 +103,7 @@ describe('SharePoint connection in Settings', () => {
   it('keeps model, spellings, layout, renaming, descriptions, updates, and help', async () => {
     renderDialog(managedBridge());
     await screen.findByRole('region', { name: 'SharePoint connection' });
-    for (const title of ['Naming and filing', 'Learned spellings', 'Local processing', 'SharePoint descriptions']) fireEvent.click(screen.getByText(title, { selector: 'summary' }));
+    for (const title of ['How ATLAS names files', 'Learned spellings', 'Model', 'SharePoint descriptions']) fireEvent.click(screen.getByText(title, { selector: 'summary' }));
     expect(screen.getByLabelText('Arrange filed documents')).toBeVisible();
     expect(screen.getByLabelText('Automatically rename ready documents')).toBeVisible();
     expect(screen.getByText('Learned spellings', { selector: 'summary' })).toBeVisible();
@@ -505,7 +505,7 @@ describe('SharePoint connection in Settings', () => {
     await waitFor(() => {
       const active = document.activeElement as HTMLElement;
       expect(screen.getByRole('dialog', { name: 'Settings' })).toContainElement(active);
-      expect(screen.getByText('Naming and filing', { selector: 'summary' })).toHaveFocus();
+      expect(screen.getByText('How ATLAS names files', { selector: 'summary' })).toHaveFocus();
     });
   });
 
@@ -523,7 +523,7 @@ describe('SharePoint connection in Settings', () => {
     } finally {
       observer.disconnect();
     }
-    expect(seen[0]).toBe(screen.getByText('Naming and filing', { selector: 'summary' }));
+    expect(seen[0]).toBe(screen.getByText('How ATLAS names files', { selector: 'summary' }));
   });
 
   it('lets the keyboard reach the support details disclosure', async () => {

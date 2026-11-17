@@ -1860,3 +1860,61 @@ fn get_returns_one_item() {
     assert_eq!(found.status, QueueStatus::Canceled);
     assert_eq!(db.get(second.id + 100).unwrap(), None);
 }
+
+/// Clear queue's step: rows go, and the claims that handed them over are
+/// marked set aside in the same step. A row that has started on something
+/// since that cannot be stopped part-way - here a rename - stays, and so
+/// does its claim as it was.
+#[test]
+fn clearing_items_sets_their_claims_aside_and_leaves_a_row_being_renamed() {
+    let temp = TempDir::new().unwrap();
+    let db = store(&temp);
+    let waiting = db
+        .enqueue(&temp.path().join("waiting.pdf"), "waiting-hash")
+        .unwrap();
+    let renaming = db
+        .enqueue(&temp.path().join("renaming.pdf"), "renaming-hash")
+        .unwrap();
+    advance_to_ready(&db, waiting.id);
+    advance_to_ready(&db, renaming.id);
+    db.begin_applying(renaming.id, QueueStatus::Ready).unwrap();
+    db.record_intake_claim("waiting", waiting.id).unwrap();
+    db.record_intake_claim("renaming", renaming.id).unwrap();
+
+    assert_eq!(db.clear_items(&[waiting.id, renaming.id]).unwrap(), 1);
+
+    assert!(db.get(waiting.id).unwrap().is_none());
+    assert!(db.intake_claim_set_aside("waiting").unwrap());
+    assert_eq!(
+        db.get(renaming.id).unwrap().unwrap().status,
+        QueueStatus::Applying
+    );
+    assert!(!db.intake_claim_set_aside("renaming").unwrap());
+}
+
+/// A queue database from before claims could be set aside gains the mark,
+/// unset, and every claim in it reads as it did.
+#[test]
+fn a_database_from_before_claims_could_be_set_aside_opens() {
+    let temp = TempDir::new().unwrap();
+    {
+        let connection = rusqlite::Connection::open(temp.path().join("queue.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE intake_claims (
+                   claim_key TEXT PRIMARY KEY,
+                   queue_item_id INTEGER,
+                   created_at INTEGER NOT NULL,
+                   seen_gone INTEGER NOT NULL DEFAULT 0
+                 );
+                 INSERT INTO intake_claims(claim_key, queue_item_id, created_at) VALUES ('old', NULL, 0);",
+            )
+            .unwrap();
+    }
+    let db = store(&temp);
+    assert!(!db.intake_claim_set_aside("old").unwrap());
+    assert!(matches!(
+        db.find_by_intake_claim("old").unwrap(),
+        Some(None)
+    ));
+}

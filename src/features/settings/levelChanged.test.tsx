@@ -24,8 +24,8 @@ describe('what a change to Balanced did, counted', () => {
   const cases: Array<[string, QueueItem, boolean]> = [
     ['ready with its notes', row('ready', 'ready', NOTES), true],
     ['being renamed, with its notes', row('renaming', 'processing', { ...NOTES, stage: 'filing', cancelable: false }), true],
-    ['renamed by Intern, with its notes', row('renamed', 'completed', { ...NOTES, filedName: '2024-05-01 Letter renamed.pdf', undoable: true, keptOriginal: false }), true],
-    ['completed by Intern under the name it had', row('named', 'completed', { reasonCodes: [...NOTES.reasonCodes, 'ALREADY_NAMED'], keptOriginal: true }), true],
+    ['renamed by ATLAS, with its notes', row('renamed', 'completed', { ...NOTES, filedName: '2024-05-01 Letter renamed.pdf', undoable: true, keptOriginal: false }), true],
+    ['completed by ATLAS under the name it had', row('named', 'completed', { reasonCodes: [...NOTES.reasonCodes, 'ALREADY_NAMED'], keptOriginal: true }), true],
     ['still in review', row('review', 'review', NOTES), false],
     ['approved by a person and waiting for the queue', row('approved', 'ready', { approved: true }), false],
     ['renamed after a person approved it: no reasons left', row('approved-renamed', 'completed', { filedName: '2024-05-01 Letter approved-renamed.pdf', undoable: true, keptOriginal: false }), false],
@@ -114,9 +114,9 @@ describe('what a change to Strict did, counted', () => {
 describe('the words for a level change', () => {
   const balanced = (count: number, typed = 0): LevelChange => ({ to: 'balanced', count, typed });
   it('toward Balanced: how many became ready, and what renames them', () => {
-    expect(levelChangedText(balanced(1), 'automatic')).toBe('The review level is now Balanced. 1 document that needed review became ready. With automatic renaming on, Intern renames it by itself.');
-    expect(levelChangedText(balanced(3), 'automatic')).toBe('The review level is now Balanced. 3 documents that needed review became ready. With automatic renaming on, Intern renames them by itself.');
-    expect(levelChangedText(balanced(2), 'paused')).toBe('The review level is now Balanced. 2 documents that needed review became ready. The queue is paused, so Intern renames nothing by itself until it is resumed.');
+    expect(levelChangedText(balanced(1), 'automatic')).toBe('The review level is now Balanced. 1 document that needed review became ready. With automatic renaming on, ATLAS renames it by itself.');
+    expect(levelChangedText(balanced(3), 'automatic')).toBe('The review level is now Balanced. 3 documents that needed review became ready. With automatic renaming on, ATLAS renames them by itself.');
+    expect(levelChangedText(balanced(2), 'paused')).toBe('The review level is now Balanced. 2 documents that needed review became ready. The queue is paused, so ATLAS renames nothing by itself until it is resumed.');
     expect(levelChangedText(balanced(1), 'off')).toBe('The review level is now Balanced. 1 document that needed review became ready. Rename all ready renames it.');
     expect(levelChangedText(balanced(4), 'off')).toBe('The review level is now Balanced. 4 documents that needed review became ready. Rename all ready renames them.');
   });
@@ -156,7 +156,7 @@ describe('the words for a level change', () => {
 async function openSettings() {
   fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
   const dialog = await screen.findByRole('dialog', { name: 'Settings' });
-  fireEvent.click(within(dialog).getByText('Naming and filing', { selector: 'summary' }));
+  fireEvent.click(within(dialog).getByText('How ATLAS names files', { selector: 'summary' }));
   return dialog;
 }
 const level = (dialog: HTMLElement) => within(dialog).getByRole('group', { name: 'Which documents are ready' });
@@ -205,18 +205,18 @@ describe('the window after a save that changed the level, in the demo', () => {
     expect(queueCell(LEASE, 'status')).toHaveTextContent('Needs review');
   });
 
-  it('says that Intern renames them by itself with automatic renaming on, and that it does not while the queue is paused', async () => {
+  it('says that ATLAS renames them by itself with automatic renaming on, and that it does not while the queue is paused', async () => {
     render(<App bridge={createInMemoryBridge({ settings: { automaticRename: true } })} />);
     await screen.findByRole('grid', { name: 'Queue' });
     await save((dialog) => fireEvent.click(balancedChoice(dialog)));
-    await waitFor(() => expect(result()).toHaveTextContent('The review level is now Balanced. 1 document that needed review became ready. With automatic renaming on, Intern renames it by itself.'));
+    await waitFor(() => expect(result()).toHaveTextContent('The review level is now Balanced. 1 document that needed review became ready. With automatic renaming on, ATLAS renames it by itself.'));
 
     await save((dialog) => fireEvent.click(strictChoice(dialog)));
     await waitFor(() => expect(result()).toHaveTextContent('1 ready document with a note needs review again.'));
     fireEvent.click(screen.getByRole('button', { name: 'Pause queue' }));
     await screen.findByRole('button', { name: 'Resume queue' });
     await save((dialog) => fireEvent.click(balancedChoice(dialog)));
-    await waitFor(() => expect(result()).toHaveTextContent('The review level is now Balanced. 1 document that needed review became ready. The queue is paused, so Intern renames nothing by itself until it is resumed.'));
+    await waitFor(() => expect(result()).toHaveTextContent('The review level is now Balanced. 1 document that needed review became ready. The queue is paused, so ATLAS renames nothing by itself until it is resumed.'));
   });
 
   it('says Rename all ready leaves the lease when a name was typed for it, and keeps what was typed', async () => {
@@ -282,6 +282,6 @@ describe('the window after a save that changed the level, in the demo', () => {
     render(<App bridge={bridge} />);
     await screen.findByRole('grid', { name: 'Queue' });
     await save((dialog) => fireEvent.click(balancedChoice(dialog)));
-    await waitFor(() => expect(result()).toHaveTextContent('The review level is now Balanced. 2 documents that needed review became ready. With automatic renaming on, Intern renames them by itself.'));
+    await waitFor(() => expect(result()).toHaveTextContent('The review level is now Balanced. 2 documents that needed review became ready. With automatic renaming on, ATLAS renames them by itself.'));
   });
 });

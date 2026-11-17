@@ -9,11 +9,13 @@
 
 pub mod admission;
 pub use admission::{AdmissionEvidence, AdmissionGuard, AdmissionStage};
+pub mod fallback_date;
 pub mod memo;
 pub mod paths;
 pub mod pipeline;
 pub mod settings;
 
+pub use pipeline::ClearedQueue;
 pub use pipeline::{
     AnalyzerBoundary, DATE_REQUIRED, DuplicateOracle, EDITS_TO_LEARN, EnqueueReport, FileActions,
     FiledDocument, FilingSink, FilingSinks, KnownFiling, LEARNED_SPELLING_UNCONFIRMED, LearnedRule,

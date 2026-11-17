@@ -70,8 +70,13 @@ pub use house_style::{
     lesson_from_edit, named_parties, party_and_more, proposed_party, respelled_party, same_stem,
 };
 pub use manifest::{ModelFile, ModelManifest, ModelRole, ModelTier, TierModel};
-pub use naming::{compose_filename, party_as_named, sanitize_folder_name};
-pub use own_names::{counterparty_view, is_own_name};
+pub use naming::{
+    compose_filename, date_in_filename, is_junk_filename, party_as_named, sanitize_folder_name,
+};
+pub use own_names::{
+    EditedName, Entity, EntityKind, NameView, counterparty_view, is_organization, is_own_name,
+    without_legal_form,
+};
 pub use profile::PromptProfile;
 pub use review_level::{Readiness, ReviewLevel, readiness};
 pub use server::{LlamaServer, ServerOptions};

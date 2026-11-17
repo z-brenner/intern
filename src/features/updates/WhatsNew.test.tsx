@@ -43,7 +43,7 @@ describe('update summary', () => {
     localStorage.setItem(LAST_SEEN_VERSION_KEY, '0.1.0-alpha.15');
     const getVersion = async () => '0.1.0-alpha.16';
     const view = render(<WhatsNew getVersion={getVersion} />);
-    expect(await screen.findByRole('dialog', { name: 'What’s new in Intern' })).toBeVisible();
+    expect(await screen.findByRole('dialog', { name: 'What’s new in ATLAS' })).toBeVisible();
     expect(screen.getByText(/Status now comes first/)).toBeVisible();
     expect(localStorage.getItem(LAST_SEEN_VERSION_KEY)).toBe('0.1.0-alpha.15');
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
@@ -100,13 +100,17 @@ describe('update summary', () => {
       expect(changesSince(packageInfo.version, release.version)).toEqual(expect.arrayContaining([...release.changes]));
     }
     // Newest first in the file, oldest first in the summary of several.
+    const alpha20 = releaseNotes.find((release) => release.version === '0.1.0-alpha.20')!;
     const alpha19 = releaseNotes.find((release) => release.version === '0.1.0-alpha.19')!;
     const alpha18 = releaseNotes.find((release) => release.version === '0.1.0-alpha.18')!;
     const alpha17 = releaseNotes.find((release) => release.version === '0.1.0-alpha.17')!;
     const alpha16 = releaseNotes.find((release) => release.version === '0.1.0-alpha.16')!;
+    expect(releaseNotes.indexOf(alpha20)).toBeLessThan(releaseNotes.indexOf(alpha19));
     expect(releaseNotes.indexOf(alpha19)).toBeLessThan(releaseNotes.indexOf(alpha18));
     expect(releaseNotes.indexOf(alpha18)).toBeLessThan(releaseNotes.indexOf(alpha17));
     expect(releaseNotes.indexOf(alpha17)).toBeLessThan(releaseNotes.indexOf(alpha16));
+    expect(changesSince('0.1.0-alpha.19', '0.1.0-alpha.20')).toEqual([...alpha20.changes]);
+    expect(changesSince('0.1.0-alpha.18', '0.1.0-alpha.20')).toEqual([...alpha19.changes, ...alpha20.changes]);
     expect(changesSince('0.1.0-alpha.18', '0.1.0-alpha.19')).toEqual([...alpha19.changes]);
     expect(changesSince('0.1.0-alpha.17', '0.1.0-alpha.19')).toEqual([...alpha18.changes, ...alpha19.changes]);
     expect(changesSince('0.1.0-alpha.16', '0.1.0-alpha.18')).toEqual([...alpha17.changes, ...alpha18.changes]);

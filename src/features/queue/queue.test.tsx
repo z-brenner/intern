@@ -6,7 +6,7 @@ import { createFixtureBatchBridge, createInMemoryBridge } from '../../lib/inMemo
 import type { DesktopBridge, LaunchReportSource } from '../../lib/bridge';
 import type { AddReport, QueueItem } from '../../types';
 import type { QueueBridgeEvent } from '../../lib/tauriBridge';
-import { clickCell, openDetails, queueCell } from './gridTesting';
+import { clickCell, moreAction, openDetails, queueCell } from './gridTesting';
 
 /**
  * An install from an earlier release that files in place, with no output
@@ -99,14 +99,14 @@ describe('queue interactions', () => {
 
   // "Send to > Intern" adds outside the window. What it left out used to be
   // said nowhere at all; it is the same note as an add made here.
-  it('names what documents sent to Intern left out', async () => {
+  it('names what documents sent to ATLAS left out', async () => {
     const base = createInMemoryBridge({ items: [] });
     let deliver: ((report: AddReport) => void) | undefined;
     const stop = vi.fn();
     const subscribeLaunchReports = vi.fn((handler: (report: AddReport) => void) => { deliver = handler; return stop; });
     const bridge: DesktopBridge & LaunchReportSource = { ...base, subscribeLaunchReports };
     const view = render(<App bridge={bridge} />);
-    await screen.findByRole('main', { name: 'Intern' });
+    await screen.findByRole('main', { name: 'ATLAS' });
     await waitFor(() => expect(deliver).toBeDefined());
 
     act(() => deliver!({ added: 1, alreadyQueued: 0, copied: 1, inputFolder: 'C:\\Intern\\Input', skipped: [{ name: 'Contract.doc', code: 'UNSUPPORTED_FORMAT' }, { name: 'blank.pdf', code: 'EMPTY_FILE' }] }));
@@ -147,52 +147,103 @@ describe('queue interactions', () => {
     expect(zone).not.toHaveAttribute('tabindex');
   });
 
-  // Pointing the queue at a large folder used to be unrecoverable from inside
-  // the app: pause leaves the backlog, Clear history only touches finished
-  // items, and dropping a waiting item was one click each.
-  it('discards the waiting backlog without touching work in flight or already done', async () => {
+  // "A button to clear everything from the queue, in case you want to start
+  // from scratch." Pointing the queue at a large folder by mistake used to be
+  // unrecoverable from inside the app, and Discard waiting only took what had
+  // not started. Clear queue takes everything not filed, after a question
+  // that says how many and what becomes of the files.
+  it('clears every document that is not filed after asking, and says the files stay where they are', async () => {
     const bridge = createInMemoryBridge();
-    render(<App bridge={bridge} />);
+    const clearQueue = vi.fn(bridge.clearQueue);
+    render(<App bridge={{ ...bridge, clearQueue }} />);
+    await screen.findByRole('grid', { name: 'Queue' });
 
     // It cannot be undone, so it is behind More, away from Rename all ready.
-    fireEvent.click(await screen.findByRole('button', { name: 'More queue actions' }));
-    const discard = screen.getByRole('menuitem', { name: 'Discard waiting items' });
-    expect(discard).toHaveTextContent('3');
+    fireEvent.click(moreAction('Clear queue…'));
+    const dialog = screen.getByRole('alertdialog', { name: 'Clear the queue?' });
+    expect(dialog).toHaveTextContent("This takes all 8 documents out of ATLAS's queue, including any being read or waiting for your review. Completed documents stay as they are.");
+    expect(dialog).toHaveTextContent("Your files stay where they are, in Input. ATLAS won't pick them up again unless they change, or you add them again with Add files.");
+    expect(dialog).toHaveTextContent("This can't be undone.");
+    // Cancel has the focus: a key pressed on the way in clears nothing.
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    expect(screen.getByRole('region', { name: 'Queue items' }).closest('.workspace')).toHaveAttribute('inert');
 
-    fireEvent.click(discard);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Clear queue' }));
 
-    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Discarded 3 waiting items.'));
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Cleared 8 documents from the queue. The files are where they were.'));
+    expect(clearQueue).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Action result' })).toHaveTextContent('Cleared 8 documents from the queue.');
     const remaining = await bridge.listItems();
-    expect(remaining.some((item) => item.status === 'waiting')).toBe(false);
-    // The states that must survive: mid-flight, awaiting a decision, and renamed.
-    expect(remaining.some((item) => item.status === 'processing')).toBe(true);
-    expect(remaining.some((item) => item.status === 'review')).toBe(true);
-    expect(remaining.some((item) => item.status === 'ready')).toBe(true);
-    expect(remaining.some((item) => item.status === 'completed')).toBe(true);
-    expect(screen.queryByRole('menuitem', { name: 'Discard waiting items' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'More queue actions' })).not.toBeInTheDocument();
+    expect(remaining.map((item) => item.status)).toEqual(['completed']);
+    // The view's own button has the focus; the More button went with the rows.
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Queue, 0/ })).toHaveFocus());
+    expect(screen.queryByRole('button', { name: 'More actions' })).not.toBeInTheDocument();
+  });
+
+  it('clears nothing when the question is answered No, and gives the focus back to More', async () => {
+    const bridge = createInMemoryBridge();
+    const clearQueue = vi.fn(bridge.clearQueue);
+    render(<App bridge={{ ...bridge, clearQueue }} />);
+    await screen.findByRole('grid', { name: 'Queue' });
+    fireEvent.click(moreAction('Clear queue…'));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'More actions' })).toHaveFocus();
+
+    fireEvent.click(moreAction('Clear queue…'));
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(clearQueue).not.toHaveBeenCalled();
+    expect((await bridge.listItems()).length).toBe(9);
+  });
+
+  // Some documents are kept: Remove asks to be confirmed for one whose files
+  // need checking, and Clear queue does not decide that for anyone.
+  it('says how many it kept and why', async () => {
+    const clearQueue = vi.fn(async () => ({ cleared: 5, unsettled: 1, busy: 1, stillMarked: 2 }));
+    render(<App bridge={{ ...createInMemoryBridge(), clearQueue }} />);
+    await screen.findByRole('grid', { name: 'Queue' });
+    fireEvent.click(moreAction('Clear queue…'));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear queue' }));
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent(
+      'Cleared 5 documents from the queue. The files are where they were. 4 stay in the queue: 1 needs its files checked first; 1 was being renamed; 2 are open in another program, so their own name could not be given back.',
+    ));
+  });
+
+  it('says what went wrong when the queue could not be cleared, and leaves it as it was', async () => {
+    const clearQueue = vi.fn(async () => { throw new Error('The queue is locked.'); });
+    render(<App bridge={{ ...createInMemoryBridge(), clearQueue }} />);
+    await screen.findByRole('grid', { name: 'Queue' });
+    fireEvent.click(moreAction('Clear queue…'));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear queue' }));
+    expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('The queue is locked.');
+    expect(screen.getAllByRole('row')).toHaveLength(9);
+  });
+
+  // Cleared, the documents wait in the Queue folder; adding them again on
+  // purpose brings them back.
+  it('brings cleared documents back when the Queue folder is added again', async () => {
+    const bridge = createInMemoryBridge();
+    await bridge.clearQueue();
+    expect((await bridge.listItems()).filter((item) => item.status !== 'completed')).toHaveLength(0);
+    const report = await bridge.queueInputFolder();
+    expect(report.added).toBe(8);
+    expect((await bridge.listItems()).filter((item) => item.status === 'waiting').map((item) => item.originalFilename)).toContain('NDA - Acme Corp.docx');
   });
 
   it('closes the More menu from outside it, and with Escape back to its button', async () => {
     render(<App bridge={createInMemoryBridge()} />);
-    const more = await screen.findByRole('button', { name: 'More queue actions' });
+    const more = await screen.findByRole('button', { name: 'More actions' });
     fireEvent.click(more);
-    expect(screen.getByRole('menu', { name: 'More queue actions' })).toBeInTheDocument();
+    expect(screen.getByRole('menu', { name: 'More actions' })).toBeInTheDocument();
     fireEvent.pointerDown(document.body);
-    expect(screen.queryByRole('menu', { name: 'More queue actions' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menu', { name: 'More actions' })).not.toBeInTheDocument();
 
     fireEvent.click(more);
-    fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Discard waiting items' }), { key: 'Escape' });
-    expect(screen.queryByRole('menu', { name: 'More queue actions' })).not.toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Clear queue…' }), { key: 'Escape' });
+    expect(screen.queryByRole('menu', { name: 'More actions' })).not.toBeInTheDocument();
     expect(more).toHaveFocus();
-  });
-
-  it('offers no discard action when nothing is waiting', async () => {
-    const items = (await createInMemoryBridge().listItems()).filter((item) => item.status !== 'waiting');
-    render(<App bridge={createInMemoryBridge({ items })} />);
-
-    await screen.findByRole('button', { name: 'Rename all ready' });
-    expect(screen.queryByRole('button', { name: 'More queue actions' })).not.toBeInTheDocument();
   });
 
   it('uses restrained extension-aware document icons', async () => {
@@ -339,15 +390,16 @@ describe('queue interactions', () => {
     expect(screen.getByRole('button', { name: actionName })).toBeEnabled();
   });
 
-  it('reports Clear history failures without emptying the completed view', async () => {
+  it('reports Clear completed failures without emptying the completed view', async () => {
     const clearHistory = vi.fn(async () => { throw new Error('History is locked.'); });
     render(<App bridge={{ ...createInMemoryBridge(), clearHistory }} />);
     fireEvent.click(await screen.findByRole('button', { name: /^Completed, / }));
-    fireEvent.click(screen.getByRole('button', { name: 'Clear history' }));
+    fireEvent.click(moreAction('Clear completed…'));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear completed' }));
 
     expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('History is locked.');
     expect(screen.getByRole('row', { name: /Completed lease.pdf/i })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Clear history' })).toBeEnabled();
+    expect(moreAction('Clear completed…')).toBeEnabled();
   });
 
   it('offers retry and remove only when a failed item is selected', async () => {
@@ -358,7 +410,7 @@ describe('queue interactions', () => {
 
     await selectRow(await screen.findByRole('row', { name: /broken.pdf/i }));
     expect(screen.queryByLabelText('Filename')).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Failure details' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Why it failed' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Retry item' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Remove item' }));
 
@@ -416,16 +468,26 @@ describe('queue interactions', () => {
     expect(screen.queryByRole('button', { name: 'Cancel processing' })).not.toBeInTheDocument();
   });
 
-  it('offers Clear history only within a nonempty Completed view', async () => {
+  // The same question, from the same place, in Completed.
+  it('offers Clear completed only within the Completed view, after asking', async () => {
     const clearHistory = vi.fn(async () => undefined);
     const bridge = { ...createInMemoryBridge(), clearHistory };
     render(<App bridge={bridge} />);
 
-    expect(screen.queryByRole('button', { name: 'Clear history' })).not.toBeInTheDocument();
-    fireEvent.click(await screen.findByRole('button', { name: /^Completed/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Clear history' }));
+    await screen.findByRole('grid', { name: 'Queue' });
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    expect(screen.queryByRole('menuitem', { name: 'Clear completed…' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Completed/ }));
+    fireEvent.click(moreAction('Clear completed…'));
+    const dialog = screen.getByRole('alertdialog', { name: 'Clear completed?' });
+    expect(dialog).toHaveTextContent('This takes the 1 document off the Completed list, with its rename history.');
+    expect(dialog).toHaveTextContent("Your files stay where they are: filed documents keep their new names. You won't be able to undo these renames from ATLAS.");
+    expect(dialog).toHaveTextContent("This can't be undone.");
+    expect(clearHistory).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Clear completed' }));
 
     await waitFor(() => expect(clearHistory).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Cleared 1 completed document. The files are where they were.'));
   });
 
   it('shows em dashes for a waiting row proposal and confidence', async () => {

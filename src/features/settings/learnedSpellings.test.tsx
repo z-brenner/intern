@@ -19,14 +19,14 @@ const learned: LearnedRule[] = [
   { id: '2', kind: 'document_type', from: 'Quarterly Operations Review', to: 'Meeting Minutes', seen: 2, active: true, confirmed: 1, learnedAt: 1716196500 },
 ];
 
-describe('the spellings Intern has learned', () => {
+describe('the spellings ATLAS has learned', () => {
   it('says there is nothing to show until review has taught something', async () => {
     render(<App bridge={createInMemoryBridge()} />);
     const dialog = await openSettings();
-    expect(await within(dialog).findByText(/Nothing yet\. Change a party's name or a document type in review/)).toBeVisible();
+    expect(await within(dialog).findByText(/Nothing yet\. Correct a name in review/)).toBeVisible();
     expect(within(dialog).queryByRole('list', { name: 'Learned spellings' })).not.toBeInTheDocument();
     // What the section offers, and no more: Settings has no way to change a spelling.
-    expect(within(dialog).getByText(/^Intern learns repeated spelling corrections\./)).toHaveTextContent('Intern learns repeated spelling corrections. You can see them here, and forget any of them.');
+    expect(within(dialog).getByText(/^When you correct a name, ATLAS remembers/)).toHaveTextContent('When you correct a name, ATLAS remembers the spelling (for example “Contoso Worldwide, Inc.” → “Contoso”). New spellings wait for your OK before ATLAS applies them by itself.');
   });
 
   it('lists each spelling with its state, uses one at once, and forgets one', async () => {
@@ -38,9 +38,9 @@ describe('the spellings Intern has learned', () => {
     const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
     const rows = within(list).getAllByRole('listitem');
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toHaveTextContent('Party');
+    expect(rows[0]).toHaveTextContent('Name');
     expect(rows[0]).toHaveTextContent('Contoso Worldwide, Inc. written as Contoso');
-    expect(rows[0]).toHaveTextContent('Seen once · in use after one more edit');
+    expect(rows[0]).toHaveTextContent('Seen once · used after one more correction');
     expect(rows[1]).toHaveTextContent('Type');
     expect(rows[1]).toHaveTextContent('In use');
     // A spelling already in use has nothing to hurry.
@@ -58,7 +58,7 @@ describe('the spellings Intern has learned', () => {
   });
 
   // A spelling learned from two edits is in use, but every name it changes
-  // waits for a person until they choose "Use on its own" for it: the list
+  // waits for a person until they choose "Always use" for it: the list
   // says it asks before filing. "Use now" puts a spelling in use, no more
   // checked than one learned from two edits. It counted as the check, and
   // one click on a wrong spelling filed the next name it changed without
@@ -68,10 +68,10 @@ describe('the spellings Intern has learned', () => {
     render(<App bridge={createInMemoryBridge({ learnedRules: [learned[0], unchecked] })} />);
     const dialog = await openSettings();
     const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
-    expect(within(list).getAllByRole('listitem')[1]).toHaveTextContent('In use · asks before filing');
+    expect(within(list).getAllByRole('listitem')[1]).toHaveTextContent('In use · waits for your OK');
 
     fireEvent.click(within(within(list).getAllByRole('listitem')[0]).getByRole('button', { name: /Use now:/ }));
-    await waitFor(() => expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('In use · asks before filing'));
+    await waitFor(() => expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('In use · waits for your OK'));
   });
 
   // Forgetting is instant and the row disappears, so a second click landing
@@ -92,7 +92,7 @@ describe('the spellings Intern has learned', () => {
     expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
   });
 
-  // No approval checks a spelling: "Use on its own" is the only way. It is
+  // No approval checks a spelling: "Always use" is the only way. It is
   // offered for a spelling in use that nobody has checked, says what it
   // does to every later document before doing it, and checks the spelling
   // exactly as the person was shown it - kind, word and spelling. Answered
@@ -107,16 +107,16 @@ describe('the spellings Intern has learned', () => {
     const dialog = await openSettings();
     const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
     const rows = () => within(list).getAllByRole('listitem');
-    const action = () => within(rows()[2]).getByRole('button', { name: 'Use on its own: Acme written as Acme Widgets International, Inc.' });
+    const action = () => within(rows()[2]).getByRole('button', { name: 'Always use: Acme written as Acme Widgets International, Inc.' });
     // Not for a spelling seen once, nor for one already checked.
-    expect(within(rows()[0]).queryByRole('button', { name: /Use on its own/ })).not.toBeInTheDocument();
-    expect(within(rows()[1]).queryByRole('button', { name: /Use on its own/ })).not.toBeInTheDocument();
+    expect(within(rows()[0]).queryByRole('button', { name: /Always use/ })).not.toBeInTheDocument();
+    expect(within(rows()[1]).queryByRole('button', { name: /Always use/ })).not.toBeInTheDocument();
 
     fireEvent.click(action());
-    const question = within(rows()[2]).getByRole('group', { name: 'Use on its own: Acme written as Acme Widgets International, Inc.' });
-    expect(question).toHaveAccessibleDescription('Every later document Intern reads as naming Acme will name Acme Widgets International, Inc. instead, and may be filed under that name without your check. Do this only if that is right for every one of them.');
-    expect(within(question).getByRole('textbox', { name: 'Type Acme Widgets International, Inc. to use it on its own' })).toHaveFocus();
-    expect(within(question).getByRole('button', { name: 'Use on its own' })).toBeDisabled();
+    const question = within(rows()[2]).getByRole('group', { name: 'Always use: Acme written as Acme Widgets International, Inc.' });
+    expect(question).toHaveAccessibleDescription('From now on ATLAS will write Acme as Acme Widgets International, Inc., and may file the name without asking you. Only do this if it is right every time.');
+    expect(within(question).getByRole('textbox', { name: 'Type Acme Widgets International, Inc. to always use it' })).toHaveFocus();
+    expect(within(question).getByRole('button', { name: 'Always use' })).toBeDisabled();
     expect(houseRuleCheck).not.toHaveBeenCalled();
 
     // Cancel, and Escape, take the question back, change nothing, and give
@@ -130,22 +130,22 @@ describe('the spellings Intern has learned', () => {
     await waitFor(() => expect(action()).toHaveFocus());
     expect(dialog).toBeInTheDocument();
     expect(houseRuleCheck).not.toHaveBeenCalled();
-    expect(rows()[2]).toHaveTextContent('In use · asks before filing');
+    expect(rows()[2]).toHaveTextContent('In use · waits for your OK');
 
     fireEvent.click(action());
     typeInto(within(rows()[2]).getByRole('textbox'), 'Acme Widgets International, Inc.');
-    fireEvent.click(within(rows()[2]).getByRole('button', { name: 'Use on its own' }));
+    fireEvent.click(within(rows()[2]).getByRole('button', { name: 'Always use' }));
     await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledWith('3', { kind: 'party', from: 'Acme', to: 'Acme Widgets International, Inc.' }));
-    await waitFor(() => expect(rows()[2]).not.toHaveTextContent('asks before filing'));
+    await waitFor(() => expect(rows()[2]).not.toHaveTextContent('waits for your OK'));
     expect(rows()[2]).toHaveTextContent('In use');
-    expect(within(rows()[2]).queryByRole('button', { name: /Use on its own/ })).not.toBeInTheDocument();
+    expect(within(rows()[2]).queryByRole('button', { name: /Always use/ })).not.toBeInTheDocument();
     await waitFor(() => expect(rows()[2]).toHaveFocus());
     // "Use now" is another thing: it puts a spelling seen once in use, unchecked.
     expect(houseRuleUse).not.toHaveBeenCalled();
   });
 
   // "Use now" and "Forget" take away the button that was pressed: Use now
-  // turns into "Use on its own", Forget takes the row. The focus fell to the
+  // turns into "Always use", Forget takes the row. The focus fell to the
   // page, outside the dialog, and a screen reader lost its place. It goes to
   // the spelling's row, the row that took a forgotten one's place, the one
   // before it at the end of the list, or the section's heading when none is
@@ -162,7 +162,7 @@ describe('the spellings Intern has learned', () => {
     press(within(rows()[0]).getByRole('button', { name: 'Use now: Contoso Worldwide, Inc. written as Contoso' }));
     await waitFor(() => expect(within(rows()[0]).queryByRole('button', { name: /Use now/ })).not.toBeInTheDocument());
     await waitFor(() => expect(rows()[0]).toHaveFocus());
-    expect(rows()[0]).toHaveTextContent('In use · asks before filing');
+    expect(rows()[0]).toHaveTextContent('In use · waits for your OK');
 
     // The first of three: the row that took its place.
     press(within(rows()[0]).getByRole('button', { name: /^Forget:/ }));
@@ -197,7 +197,7 @@ describe('the spellings Intern has learned', () => {
   });
 
   // The yes answers only once the spelling is typed out, which no press
-  // does. A press on another spelling's "Use on its own" closed the question
+  // does. A press on another spelling's "Always use" closed the question
   // above it and opened the next with its yes under the pointer, and rules
   // on which presses the yes would take kept being got round.
   it('answers only once the spelling is typed out: until then its yes waits and Enter in its field does nothing, and Enter never saves Settings', async () => {
@@ -208,10 +208,10 @@ describe('the spellings Intern has learned', () => {
     render(<App bridge={{ ...base, houseRuleCheck, saveSettings }} />);
     const dialog = await openSettings();
     const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
-    fireEvent.click(within(list).getByRole('button', { name: /^Use on its own:/ }));
-    const question = within(list).getByRole('group', { name: 'Use on its own: Northwind Traders written as Northwind' });
-    const field = within(question).getByRole('textbox', { name: 'Type Northwind to use it on its own' });
-    const yes = within(question).getByRole('button', { name: 'Use on its own' });
+    fireEvent.click(within(list).getByRole('button', { name: /^Always use:/ }));
+    const question = within(list).getByRole('group', { name: 'Always use: Northwind Traders written as Northwind' });
+    const field = within(question).getByRole('textbox', { name: 'Type Northwind to always use it' });
+    const yes = within(question).getByRole('button', { name: 'Always use' });
     expect(field).toHaveFocus();
     for (const typed of ['', 'Northwin', 'Northwinds', 'Northwind Traders']) {
       clearField(field);
@@ -249,10 +249,10 @@ describe('the spellings Intern has learned', () => {
     const dialog = await openSettings();
     const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
     for (const [rule, right, wrong] of [[rules[0], 'contoso ltd', ['contoso lt', 'contoso ltdd']], [rules[1], 'Muller', ['Mller', 'Mueller']]] as const) {
-      fireEvent.click(await within(list).findByRole('button', { name: `Use on its own: ${rule.from} written as ${rule.to}` }));
+      fireEvent.click(await within(list).findByRole('button', { name: `Always use: ${rule.from} written as ${rule.to}` }));
       const question = within(list).getByRole('group');
       const field = within(question).getByRole('textbox');
-      const yes = within(question).getByRole('button', { name: 'Use on its own' });
+      const yes = within(question).getByRole('button', { name: 'Always use' });
       for (const typed of wrong) {
         clearField(field);
         typeInto(field, typed);
@@ -276,10 +276,10 @@ describe('the spellings Intern has learned', () => {
     render(<App bridge={{ ...base, houseRuleCheck }} />);
     const dialog = await openSettings();
     const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
-    const contoso = () => within(list).getByRole('button', { name: 'Use on its own: Contoso Worldwide, Inc. written as Contoso' });
+    const contoso = () => within(list).getByRole('button', { name: 'Always use: Contoso Worldwide, Inc. written as Contoso' });
     const asked = () => {
       const question = within(list).getByRole('group');
-      return { field: within(question).getByRole('textbox'), yes: within(question).getByRole('button', { name: 'Use on its own' }), cancel: within(question).getByRole('button', { name: 'Cancel' }) };
+      return { field: within(question).getByRole('textbox'), yes: within(question).getByRole('button', { name: 'Always use' }), cancel: within(question).getByRole('button', { name: 'Cancel' }) };
     };
 
     fireEvent.click(contoso());
@@ -304,7 +304,7 @@ describe('the spellings Intern has learned', () => {
     fireEvent.click(asked().cancel);
 
     // Another spelling's question starts empty too, and takes a name composed with an input method.
-    fireEvent.click(within(list).getByRole('button', { name: 'Use on its own: Yamada Taro written as 山田太郎' }));
+    fireEvent.click(within(list).getByRole('button', { name: 'Always use: Yamada Taro written as 山田太郎' }));
     expect(asked().field).toHaveValue('');
     composeInto(asked().field, ['やまだ', '山田', '山田太郎']);
     expect(asked().yes).toBeEnabled();
@@ -318,7 +318,7 @@ describe('the spellings Intern has learned', () => {
   });
 
   // While one spelling is asked about, the other spellings' actions wait. A
-  // press on another's "Use on its own" closed the question above it and
+  // press on another's "Always use" closed the question above it and
   // opened its own where the pointer was.
   it('leaves every other spelling\'s actions waiting while it asks', async () => {
     const rules: LearnedRule[] = [
@@ -333,11 +333,11 @@ describe('the spellings Intern has learned', () => {
     const dialog = await openSettings();
     const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
     const rows = () => within(list).getAllByRole('listitem');
-    fireEvent.click(within(rows()[0]).getByRole('button', { name: /^Use on its own:/ }));
+    fireEvent.click(within(rows()[0]).getByRole('button', { name: /^Always use:/ }));
     const question = within(rows()[0]).getByRole('group');
     const others = [...within(rows()[1]).getAllByRole('button'), ...within(rows()[2]).getAllByRole('button')];
     expect(others.map((button) => button.getAttribute('aria-label'))).toEqual([
-      'Use on its own: Ridgeline Cartography LLC written as Ridgeline Cartography', 'Forget: Ridgeline Cartography LLC written as Ridgeline Cartography',
+      'Always use: Ridgeline Cartography LLC written as Ridgeline Cartography', 'Forget: Ridgeline Cartography LLC written as Ridgeline Cartography',
       'Use now: Northwind Traders written as Northwind', 'Forget: Northwind Traders written as Northwind',
     ]);
     for (const button of others) {
@@ -368,7 +368,7 @@ describe('the spellings Intern has learned', () => {
       render(<App bridge={createInMemoryBridge({ learnedRules: [unchecked] })} />);
       const dialog = await openSettings();
       const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
-      const action = within(list).getByRole('button', { name: /Use on its own/ });
+      const action = within(list).getByRole('button', { name: /Always use/ });
       fireEvent.pointerDown(action, { pointerType: 'mouse' });
       fireEvent.click(action, { detail: 1 });
       const field = within(list).getByRole('textbox');
@@ -377,7 +377,7 @@ describe('the spellings Intern has learned', () => {
       expect(scrollIntoView).not.toHaveBeenCalled();
       fireEvent.keyDown(field, { key: 'Escape' });
 
-      const again = await within(list).findByRole('button', { name: /Use on its own/ });
+      const again = await within(list).findByRole('button', { name: /Always use/ });
       fireEvent.keyDown(again, { key: 'Enter' });
       fireEvent.click(again, { detail: 0 });
       expect(within(list).getByRole('textbox')).toHaveFocus();
@@ -400,9 +400,9 @@ describe('the spellings Intern has learned', () => {
     render(<App bridge={{ ...base, houseRuleCheck, saveSettings: onSave }} />);
     const dialog = await openSettings();
     const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
-    const names = within(dialog).getByRole('textbox', { name: "Your organization's names" });
+    const names = within(dialog).getByRole('textbox', { name: "Your organizations" });
     fireEvent.change(names, { target: { value: 'Fabrikam LLP' } });
-    const action = () => within(list).getByRole('button', { name: /^Use on its own:/ });
+    const action = () => within(list).getByRole('button', { name: /^Always use:/ });
     for (const focusElsewhere of [
       () => within(list).getByRole('listitem').focus(),
       () => names.focus(),
@@ -439,8 +439,8 @@ describe('the spellings Intern has learned', () => {
     render(<App bridge={{ ...base, houseRuleCheck, saveSettings: onSave }} />);
     const dialog = await openSettings();
     const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
-    const names = within(dialog).getByRole('textbox', { name: "Your organization's names" });
-    fireEvent.click(within(list).getByRole('button', { name: /^Use on its own:/ }));
+    const names = within(dialog).getByRole('textbox', { name: "Your organizations" });
+    fireEvent.click(within(list).getByRole('button', { name: /^Always use:/ }));
     const field = within(list).getByRole('textbox');
     for (const [where, focusAway] of [
       ['on its row', () => within(list).getByRole('listitem').focus()],
@@ -480,11 +480,11 @@ describe('the spellings Intern has learned', () => {
     const dialog = await openSettings();
     const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
     const machine = within(dialog).getByRole('textbox', { name: "This machine's name" });
-    const names = within(dialog).getByRole('textbox', { name: "Your organization's names" });
+    const names = within(dialog).getByRole('textbox', { name: "Your organizations" });
     fireEvent.change(machine, { target: { value: 'Front desk' } });
     /** Whether the browser may make the undo or redo it is about to in `field`: an event nobody refused. */
     const undoes = (field: HTMLElement, inputType: string) => fireEvent(field, new InputEvent('beforeinput', { inputType, bubbles: true, cancelable: true }));
-    const action = within(list).getByRole('button', { name: /^Use on its own:/ });
+    const action = within(list).getByRole('button', { name: /^Always use:/ });
     action.focus();
     expect(undoes(machine, 'historyUndo')).toBe(false);
     // In the field with the focus, the browser's undo is the person's.
@@ -533,12 +533,12 @@ describe('the spellings Intern has learned', () => {
     const machine = within(dialog).getByRole('textbox', { name: "This machine's name" });
     fireEvent.change(machine, { target: { value: 'Front desk' } });
     const undoes = (field: HTMLElement, inputType: string) => fireEvent(field, new InputEvent('beforeinput', { inputType, bubbles: true, cancelable: true }));
-    fireEvent.click(within(list).getByRole('button', { name: /^Use on its own:/ }));
+    fireEvent.click(within(list).getByRole('button', { name: /^Always use:/ }));
     const field = within(list).getByRole('textbox');
     typeInto(field, 'Meet');
     fireEvent.keyDown(field, { key: 'Escape' });
     expect(within(list).queryByRole('group')).not.toBeInTheDocument();
-    for (const focus of [() => within(list).getByRole('listitem').focus(), () => within(list).getByRole('button', { name: /^Use on its own:/ }).focus(), () => (document.activeElement as HTMLElement).blur()]) {
+    for (const focus of [() => within(list).getByRole('listitem').focus(), () => within(list).getByRole('button', { name: /^Always use:/ }).focus(), () => (document.activeElement as HTMLElement).blur()]) {
       focus();
       for (const inputType of ['historyUndo', 'historyRedo']) expect(undoes(machine, inputType), inputType).toBe(false);
     }
@@ -553,7 +553,7 @@ describe('the spellings Intern has learned', () => {
     render(<App bridge={createInMemoryBridge({ learnedRules: [{ ...learned[1], confirmed: 0 }] })} />);
     const dialog = await openSettings();
     const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
-    fireEvent.click(within(list).getByRole('button', { name: /^Use on its own:/ }));
+    fireEvent.click(within(list).getByRole('button', { name: /^Always use:/ }));
     expect(within(list).getByRole('group')).toBeInTheDocument();
     fireEvent.click(within(dialog).getByText('Learned spellings', { selector: 'summary' }));
     await waitFor(() => expect(within(list).queryByRole('group')).not.toBeInTheDocument());
@@ -565,8 +565,8 @@ describe('the spellings Intern has learned', () => {
     render(<App bridge={createInMemoryBridge({ learnedRules: [type] })} />);
     const dialog = await openSettings();
     const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
-    fireEvent.click(within(list).getByRole('button', { name: /Use on its own/ }));
-    expect(within(list).getByRole('group')).toHaveAccessibleDescription(/^Every later document Intern reads as Quarterly Operations Review will be called Meeting Minutes instead, and may be filed under that name without your check\./);
+    fireEvent.click(within(list).getByRole('button', { name: /Always use/ }));
+    expect(within(list).getByRole('group')).toHaveAccessibleDescription(/^From now on ATLAS will call Quarterly Operations Review documents Meeting Minutes, and may file the name without asking you\./);
   });
 
   // The list can be older than the spelling: an approval in the queue can
@@ -585,9 +585,9 @@ describe('the spellings Intern has learned', () => {
     const dialog = await openSettings();
     const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
     current = { ...shown, to: 'Board Minutes' };
-    fireEvent.click(within(list).getByRole('button', { name: /Use on its own/ }));
+    fireEvent.click(within(list).getByRole('button', { name: /Always use/ }));
     typeInto(within(list).getByRole('textbox'), 'Meeting Minutes');
-    fireEvent.click(within(list).getByRole('button', { name: 'Use on its own' }));
+    fireEvent.click(within(list).getByRole('button', { name: 'Always use' }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('That spelling changed since the list was shown');
     expect(houseRuleCheck).toHaveBeenCalledWith('2', { kind: 'document_type', from: 'Quarterly Operations Review', to: 'Meeting Minutes' });
     await waitFor(() => expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('Quarterly Operations Review written as Board Minutes'));
@@ -605,9 +605,9 @@ describe('the spellings Intern has learned', () => {
     const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
     const rows = () => within(list).getAllByRole('listitem');
     await base.houseRuleForget('3');
-    fireEvent.click(within(rows()[1]).getByRole('button', { name: 'Use on its own: Northwind Traders written as Northwind' }));
+    fireEvent.click(within(rows()[1]).getByRole('button', { name: 'Always use: Northwind Traders written as Northwind' }));
     typeInto(within(rows()[1]).getByRole('textbox'), 'Northwind');
-    fireEvent.click(within(rows()[1]).getByRole('button', { name: 'Use on its own' }));
+    fireEvent.click(within(rows()[1]).getByRole('button', { name: 'Always use' }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('That spelling is no longer in the list');
     expect(houseRuleCheck).toHaveBeenCalledWith('3', { kind: 'party', from: 'Northwind Traders', to: 'Northwind' });
     await waitFor(() => expect(rows()).toHaveLength(2));
@@ -625,7 +625,7 @@ describe('the spellings Intern has learned', () => {
     render(<App bridge={{ ...base, houseRuleCheck }} />);
     const dialog = await openSettings();
     const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
-    fireEvent.click(within(list).getByRole('button', { name: /^Use on its own:/ }));
+    fireEvent.click(within(list).getByRole('button', { name: /^Always use:/ }));
     const question = within(list).getByRole('group');
     const field = within(question).getByRole('textbox');
     const status = within(question).getByRole('status');
@@ -666,9 +666,9 @@ describe('the spellings Intern has learned', () => {
     const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
     const asked = () => {
       const question = within(list).getByRole('group');
-      return { field: within(question).getByRole('textbox'), yes: within(question).getByRole('button', { name: 'Use on its own' }), cancel: within(question).getByRole('button', { name: 'Cancel' }) };
+      return { field: within(question).getByRole('textbox'), yes: within(question).getByRole('button', { name: 'Always use' }), cancel: within(question).getByRole('button', { name: 'Cancel' }) };
     };
-    fireEvent.click(within(list).getByRole('button', { name: 'Use on its own: Contoso Worldwide, Inc. written as Contoso' }));
+    fireEvent.click(within(list).getByRole('button', { name: 'Always use: Contoso Worldwide, Inc. written as Contoso' }));
     const { field, yes, cancel } = asked();
     for (const keys of [0, 1, 2, 6]) {
       insertAtOnce(field, 'Contoso', keys);
@@ -707,7 +707,7 @@ describe('the spellings Intern has learned', () => {
     expect(yes).toBeEnabled();
     fireEvent.click(cancel);
 
-    fireEvent.click(within(list).getByRole('button', { name: 'Use on its own: Yamada Taro written as 山田太郎' }));
+    fireEvent.click(within(list).getByRole('button', { name: 'Always use: Yamada Taro written as 山田太郎' }));
     // "yamadatarou" and the key that commits it.
     insertAtOnce(asked().field, '山田太郎', 12);
     expect(asked().field).toHaveValue('山田太郎');
@@ -727,7 +727,7 @@ describe('the spellings Intern has learned', () => {
       render(<App bridge={createInMemoryBridge({ learnedRules: [{ ...learned[1], confirmed: 0 }] })} />);
       const dialog = await openSettings();
       const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
-      const action = within(list).getByRole('button', { name: /^Use on its own:/ });
+      const action = within(list).getByRole('button', { name: /^Always use:/ });
       fireEvent.pointerDown(action, { pointerType: 'mouse' });
       fireEvent.click(action, { detail: 1 });
       const question = within(list).getByRole('group');
@@ -751,7 +751,7 @@ describe('the spellings Intern has learned', () => {
     const panel = await openRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
     const dialog = await openSettings();
     const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
-    fireEvent.click(within(list).getByRole('button', { name: 'Use on its own: Contoso Worldwide, Inc. written as Contoso' }));
+    fireEvent.click(within(list).getByRole('button', { name: 'Always use: Contoso Worldwide, Inc. written as Contoso' }));
     const field = within(list).getByRole('textbox');
     for (const typed of ['Cont', 'oso']) {
       typeInto(field, typed);
@@ -785,7 +785,7 @@ describe('the spellings Intern has learned', () => {
 
 // What the question takes as the spelling typed out, and how it keeps the
 // keys while it asks, wherever it is put.
-describe('the question "Use on its own" asks', () => {
+describe('the question "Always use" asks', () => {
   it('is the spelling\'s letters and digits in order, whatever the case, accents, spaces and punctuation', () => {
     expect(typedOut('contoso ltd', 'Contoso Ltd.')).toBe(true);
     expect(typedOut('CONTOSO-LTD', 'Contoso Ltd.')).toBe(true);
@@ -866,15 +866,15 @@ describe('the question "Use on its own" asks', () => {
     const ask = (shown: Shown) => <UseOnItsOwnQuestion rule={shown} describedBy="asked" onConfirm={onConfirm} onCancel={() => undefined} />;
     const { rerender } = render(ask(rule));
     typeInto(screen.getByRole('textbox'), 'Contoso');
-    expect(screen.getByRole('button', { name: 'Use on its own' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Always use' })).toBeEnabled();
     const changes: Shown[] = [{ ...rule, id: '5' }, { ...rule, kind: 'document_type' }, { ...rule, from: 'Contoso Worldwide' }, { ...rule, to: 'Contoso Ltd.' }];
     for (const changed of changes) {
       rerender(ask(changed));
       expect(screen.getByRole('textbox'), JSON.stringify(changed)).toHaveValue('');
       expect(screen.getByRole('textbox')).toHaveFocus();
-      expect(screen.getByRole('button', { name: 'Use on its own' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Always use' })).toBeDisabled();
       typeInto(screen.getByRole('textbox'), changed.to);
-      expect(screen.getByRole('button', { name: 'Use on its own' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Always use' })).toBeEnabled();
     }
     expect(onConfirm).not.toHaveBeenCalled();
   });
@@ -919,7 +919,7 @@ describe('the question "Use on its own" asks', () => {
         </section>
       </div>);
       const group = screen.getByRole('group');
-      const field = screen.getByRole('textbox', { name: 'Type Contoso to use it on its own' });
+      const field = screen.getByRole('textbox', { name: 'Type Contoso to always use it' });
       const cancel = screen.getByRole('button', { name: 'Cancel' });
       const save = screen.getByRole('button', { name: 'Save' });
       const outside = screen.getByRole('button', { name: 'Outside' });

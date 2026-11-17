@@ -484,7 +484,7 @@ impl MicrosoftIntake {
                 stored_intake.is_some_and(|stored| same_path(&binding.local_folder, stored))
             })
             .map(|binding| binding.local_folder.clone())
-            .ok_or("Intern's SharePoint connection no longer matches the saved settings. Run SharePoint setup again; settings were not changed.")?;
+            .ok_or("ATLAS's SharePoint connection no longer matches the saved settings. Run SharePoint setup again; settings were not changed.")?;
         let destination = Path::new(&inbox)
             .parent()
             .map(|library| library.join(deployment.destination_folder_name()))
@@ -1110,7 +1110,7 @@ pub async fn microsoft_bind_intake(
     let manager = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || manager.bind())
         .await
-        .map_err(|_| "Intern could not finish that request.")?
+        .map_err(|_| "ATLAS could not finish that request.")?
 }
 #[tauri::command]
 pub fn microsoft_open_sign_in(

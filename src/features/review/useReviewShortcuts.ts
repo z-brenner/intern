@@ -14,6 +14,8 @@ export interface ReviewInspectorHandle {
   keep(): void;
   /** Ask before removing: one keystroke is too easy to press by accident. */
   requestRemove(): void;
+  /** Open the document viewer, where the panel offers View document. */
+  view(): void;
   focus(target: 'filename' | 'heading'): void;
 }
 
@@ -66,6 +68,9 @@ function chordLetter(event: KeyboardEvent): string {
  *   from those fields as well. After every decision the caret is in a name,
  *   where J is a letter, so there was no key for "not this one yet": the
  *   Next undecided link was three presses of Shift+Tab away;
+ * - Alt+V, from those fields too, or V anywhere else, opens the document in
+ *   the panel's viewer, to check the name against it. V, not Space: Space
+ *   presses whatever button has the focus;
  * - Delete removes, after asking - but not while the table has cells of
  *   several rows selected, which it would seem to remove as well;
  * - "/" goes to the filter.
@@ -126,6 +131,15 @@ export function useReviewShortcuts(options: ReviewShortcutOptions) {
         if (!event.repeat) onNext();
         return;
       }
+      // View document. Like Alt+N it presses the panel's own button, so it
+      // acts only where the panel is open and offers one; the viewer says
+      // nothing about the decision, so it is not held back by anything else.
+      if (event.altKey && !command && !event.shiftKey && chordLetter(event) === 'v') {
+        if ((textField && !inPanel) || !actions?.open) return;
+        event.preventDefault();
+        if (!event.repeat) inspector.current?.view();
+        return;
+      }
       if (textField || command || event.altKey) return;
 
       const row = target?.closest<HTMLElement>('.queue-grid [data-item-id]');
@@ -165,6 +179,11 @@ export function useReviewShortcuts(options: ReviewShortcutOptions) {
           return;
         case '/':
           if (onFilter()) event.preventDefault();
+          return;
+        case 'v': case 'V':
+          if (event.shiftKey || !actions?.open) return;
+          event.preventDefault();
+          if (!event.repeat) inspector.current?.view();
           return;
       }
     };

@@ -31,7 +31,7 @@ import { UseOnItsOwnQuestion, failureCode, spellingLabel } from './UseOnItsOwn';
  */
 function updateFailure(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error ?? '');
-  if (/signature|verify|pubkey/i.test(message)) return `That update was not signed by this project's key, so Intern refused it. (${message})`;
+  if (/signature|verify|pubkey/i.test(message)) return `That update was not signed by this project's key, so ATLAS refused it. (${message})`;
   if (!message.trim()) return 'Could not reach GitHub to check for updates.';
   return `Could not check for updates: ${message}`;
 }
@@ -61,7 +61,7 @@ function saveFailure(error: unknown): string {
   const folders = folderSaveProblem(code);
   if (folders) return folders;
   switch (code?.trim()) {
-    case 'AUTOSTART_FAILED': return 'Your system would not let Intern change whether it starts at sign-in, so nothing was saved. Try again. (AUTOSTART_FAILED)';
+    case 'AUTOSTART_FAILED': return 'Your system would not let ATLAS change whether it starts at sign-in, so nothing was saved. Try again. (AUTOSTART_FAILED)';
     case 'DESCRIPTIONS_NEED_DESTINATION': return 'Description records live in the Completed folder, so choose a Completed folder before turning them on. (DESCRIPTIONS_NEED_DESTINATION)';
     case 'DESCRIPTIONS_DISABLED': return 'Turn on description records and save settings first; then records can be written for documents already filed. (DESCRIPTIONS_DISABLED)';
     case 'HOSTED_MODEL_KEY_MISSING': return 'Paste an API key before choosing the hosted model. (HOSTED_MODEL_KEY_MISSING)';
@@ -73,13 +73,13 @@ function saveFailure(error: unknown): string {
     case 'HOSTED_MODEL_REJECTED': return 'The service rejected the request — usually a model name it does not know. (HOSTED_MODEL_REJECTED)';
     case 'HOSTED_MODEL_REFUSED': return 'The model declined to read the calibration document, so it cannot be relied on to file yours. (HOSTED_MODEL_REFUSED)';
     case 'MODEL_SELF_TEST_FAILED': return 'The model answered, but not correctly: it did not name the calibration document. Try a more capable model. (MODEL_SELF_TEST_FAILED)';
-    case 'MODEL_RESPONSE_INVALID': return 'The model did not answer in the shape Intern needs, twice. Try a more capable model. (MODEL_RESPONSE_INVALID)';
+    case 'MODEL_RESPONSE_INVALID': return 'The model did not answer in the shape ATLAS needs, twice. Try a more capable model. (MODEL_RESPONSE_INVALID)';
     // The managed-save refusals read the same here as everywhere else SharePoint setup is explained.
     case 'SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE':
     case 'SHAREPOINT_ACTIVATION_IN_PROGRESS': return `${describeSharePointProblem(code.trim()).action} (${code.trim()})`;
     case 'SECRET_STORE_UNAVAILABLE': return 'Your operating system\'s credential store could not be used, so the key was not saved. (SECRET_STORE_UNAVAILABLE)';
     // Linux only: there the credential store is the desktop's Secret Service, which a minimal or headless session may not run.
-    case 'SECRET_SERVICE_UNAVAILABLE': return 'No credential store answered on this desktop, so the key was not saved. Intern keeps it in the Secret Service: start and unlock GNOME Keyring or KWallet, or use the local model. (SECRET_SERVICE_UNAVAILABLE)';
+    case 'SECRET_SERVICE_UNAVAILABLE': return 'No credential store answered on this desktop, so the key was not saved. ATLAS keeps it in the Secret Service: start and unlock GNOME Keyring or KWallet, or use the local model. (SECRET_SERVICE_UNAVAILABLE)';
   }
   if (error instanceof Error && error.message.trim()) return error.message.trim();
   if (typeof error === 'object' && error && 'message' in error && typeof error.message === 'string' && error.message.trim()) return error.message.trim();
@@ -506,7 +506,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     let cloud;
     try { cloud = await bridge.classifyFolder(path); }
     catch {
-      setFolderProblem('Intern could not check whether that folder is synced by OneDrive, so the Queue folder was not changed. Try again.');
+      setFolderProblem('ATLAS could not check whether that folder is synced by OneDrive, so the Queue folder was not changed. Try again.');
       return;
     }
     setNext((current) => ({ ...current, intakeFolder: path, intakeEnabled: true, intakeMyFolder: cloud !== null, intakeLocalOnly: cloud === null }));
@@ -653,10 +653,10 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         {destinationCloud && <p className="cloud-badge">{cloudBadgeText(destinationCloud)}</p>}
         {folderProblem && <p className="form-error" role="alert">{folderProblem}</p>}
         {(intakeError || (intake?.error && !settingsFileProblem)) && <p className="form-error" role="alert">{intakeError || intake?.error}</p>}
-        {managed && <p className="check-hint">Your organization set these folders up with SharePoint, so they cannot be changed here. Upload files to the Queue folder in SharePoint, or drop them on Intern’s window.</p>}
+        {managed && <p className="check-hint">Your organization manages these folders through SharePoint. Upload files there, or drop them on ATLAS’s window.</p>}
       </section>
       <details className="settings-group settings-advanced">
-        <summary ref={layout}>Naming and filing</summary>
+        <summary ref={layout}>How ATLAS names files</summary>
 
         {/*
           A year of contracts in one folder is a thousand files nobody can
@@ -666,7 +666,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         <label>Arrange filed documents<select value={next.destinationLayout} onChange={(event) => { const value = event.target.value; if (isLayout(value)) setNext({ ...next, destinationLayout: value }); }}>
           {LAYOUTS.map((layout) => <option key={layout.value} value={layout.value}>{layout.label}</option>)}
         </select></label>
-        <p className="check-hint">{LAYOUTS.find((layout) => layout.value === next.destinationLayout)?.example}{next.destinationLayout === 'flat' ? '.' : ' — a document missing that fact goes in an “Undated” or “Unsorted” folder, never loose in the root. Undo removes a folder it empties.'}</p>
+        <p className="check-hint">{LAYOUTS.find((layout) => layout.value === next.destinationLayout)?.example}{next.destinationLayout === 'flat' ? '.' : ' — a document missing that fact goes in an “Undated” or “Unsorted” folder.'}</p>
         {/*
           A firm's own name is on almost everything it files, so a name that
           carries every party says the firm over and over, and the Party
@@ -675,9 +675,9 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           firm goes by several. Kept as typed while editing; trimmed, without
           blank lines, on save.
         */}
-        <label>Your organization's names<textarea rows={3} aria-describedby={shortOwnNames.length > 0 ? 'own-names-hint own-names-short' : 'own-names-hint'} value={(next.ourNames ?? []).join('\n')} onChange={(event) => setNext({ ...next, ourNames: event.target.value.split(/\r?\n/) })} /></label>
-        <p className="check-hint" id="own-names-hint">Your own firm's names. When a document names your firm and someone else, the filename and the Party folder use the other side.</p>
-        {shortOwnNames.length > 0 && <p className="check-hint" id="own-names-short">{shortOwnNames.map((name) => `“${name}”`).join(', ')} {shortOwnNames.length === 1 ? 'is' : 'are'} too short to match safely and will not be used. Add the name as your documents print it in full.</p>}
+        <label>Your organizations<textarea rows={3} aria-describedby={shortOwnNames.length > 0 ? 'own-names-hint own-names-short' : 'own-names-hint'} value={(next.ourNames ?? []).join('\n')} onChange={(event) => setNext({ ...next, ourNames: event.target.value.split(/\r?\n/) })} /></label>
+        <p className="check-hint" id="own-names-hint">List each of your company names, one per line. ATLAS puts the matching name right after the date: 2025-03-26 Vistage Malaysia - Termination Letter for Johnny Appleseed.</p>
+        {shortOwnNames.length > 0 && <p className="check-hint" id="own-names-short">{shortOwnNames.map((name) => `“${name}”`).join(', ')} {shortOwnNames.length === 1 ? 'is' : 'are'} too short to match and will not be used. Use the full name as your documents print it.</p>}
         {/*
           Which documents are ready comes before whether Intern renames the
           ready ones by itself, and is not a part of it: the level decides
@@ -688,7 +688,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         */}
         <ReviewLevelChoice level={reviewLevelOf(next)} onChange={(level) => setNext((current) => withReviewLevel(current, level, settings))} />
         <label className="check-label"><input type="checkbox" checked={Boolean(next.automaticRename)} onChange={(event) => setNext({ ...next, automaticRename: event.target.checked })} />Automatically rename ready documents</label>
-        <p className="check-hint">Anything that is not ready still waits for you in the queue.</p>
+        <p className="check-hint">Anything not ready still waits for you.</p>
       </details>
       {/* A question is not left open in a section closed over it: closing the section takes it back. */}
       <details className="settings-group settings-advanced" onToggle={(event) => { if (!event.currentTarget.open) setCheckingRule(undefined); }}>
@@ -699,16 +699,16 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           whole memory, so anything it learned wrong can be seen and undone
           here rather than discovered in a folder listing.
         */}
-        <p className="section-lead">Intern learns repeated spelling corrections. You can see them here, and forget any of them.</p>
-        {rules !== undefined && rules.length === 0 && <p className="check-hint">Nothing yet. Change a party's name or a document type in review and it will appear here.</p>}
+        <p className="section-lead">When you correct a name, ATLAS remembers the spelling (for example “Contoso Worldwide, Inc.” → “Contoso”). New spellings wait for your OK before ATLAS applies them by itself.</p>
+        {rules !== undefined && rules.length === 0 && <p className="check-hint">Nothing yet. Correct a name in review and it will appear here.</p>}
         {rules !== undefined && rules.length > 0 && <ul ref={rulesList} className="learned-rules" aria-label="Learned spellings">
           {rules.map((rule, index) => <li key={rule.id} data-rule={rule.id} tabIndex={-1}>
-            <span className="rule-kind">{rule.kind === 'party' ? 'Party' : 'Type'}</span>
+            <span className="rule-kind">{rule.kind === 'party' ? 'Name' : 'Type'}</span>
             <span className="rule-change"><q>{rule.from}</q> written as <strong>{rule.to}</strong></span>
-            <span className="rule-state">{!rule.active ? 'Seen once · in use after one more edit' : rule.confirmed > 0 ? 'In use' : 'In use · asks before filing'}</span>
+            <span className="rule-state">{!rule.active ? 'Seen once · used after one more correction' : rule.confirmed > 0 ? 'In use' : 'In use · waits for your OK'}</span>
             {checkingRule === rule.id ? <UseOnItsOwnQuestion rule={rule} describedBy={`rule-check-${rule.id}`} onConfirm={() => void checkRule(rule, index)} onCancel={() => takeBackCheck(rule.id)} /> : <span className="rule-actions">
               {!rule.active && <button type="button" disabled={asking} aria-label={`Use now: ${spellingLabel(rule)}`} onClick={() => void putInUse(rule)}>Use now</button>}
-              {rule.active && rule.confirmed === 0 && <button type="button" disabled={asking} data-action="use-on-its-own" aria-label={`Use on its own: ${spellingLabel(rule)}`} onClick={() => { setRulesError(''); setCheckingRule(rule.id); }}>Use on its own</button>}
+              {rule.active && rule.confirmed === 0 && <button type="button" disabled={asking} data-action="use-on-its-own" aria-label={`Always use: ${spellingLabel(rule)}`} onClick={() => { setRulesError(''); setCheckingRule(rule.id); }}>Always use</button>}
               <button type="button" disabled={asking} aria-label={`Forget: ${spellingLabel(rule)}`} onClick={() => void forgetRule(rule, index)}>Forget</button>
             </span>}
           </li>)}
@@ -716,7 +716,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         {rulesError && <p className="form-error" role="alert">{rulesError}</p>}
       </details>
       <details className="settings-group settings-advanced">
-        <summary>Local processing</summary>
+        <summary>Model</summary>
         <p className="check-hint">Documents are processed on this computer.</p>
         <LocalModel next={next} onChange={(modelPreference) => setNext({ ...next, modelPreference })} setup={localModel.setup} busy={localModel.busy} onStartTier={localModel.startTier} onPauseTier={localModel.pauseTier} />
       </details>
@@ -726,14 +726,13 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
       </section>}
       {managed === false && <><details className="settings-group settings-advanced">
         <summary>Startup and background</summary>
-        <p className="section-lead">Keep working when the window is closed.</p>
         <label className="check-label"><input type="checkbox" checked={next.runInBackground} onChange={(event) => setNext({ ...next, runInBackground: event.target.checked })} />Run in background</label>
-        <p className="check-hint">Keep Intern in the system tray when the window is closed, so files in your Queue folder are still processed.</p>
-        <label className="check-label"><input type="checkbox" checked={next.startAtLogin} onChange={(event) => setNext({ ...next, startAtLogin: event.target.checked })} />Start Intern when you sign in</label>
+        <p className="check-hint">Keeps ATLAS in the system tray when you close the window, so your Queue folder is still processed.</p>
+        <label className="check-label"><input type="checkbox" checked={next.startAtLogin} onChange={(event) => setNext({ ...next, startAtLogin: event.target.checked })} />Start ATLAS when you sign in</label>
         {/* Without the tray a minimized start would leave no way back to the
             window, so the checkbox is only offered while background mode is on. */}
         <label className="check-label"><input type="checkbox" disabled={!next.runInBackground} checked={next.startMinimized} onChange={(event) => setNext({ ...next, startMinimized: event.target.checked })} />Start minimized</label>
-        {!next.runInBackground && <p className="check-hint">Available when “Run in background” is on, so the tray can bring the window back.</p>}
+        {!next.runInBackground && <p className="check-hint">Needs “Run in background”, so the tray can bring the window back.</p>}
       </details>
       {/*
         Everything else about the Queue folder is for a folder shared with
@@ -749,11 +748,11 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           client replicates. Microsoft upload verification separately reads account
           and file metadata after explicit sign-in.
         */}
-        <p className="section-lead">For a Queue folder shared with other computers through OneDrive or SharePoint, and for support. You don’t need any of this for a folder of your own.</p>
+        <p className="section-lead">Only for a Queue folder shared through OneDrive or SharePoint, and for support.</p>
         <label className="check-label"><input type="checkbox" checked={next.processOthersUploads} onChange={(event) => setNext({ ...next, processOthersUploads: event.target.checked })} />Also process documents uploaded by others</label>
-        <p className="check-hint">Off by default: only your verified uploads are eligible. Turning this on accepts other verified uploaders too, never unknown ones.</p>
+        <p className="check-hint">Off: only your verified uploads are processed. On: other verified uploaders too, never unknown ones.</p>
         <label className="check-label"><input type="checkbox" checked={Boolean(next.intakeLocalOnly)} disabled={Boolean(intakeCloud)} onChange={(event) => setNext({ ...next, intakeLocalOnly: event.target.checked })} />This is a private local Queue folder, not a shared or synced folder</label>
-        <p className="check-hint">Private local mode does not verify Microsoft uploaders. Never use it for a shared folder. Previously paired Microsoft folders remain protected.</p>
+        <p className="check-hint">Skips Microsoft upload checks. Never use it for a shared folder.</p>
         {/*
           Not in a build without the SharePoint deployment: Microsoft upload
           verification reads the same provisioned identifiers, so the panel
@@ -785,8 +784,8 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           <p role="status" aria-label="Intake status" aria-live="polite">{intake
             ? `${intake.watching ? 'Watching' : 'Not watching'} · ${activeMachines} ${activeMachines === 1 ? 'machine' : 'machines'} active · ${intake.heldForOthers} held for others · ${intake.uploaderUnknown ?? 0} uploader unknown · Last scan: ${formatScanTime(intake.lastScanAt)}`
             : 'Checking the Queue folder…'}</p>
-          {intake && intake.syncConflicts > 0 && <p className="check-hint" role="status">{intake.syncConflicts === 1 ? '1 file is' : `${intake.syncConflicts} files are`} a sync conflict copy left behind by OneDrive or SharePoint. Intern leaves {intake.syncConflicts === 1 ? 'it' : 'them'} alone — resolve the conflict in the folder and the surviving document is picked up on the next scan.</p>}
-          {intake && intake.awaitingHydration > 0 && <p className="check-hint" role="status">{intake.awaitingHydration === 1 ? '1 document is' : `${intake.awaitingHydration} documents are`} waiting for OneDrive to download {intake.awaitingHydration === 1 ? 'its' : 'their'} contents. Intern is holding {intake.awaitingHydration === 1 ? 'it' : 'them'} rather than failing {intake.awaitingHydration === 1 ? 'it' : 'them'}; connect this machine and the next scan picks {intake.awaitingHydration === 1 ? 'it' : 'them'} up.</p>}
+          {intake && intake.syncConflicts > 0 && <p className="check-hint" role="status">{intake.syncConflicts === 1 ? '1 file is' : `${intake.syncConflicts} files are`} a sync conflict copy left behind by OneDrive or SharePoint. ATLAS leaves {intake.syncConflicts === 1 ? 'it' : 'them'} alone — resolve the conflict in the folder and the surviving document is picked up on the next scan.</p>}
+          {intake && intake.awaitingHydration > 0 && <p className="check-hint" role="status">{intake.awaitingHydration === 1 ? '1 document is' : `${intake.awaitingHydration} documents are`} waiting for OneDrive to download {intake.awaitingHydration === 1 ? 'its' : 'their'} contents. ATLAS is holding {intake.awaitingHydration === 1 ? 'it' : 'them'} rather than failing {intake.awaitingHydration === 1 ? 'it' : 'them'}; connect this machine and the next scan picks {intake.awaitingHydration === 1 ? 'it' : 'them'} up.</p>}
           {intake && intake.unreadableFolders > 0 && <p className="check-hint" role="status">{intake.unreadableFolders === 1 ? '1 subfolder' : `${intake.unreadableFolders} subfolders`} could not be read on the last scan — usually a folder this account has no permission to open. Everything else was scanned; documents in {intake.unreadableFolders === 1 ? 'that folder' : 'those folders'} are not.</p>}
           <button type="button" disabled={scanning} onClick={() => void runScanNow()}>{scanning ? 'Scanning…' : 'Scan now'}</button>
         </div>}
@@ -809,8 +808,8 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         */}
         <p className="section-lead">You choose when to install updates.</p>
         <label className="check-label"><input type="checkbox" checked={!next.skipUpdateChecks} onChange={(event) => setNext({ ...next, skipUpdateChecks: !event.target.checked })} />Check for updates automatically</label>
-        {status?.state === 'current' && <p role="status" aria-label="Update status" aria-live="polite">Intern {status.currentVersion} is the latest release.</p>}
-        {status?.state === 'unsupported' && <p role="status" aria-label="Update status" aria-live="polite">{status.reason === 'package' ? 'Intern on Linux does not update itself. Install the newer release\'s package to update it.' : 'Updates are available in the installed desktop application.'}</p>}
+        {status?.state === 'current' && <p role="status" aria-label="Update status" aria-live="polite">ATLAS {status.currentVersion} is the latest release.</p>}
+        {status?.state === 'unsupported' && <p role="status" aria-label="Update status" aria-live="polite">{status.reason === 'package' ? 'ATLAS on Linux does not update itself. Install the newer release\'s package to update it.' : 'Updates are available in the installed desktop application.'}</p>}
         {status?.state === 'available' && <p role="status" aria-label="Update status" aria-live="polite">Version {status.version} is available. You have {status.currentVersion}.</p>}
         {updateError && <p className="form-error" role="alert">{updateError}</p>}
         <div className="update-actions">
@@ -821,7 +820,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
       </section>
       <section className="settings-group">
         <h3>Help & support</h3>
-        <p className="section-lead">The guide walks through setup, what each status means, and what to do when a document fails.</p>
+        <p className="section-lead">Setup, what each status means, and what to do when a document fails.</p>
         {helpError && <p className="form-error" role="alert">{helpError}</p>}
         <div className="update-actions">
           <button type="button" className="link-out" onClick={() => void runGuide()}>Open the guide<Icon icon={ExternalLink} /></button>

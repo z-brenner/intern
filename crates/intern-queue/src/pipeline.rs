@@ -15,19 +15,22 @@ use intern_core::{
     crash_doubt_kind, source_path_key,
 };
 use intern_engine::{
-    DocumentAnalysis, DocumentSource, ExtractProgress, HouseRule, HouseStyle, ProposalStatus,
-    ReviewLevel, RuleKind, Support, ValidatedProposal, approved_party, compose_styled_filename,
-    counterparty_view,
+    DocumentAnalysis, DocumentSource, EditedName, EntityKind, ExtractProgress, HouseRule,
+    HouseStyle, NameView, ProposalStatus, ReviewLevel, ReviewReason, RuleKind, Support,
+    ValidatedProposal, approved_party, compose_filename, compose_styled_filename,
     evidence::is_valid_iso_date,
     fingerprint::{self, NEAR_DUPLICATE_DISTANCE},
     is_a_spelling, is_own_name, lesson_from_edit, named_parties, party_and_more, party_as_named,
-    proposed_party, readiness, respelled_party, same_stem, sanitize_folder_name,
+    proposed_party, readiness, respelled_party,
+    review_level::{name_confidence, supplied_date},
+    same_stem, sanitize_folder_name,
     setup::{semantic_probes, validate_semantic_probe},
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
 use crate::admission::{AdmissionEvidence, AdmissionGuard, AdmissionStage, LocalAdmission};
+use crate::fallback_date::{self, DateSource};
 use crate::memo::ExtractionMemo;
 use crate::paths::display_path;
 use crate::settings::{AppSettings, DestinationLayout, SettingsStore, normalize_own_names};
@@ -308,6 +311,32 @@ impl ModelFailure {
             code: code.into(),
             retryable: false,
         }
+    }
+}
+
+/// What Clear queue did ([`Pipeline::clear_queue`]): how many documents
+/// it took out of the queue, and how many it kept, by why.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearedQueue {
+    /// Taken out of the queue. Their files are where they were.
+    pub cleared: usize,
+    /// Kept: a rename or copy of theirs did not finish, and their files need
+    /// checking first - what Remove asks to be confirmed for one document.
+    pub unsettled: usize,
+    /// Kept: being renamed or read at that moment, which cannot be stopped
+    /// part-way.
+    pub busy: usize,
+    /// Kept: Intern had renamed the file `NEEDS REVIEW - ...` and could not
+    /// give it its own name back (a program has it open). Taken out with
+    /// that name, it would be left for every scan to skip.
+    pub still_marked: usize,
+}
+
+impl ClearedQueue {
+    /// How many it kept, for whatever reason.
+    pub fn kept(&self) -> usize {
+        self.unsettled + self.busy + self.still_marked
     }
 }
 
@@ -654,10 +683,17 @@ impl DuplicateOracle for NoDuplicateOracle {
 
 /// What the queue stores about one proposal.
 ///
-/// `analysis` is exactly what the engine produced and never changes; `filename`
-/// and `description` are what will actually be applied, and a human edit
-/// changes only those. Keeping them apart means the evidence a reviewer sees
-/// still belongs to the model's own answer.
+/// `analysis` is what the engine produced and never changes; `filename` and
+/// `description` are what will actually be applied, and a human edit changes
+/// only those. Keeping them apart means the evidence a reviewer sees still
+/// belongs to the model's own answer. One thing the queue adds to the
+/// analysis before it is stored, and only to a reading whose one doubt about
+/// the date is that the document gave none: a date from the file itself, in
+/// the proposal, with the reading's `DATE_MISSING` kept beside it
+/// ([`intern_engine::review_level::supplied_date`]) and the record's reasons
+/// saying where the date came from (see [`crate::fallback_date`]). Every name
+/// composed from the analysis then starts with it, and every folder follows
+/// it.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProposalRecord {
@@ -680,12 +716,19 @@ pub struct ProposalRecord {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub house_rules: Vec<HouseRule>,
     /// The person's own organization as Settings named it when `filename`
-    /// was composed. A party it names is left out of the name, so the name
-    /// and the Party folder carry the other side. Kept with the record so the
-    /// name can be read back exactly as it was composed, whatever Settings
-    /// says by then.
+    /// was composed. A name leads with it where the document names it, and
+    /// the subject and the Party folder carry the other side (see
+    /// [`NameView`]). Kept with the record so the name can be read back
+    /// exactly as it was composed, whatever Settings says by then.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub own_names: Vec<String>,
+    /// The document's own file name when it was read, without a
+    /// `NEEDS REVIEW - ` mark: where it says what the reading found, its
+    /// words for the type are kept, and a date it gives dates a reading
+    /// that found none (see [`NameView::with_original`]). Kept with the
+    /// record, as `own_names` is, so the name reads back as it was composed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_name: Option<String>,
     /// The name a document with nearly this text was already filed under -
     /// a second scan, a re-export, a copy saved again - when there is one.
     /// Such a document waits for a person rather than being filed twice.
@@ -794,6 +837,7 @@ impl ProposalRecord {
             revision: 1,
             house_rules: Vec::new(),
             own_names: Vec::new(),
+            original_name: None,
             near_duplicate_of: None,
             approved: false,
             reviewed: false,
@@ -810,22 +854,60 @@ impl ProposalRecord {
         self.manual || self.copy_of.is_some()
     }
 
-    /// The validated facts as the name carries them: the document's words,
-    /// respelled the way the reviewer has taught Intern to, with the
-    /// person's own organization left out where the document names someone
-    /// else too. The one view the filename, the layout folder, a lesson
-    /// from an edit, and a filing report are all read from.
-    pub fn styled_proposal(&self) -> ValidatedProposal {
-        self.name_view().0
+    /// How sure Intern is of this record's name, for the window, when the
+    /// row `waits` for a person or not
+    /// ([`intern_engine::review_level::name_confidence`]): every reason on
+    /// the record counts as a doubt, a hold of the queue's own as much as
+    /// the reading's, and so does a date taken from the file. Only
+    /// [`ALREADY_NAMED`], which says the file had the name already, is no
+    /// doubt about it. `None` for a name with no reading behind it: a copy's,
+    /// or one a person typed for a document that could not be read.
+    pub fn name_confidence(&self, waits: bool) -> Option<f32> {
+        if self.is_synthetic() {
+            return None;
+        }
+        let doubts = self
+            .reasons
+            .iter()
+            .filter(|reason| *reason != ALREADY_NAMED)
+            .count();
+        Some(name_confidence(&self.analysis, doubts, waits))
     }
 
-    /// [`Self::styled_proposal`], and the parties it left out because they
-    /// are the person's own organization.
+    /// The validated facts as the name carries them (see [`NameView`]): the
+    /// document's words, respelled the way the reviewer has taught Intern
+    /// to, led by the organization the document is filed for - the
+    /// person's own where the document names it - with the subject after
+    /// it, and the document's own filename's words for its type where they
+    /// agree with the reading. The one view the filename, the layout
+    /// folder, a lesson from an edit, and a filing report are all read
+    /// from.
+    pub fn view(&self) -> NameView {
+        name_view_of(
+            &self.analysis,
+            &self.house_rules,
+            &self.own_names,
+            self.original_name.as_deref(),
+        )
+    }
+
+    /// The name [`Self::view`] composes, with no other name to collide
+    /// with. `extension` is the source file's.
+    pub fn composed_name(&self, extension: &str) -> String {
+        self.view().compose(extension, &[]).value
+    }
+
+    /// The validated facts a filing is put away and reported under, as the
+    /// name carries them (see [`NameView::filed`]).
+    pub fn styled_proposal(&self) -> ValidatedProposal {
+        self.view().filed()
+    }
+
+    /// [`Self::styled_proposal`], and the person's own organization's
+    /// parties the name leaves out because it names someone else.
     pub fn name_view(&self) -> (ValidatedProposal, Vec<String>) {
-        let styled = HouseStyle::new(self.house_rules.clone())
-            .apply(&self.analysis.proposal)
-            .0;
-        counterparty_view(&styled, &self.own_names)
+        let view = self.view();
+        (view.filed(), view.left_out)
     }
 
     /// Whether a learned spelling no person has checked yet changed this
@@ -857,10 +939,15 @@ impl ProposalRecord {
             return false;
         }
         let named = |rules: Vec<HouseRule>| {
-            let (styled, applied) = HouseStyle::new(rules).apply(&self.analysis.proposal);
-            let (named, _) = counterparty_view(&styled, &self.own_names);
-            let name = compose_styled_filename(&named, &applied, extension, &[]).value;
-            (name, named.document_type, named.parties)
+            let view = name_view_of(
+                &self.analysis,
+                &rules,
+                &self.own_names,
+                self.original_name.as_deref(),
+            );
+            let name = view.compose(extension, &[]).value;
+            let filed = view.filed();
+            (name, filed.document_type, filed.parties)
         };
         let kept = self
             .house_rules
@@ -962,11 +1049,21 @@ impl ProposalRecord {
             .collect()
     }
 
-    /// The parties [`Self::filename`] gives, each exactly as the name writes
-    /// it (see [`named_parties`]): the words a party chosen in review takes
-    /// the place of. `extension` is the source file's.
+    /// The parties [`Self::filename`] gives after its entity, each exactly as
+    /// the name writes it (see [`named_parties`]): the words a party chosen
+    /// in review takes the place of. The entity is not among them: a party
+    /// chosen in review names the other side. A name an earlier build
+    /// composed is read as it composed it. `extension` is the source file's.
     pub fn named_parties(&self, extension: &str) -> Vec<String> {
-        named_parties(&self.styled_proposal(), extension, &self.filename)
+        match self
+            .view()
+            .read_edit(extension, &self.filename, &self.filename)
+        {
+            EditedName::Subject {
+                grammar, proposed, ..
+            } => named_parties(grammar, extension, &proposed),
+            _ => Vec::new(),
+        }
     }
 
     /// The validated facts as the name `filename` the document is filed
@@ -1046,23 +1143,77 @@ impl ProposalRecord {
     /// its own is as often the party - "Trustee for Acme Corp", typed short
     /// where "Trustee for Acme Corporation" is offered - and nothing here
     /// tells the two apart.
+    ///
+    /// The name's entity is read first (see [`NameView::read_edit`]). Kept
+    /// as proposed, or with no entity, what follows it is read as above,
+    /// and the entity's party is filed beside the parties read (see
+    /// [`NameView::with_parties`]). Where only the entity changed, the words
+    /// put in its place stand for its party, and the other side is as
+    /// proposed. A name an earlier build proposed, before names led with
+    /// their entity, is read as that build read it.
     pub fn as_filed(&self, extension: &str, filename: &str) -> ValidatedProposal {
-        let styled = self.styled_proposal();
-        let mut filed = proposal_as_applied(&styled, filename);
+        let view = self.view();
         if self.is_synthetic() {
-            return filed;
+            return proposal_as_applied(&view.filed(), filename);
         }
-        let proposed = compose_styled_filename(&styled, &self.house_rules, extension, &[]).value;
-        // A name approved as proposed - unchanged, or filed without review,
-        // its date or a collision suffix aside - edits nothing, and none of
-        // what reads an edit below comes into it: it is filed exactly as
-        // alpha.17 filed it, under the party the name gives (see
-        // `proposed_party`).
-        if same_stem(extension, &proposed, filename) {
-            if let Some(party) = proposed_party(&styled, extension, &proposed) {
+        let proposed = view.compose(extension, &[]).value;
+        if view.entity.is_some() && !same_stem(extension, &proposed, filename) {
+            let legacy = view.legacy();
+            let earlier = compose_styled_filename(legacy, &self.house_rules, extension, &[]).value;
+            if same_stem(extension, &earlier, filename) {
+                let mut filed = proposal_as_applied(legacy, filename);
+                filed.parties = self.parties_read(legacy, extension, &earlier, filename).0;
+                return filed;
+            }
+        }
+        let entity = view.entity.as_ref().map(|entity| entity.party.clone());
+        let (filed, edited) = match view.read_edit(extension, &proposed, filename) {
+            EditedName::Subject {
+                grammar,
+                proposed,
+                approved,
+            } => {
+                let (parties, edited) = self.parties_read(grammar, extension, &proposed, &approved);
+                (view.with_parties(entity, parties), edited)
+            }
+            EditedName::Entity { words } => (
+                view.with_parties(Some(words), view.subject.parties.clone()),
+                true,
+            ),
+            EditedName::Rewritten => {
+                let (parties, edited) =
+                    self.parties_read(&view.subject, extension, &proposed, filename);
+                (view.with_parties(entity, parties), edited)
+            }
+        };
+        let mut filed = proposal_as_applied(&filed, filename);
+        if edited {
+            self.put_back_rejected(&mut filed, extension, filename);
+        }
+        filed
+    }
+
+    /// The parties `grammar` gives as the name `approved` gives them, where
+    /// `grammar` composed the name `proposed` (see [`Self::as_filed`]), and
+    /// whether `approved` edits `proposed` at all: a name approved as
+    /// proposed - unchanged, or filed without review, its date or a
+    /// collision suffix aside - edits nothing, and none of what reads an
+    /// edit comes into it: it is filed exactly as alpha.17 filed it, under
+    /// the party the name gives (see [`proposed_party`]).
+    fn parties_read(
+        &self,
+        grammar: &ValidatedProposal,
+        extension: &str,
+        proposed: &str,
+        filename: &str,
+    ) -> (Vec<String>, bool) {
+        let styled = grammar;
+        let mut filed = grammar.clone();
+        if same_stem(extension, proposed, filename) {
+            if let Some(party) = proposed_party(styled, extension, proposed) {
                 put_first(&mut filed.parties, party);
             }
-            return filed;
+            return (filed.parties, false);
         }
         let choices = self.party_choices();
         let chosen = named_choices(
@@ -1070,7 +1221,7 @@ impl ProposalRecord {
                 choices.iter().map(String::as_str),
                 &self.house_rules,
                 extension,
-                &proposed,
+                proposed,
                 filename,
             )
             .into_iter()
@@ -1084,21 +1235,19 @@ impl ProposalRecord {
             &self.house_rules,
             &chosen,
             extension,
-            &proposed,
+            proposed,
             filename,
         ) {
-            filed.parties = parties;
-            self.put_back_rejected(&mut filed, extension, filename);
-            return filed;
+            return (parties, true);
         }
         let (chosen, chosen_spellings) = match chosen.as_slice() {
             [(party, spellings, _)] => (Some(party.clone()), spellings.clone()),
             _ => (None, Vec::new()),
         };
-        let mut lesson = respelled_party(&styled, extension, &proposed, filename);
+        let mut lesson = respelled_party(styled, extension, proposed, filename);
         let mut read = match &lesson {
             Some(edit) => Some(edit.to.clone()),
-            None => approved_party(&styled, extension, &proposed, filename),
+            None => approved_party(styled, extension, proposed, filename),
         };
         // The document's own word for a party a rule respelled, kept with
         // another party or a note after it ("Acme Corporation from Jane
@@ -1168,8 +1317,7 @@ impl ProposalRecord {
         } else if let Some(party) = chosen.or(read) {
             put_first(&mut filed.parties, party);
         }
-        self.put_back_rejected(&mut filed, extension, filename);
-        filed
+        (filed.parties, true)
     }
 
     /// The document's own words, in `filed`, for each spelling the person
@@ -1226,7 +1374,7 @@ impl ProposalRecord {
                         .document_type
                         .as_deref()
                         .is_some_and(|spelled| HouseRule::key(spelled) == HouseRule::key(&rule.to))
-                        && keeps_spelling(&undone, extension, filename)
+                        && keeps_in(&self.view(), &undone, extension, filename)
                     {
                         filed.document_type = Some(own.clone());
                     }
@@ -1849,6 +1997,51 @@ fn keeps_spelling(rule: &HouseRule, extension: &str, approved: &str) -> bool {
     }
 }
 
+/// [`keeps_spelling`] of a name `view` composes: a type's spelling where
+/// the subject starts, after the entity the name leads with, and a party's
+/// anywhere in the name - the entity is a party too. `extension` is the
+/// source file's.
+fn keeps_in(view: &NameView, rule: &HouseRule, extension: &str, name: &str) -> bool {
+    match rule.kind {
+        RuleKind::Party => keeps_spelling(rule, extension, name),
+        RuleKind::DocumentType => keeps_spelling(
+            rule,
+            extension,
+            &view.without_entity(name).unwrap_or_else(|| name.to_owned()),
+        ),
+    }
+}
+
+/// The view of `analysis`'s reading a name is composed from (see
+/// [`NameView`]): respelled by the house-style rules `rules`, led by the
+/// person's own organization's names `own_names` where the document names
+/// it, and given the words of the document's own file name `original`
+/// where they agree with the reading.
+fn name_view_of(
+    analysis: &DocumentAnalysis,
+    rules: &[HouseRule],
+    own_names: &[String],
+    original: Option<&str>,
+) -> NameView {
+    let (styled, applied) = HouseStyle::new(rules.to_vec()).apply(&analysis.proposal);
+    let stem = original.map(|name| {
+        Path::new(name).file_stem().map_or_else(
+            || name.to_owned(),
+            |stem| stem.to_string_lossy().into_owned(),
+        )
+    });
+    NameView::of(&styled, &applied, analysis.facts.as_ref(), own_names)
+        .with_original(stem.as_deref())
+}
+
+/// The file name a document has where it waits, without the
+/// `NEEDS REVIEW - ` mark Intern gives one it could not read: the name a
+/// person or another system gave it.
+fn original_name_of(source_path: &Path) -> Option<String> {
+    let name = source_path.file_name()?.to_string_lossy().into_owned();
+    Some(intern_core::strip_needs_review_prefix(&name).map_or(name.clone(), str::to_owned))
+}
+
 /// Each run of `words` that is the key `party`, as word ranges: where a
 /// name written as house style compares spellings (see [`name_words`])
 /// holds the party whole.
@@ -1996,22 +2189,23 @@ impl Spellings {
         )
     }
 
-    /// `proposal` respelled by the rules in force that a name composed
-    /// from it applies (see [`shown_rules`]), with those rules: every
-    /// checked rule that fires, and an unchecked one only where the name
-    /// shows it. `own_names` are the person's organization's names the name
-    /// is composed by, and `extension` the source file's.
-    fn styled(
+    /// The rules in force that a name composed from `analysis`'s reading
+    /// applies (see [`shown_rules`]): every checked rule that fires, and an
+    /// unchecked one only where the name shows it. `own_names` are the
+    /// person's organization's names the name is composed by, `original`
+    /// the document's own file name (see [`NameView::with_original`]), and
+    /// `extension` the source file's.
+    fn shown(
         &self,
-        proposal: &ValidatedProposal,
+        analysis: &DocumentAnalysis,
         own_names: &[String],
+        original: Option<&str>,
         extension: &str,
-    ) -> (ValidatedProposal, Vec<HouseRule>) {
-        let (_, fired) = self.style().apply(proposal);
-        let rules = shown_rules(proposal, fired, own_names, extension, |rule| {
+    ) -> Vec<HouseRule> {
+        let (_, fired) = self.style().apply(&analysis.proposal);
+        shown_rules(analysis, fired, own_names, original, extension, |rule| {
             self.checked(rule)
-        });
-        HouseStyle::new(rules).apply(proposal)
+        })
     }
 
     /// Whether a person has checked `rule`, as a name applied it: learned
@@ -2052,30 +2246,32 @@ impl Spellings {
 /// leaves room for one the name shed - so the rules are asked again until
 /// none is taken out.
 fn shown_rules(
-    proposal: &ValidatedProposal,
+    analysis: &DocumentAnalysis,
     fired: Vec<HouseRule>,
     own_names: &[String],
+    original: Option<&str>,
     extension: &str,
     checked: impl Fn(&HouseRule) -> bool,
 ) -> Vec<HouseRule> {
-    let name = |rules: Vec<HouseRule>| {
-        let (styled, applied) = HouseStyle::new(rules).apply(proposal);
-        let (named, _) = counterparty_view(&styled, own_names);
-        compose_styled_filename(&named, &applied, extension, &[]).value
+    let compose = |rules: &[HouseRule]| {
+        let view = name_view_of(analysis, rules, own_names, original);
+        let name = view.compose(extension, &[]).value;
+        (view, name)
     };
     let mut rules = fired;
     loop {
-        let named = name(rules.clone());
+        let (view, named) = compose(&rules);
         let hidden = rules.iter().position(|rule| {
             !checked(rule)
-                && (!keeps_spelling(rule, extension, &named)
-                    || name(
-                        rules
+                && (!keeps_in(&view, rule, extension, &named)
+                    || compose(
+                        &rules
                             .iter()
                             .filter(|other| *other != rule)
                             .cloned()
-                            .collect(),
-                    ) == named)
+                            .collect::<Vec<_>>(),
+                    )
+                    .1 == named)
         });
         match hidden {
             Some(index) => {
@@ -2821,6 +3017,21 @@ impl Pipeline {
             .collect()
     }
 
+    /// What the reader made of item `id` the last time it read the bytes the
+    /// item was checked against, while the extraction memo still holds it
+    /// (see [`crate::memo`]): the text the window's document viewer shows as
+    /// the text Intern read, without reading the document again. `None`
+    /// when nothing is kept - the document was read before this run of
+    /// Intern, or was let go for others since - and when there is no such
+    /// item. Reads only; the entry stays as it was, apart from counting as
+    /// recently used.
+    pub fn remembered_extraction(&self, id: i64) -> PipelineResult<Option<DocumentSource>> {
+        let Some(item) = self.store.get(id)? else {
+            return Ok(None);
+        };
+        Ok(self.memo.get(id, &item.source_hash, &item.source_path))
+    }
+
     /// The newest item enqueued from `path` - as given, or as it
     /// canonicalizes now - with its proposal and receipt, or `None` when the
     /// queue has never seen the path.
@@ -3330,6 +3541,11 @@ impl Pipeline {
             self.events.queue_changed();
             return Ok(keep_draining);
         }
+        // The name the file has here goes with it to the engine, which may
+        // show it to the model as orientation, never as evidence. Added
+        // after the reading is remembered, so the memo keeps what the
+        // reader made of the bytes alone.
+        let source = source.with_file_name_of(&item.source_path);
         let analysis = match self.analyze_with_deadline(&source, &extension, &existing) {
             Ok(analysis) => {
                 self.forget_missing_model();
@@ -3532,37 +3748,60 @@ impl Pipeline {
             .load()
             .map(|settings| settings.own_names())
             .unwrap_or_default();
+        // A reading whose only doubt about the date is that the document
+        // gave none is dated from the file itself, before the name is
+        // composed from it (see `crate::fallback_date`).
+        let mut analysis = analysis;
+        let dated_from = date_from_the_file(&mut analysis, &item.source_path, extension, existing);
         let spellings = self.repository.spellings()?;
-        let (styled, house_rules) = spellings.styled(&analysis.proposal, &own_names, extension);
-        let (named, _) = counterparty_view(&styled, &own_names);
-        let filename =
-            self.compose_for_target(&item.source_path, &named, &house_rules, extension, existing);
+        // The name the document arrived with, whose words a name keeps
+        // where they say what the reading found.
+        let original_name = original_name_of(&item.source_path);
+        let house_rules =
+            spellings.shown(&analysis, &own_names, original_name.as_deref(), extension);
+        let view = name_view_of(
+            &analysis,
+            &house_rules,
+            &own_names,
+            original_name.as_deref(),
+        );
+        let filename = self.compose_for_target(&item.source_path, &view, extension, existing);
         // The exact-bytes check ran before analysis. This one needs the text
         // and the date, so it runs after: a second scan, a re-export, or a
         // copy saved again with new metadata says what a filed document
         // says, and is not filed on its own.
         let near_duplicate_of = self.near_duplicate_of(item.id, &analysis);
+        // A date the file gave says where it came from in the place of the
+        // reading's "no date": the window shows it as a note, and a person
+        // can find every name so dated afterwards.
         let mut reasons = analysis
             .review_reasons
             .iter()
-            .map(|reason| reason.as_str().to_owned())
+            .map(|reason| match (reason, dated_from) {
+                (ReviewReason::DateMissing, Some(source)) => source.code(),
+                _ => reason.as_str(),
+            })
+            .map(str::to_owned)
             .collect::<Vec<_>>();
         // The level's answer, not the engine's own status: at strict the
-        // two are the same. The queue's own holds follow, as at any level.
+        // two differ only where every reason is minor. The queue's own
+        // holds follow, as at any level.
         let mut status = readiness(&analysis, level).status();
         if near_duplicate_of.is_some() {
             reasons.push(NEAR_DUPLICATE.to_owned());
             status = ProposalStatus::NeedsReview;
         }
+        let description = kept_description(&analysis);
         let mut record = ProposalRecord {
             status,
             filename,
-            description: analysis.description.clone(),
+            description,
             reasons,
             analysis,
             revision: 1,
             house_rules,
             own_names,
+            original_name,
             near_duplicate_of,
             approved: false,
             reviewed: false,
@@ -3762,12 +4001,21 @@ impl Pipeline {
     /// other machines.
     fn near_duplicate_of(&self, item_id: i64, analysis: &DocumentAnalysis) -> Option<String> {
         let fingerprint = fingerprint::decode(analysis.text_fingerprint.as_deref()?)?;
-        let date = analysis.proposal.document_date.clone().or_else(|| {
-            analysis
-                .model_proposal
-                .as_ref()
-                .and_then(|reply| reply.document_date.clone())
-        });
+        // A reading dated from the file is undated as far as the document
+        // goes: the file's date is no document's, and two scans of one
+        // document made on different days are still one document. Nor is a
+        // date the model gave and validation would not take as the
+        // document's, which is all its reply can hold then.
+        let date = if supplied_date(analysis).is_some() {
+            None
+        } else {
+            analysis.proposal.document_date.clone().or_else(|| {
+                analysis
+                    .model_proposal
+                    .as_ref()
+                    .and_then(|reply| reply.document_date.clone())
+            })
+        };
         let local = self
             .repository
             .find_similar(fingerprint, item_id)
@@ -3793,32 +4041,28 @@ impl Pipeline {
     /// document is going to. Without readable settings the source folder's
     /// names (`fallback`) stand in.
     ///
-    /// `proposal` is the styled proposal and `house_rules` the rules that
-    /// styled it: what a rule spelled is the reviewer's, and is written as
-    /// they typed it.
+    /// `view` is what the name is composed from (see [`NameView`]): what a
+    /// rule spelled is the reviewer's, and is written as they typed it.
     fn compose_for_target(
         &self,
         source_path: &Path,
-        proposal: &ValidatedProposal,
-        house_rules: &[HouseRule],
+        view: &NameView,
         extension: &str,
         fallback: &[String],
     ) -> String {
-        let named = compose_styled_filename(proposal, house_rules, extension, &[]).value;
+        let named = view.compose(extension, &[]).value;
         let existing = match self.settings.load() {
             Ok(settings) => names_beside(
                 &target_folder(
                     &settings,
                     source_path,
-                    &proposal_as_applied(proposal, &named),
+                    &proposal_as_applied(&view.filed(), &named),
                 ),
                 source_path,
             ),
             Err(_) => fallback.to_vec(),
         };
-        compose_styled_filename(
-            proposal,
-            house_rules,
+        view.compose(
             extension,
             &existing.iter().map(String::as_str).collect::<Vec<_>>(),
         )
@@ -4024,8 +4268,18 @@ impl Pipeline {
             .and_then(|value| value.to_str())
             .unwrap_or_default()
             .to_owned();
-        let (styled, house_rules) =
-            spellings.styled(&record.analysis.proposal, &own_names, &extension);
+        // A record an earlier build stored kept no file name: the one the
+        // document waits under is the one it arrived with.
+        let original_name = record
+            .original_name
+            .clone()
+            .or_else(|| original_name_of(&item.source_path));
+        let house_rules = spellings.shown(
+            &record.analysis,
+            &own_names,
+            original_name.as_deref(),
+            &extension,
+        );
         // A name held for a spelling checked since - "Use on its own" -
         // says the spelling has not been checked: the reason is taken back,
         // though the name is as it was.
@@ -4037,22 +4291,22 @@ impl Pipeline {
         if house_rules == record.house_rules && own_names == record.own_names && !checked_since {
             return Ok(false);
         }
-        let (named, _) = counterparty_view(&styled, &own_names);
+        let view = name_view_of(
+            &record.analysis,
+            &house_rules,
+            &own_names,
+            original_name.as_deref(),
+        );
         let existing = names_beside(
             item.source_path.parent().unwrap_or_else(|| Path::new(".")),
             &item.source_path,
         );
-        let filename = self.compose_for_target(
-            &item.source_path,
-            &named,
-            &house_rules,
-            &extension,
-            &existing,
-        );
+        let filename = self.compose_for_target(&item.source_path, &view, &extension, &existing);
         let renamed = filename != record.filename;
         record.filename = filename;
         record.house_rules = house_rules;
         record.own_names = own_names;
+        record.original_name = original_name;
         let held = hold_unchecked_spelling(&mut record, &extension, spellings);
         if renamed || (held && item.status == QueueStatus::Ready) {
             record.revision += 1;
@@ -4268,13 +4522,29 @@ impl Pipeline {
         extension: &str,
         approved: &str,
     ) -> PipelineResult<()> {
-        let Some(lesson) = lesson_from_edit(
-            &record.styled_proposal(),
-            extension,
-            &record.filename,
-            approved,
-        )
-        .map(|lesson| {
+        let view = record.view();
+        // What the edit is read as around the name's entity: a respelling of
+        // the entity's party where only the entity changed and it is one of
+        // the name's parties - the person's own organization is named as
+        // Settings names it, and an issuer the name's parties do not hold is
+        // spelled by no rule - and otherwise what follows it, read with the
+        // grammar that composed it. A type the document's own filename
+        // gave is that file's word, not the reading's, and teaches nothing.
+        let lesson = match view.read_edit(extension, &record.filename, approved) {
+            EditedName::Subject {
+                grammar,
+                proposed,
+                approved,
+            } => lesson_from_edit(grammar, extension, &proposed, &approved)
+                .filter(|lesson| lesson.kind == RuleKind::Party || view.original_type.is_none()),
+            EditedName::Entity { words } => view
+                .entity
+                .as_ref()
+                .filter(|entity| entity.kind == EntityKind::Party)
+                .map(|entity| HouseRule::new(RuleKind::Party, entity.party.clone(), words)),
+            EditedName::Rewritten => None,
+        };
+        let Some(lesson) = lesson.map(|lesson| {
             match record.house_rules.iter().find(|applied| {
                 applied.kind == lesson.kind && HouseRule::key(&applied.to) == lesson.from_key()
             }) {
@@ -4491,8 +4761,9 @@ impl Pipeline {
     /// either.
     ///
     /// At strict no row is held that an earlier release would have filed:
-    /// there a reading is ready only by the engine's own word, and so is
-    /// every ready record no person approved.
+    /// there a reading is ready by the engine's own word, or with minor
+    /// reasons only ([`intern_engine::review_level::MINOR`]), which an
+    /// earlier release held; so is every ready record no person approved.
     ///
     /// As in [`Self::held_for_unchecked_spelling`], whether it is held is
     /// decided again on the record as stored, in the transaction that puts
@@ -5809,6 +6080,9 @@ impl Pipeline {
             &item.source_path,
         );
         let existing_names = existing.iter().map(String::as_str).collect::<Vec<_>>();
+        // Named as a reading names it, so the request is the one the stored
+        // reply answered when the file's name is the same.
+        let source = source.with_file_name_of(&item.source_path);
         let analysis =
             match self
                 .model
@@ -5865,8 +6139,9 @@ impl Pipeline {
     /// said, so a new reading may take its place: in review or ready by its
     /// record's own status, with no file error; its record [`untouched`],
     /// holding the request its reply answered, and no reason but the
-    /// reading's, a near duplicate's and an unchecked learned spelling's;
-    /// and no rename of it ever begun.
+    /// reading's (a date from the file counting as the reading's "no
+    /// date"), a near duplicate's and an unchecked learned spelling's; and
+    /// no rename of it ever begun.
     fn waits_as_read(&self, item: &QueueItem, record: &ProposalRecord) -> PipelineResult<bool> {
         Ok(record.analysis.telemetry.request_sha256.is_some()
             && self.waits_on_its_reading(item, record)?)
@@ -5887,6 +6162,8 @@ impl Pipeline {
             && record.reasons.iter().all(|reason| {
                 reason == NEAR_DUPLICATE
                     || reason == LEARNED_SPELLING_UNCONFIRMED
+                    // The reading's own "no date", answered from the file.
+                    || DateSource::is_note(reason)
                     || record
                         .analysis
                         .review_reasons
@@ -6028,6 +6305,7 @@ impl Pipeline {
         let rejected = match proposed.as_ref().filter(|record| !record.is_synthetic()) {
             Some(record) if !record.house_rules.is_empty() => {
                 let spellings = self.repository.spellings().ok();
+                let view = record.view();
                 record
                     .house_rules
                     .iter()
@@ -6035,7 +6313,7 @@ impl Pipeline {
                         !spellings
                             .as_ref()
                             .is_some_and(|spellings| spellings.checked(rule))
-                            && !keeps_spelling(rule, source_extension, &filename)
+                            && !keeps_in(&view, rule, source_extension, &filename)
                     })
                     .cloned()
                     .collect()
@@ -6324,6 +6602,103 @@ impl Pipeline {
         Ok(removed)
     }
 
+    /// Clear queue: takes every document that is not filed out of Intern's
+    /// queue - waiting, being read, ready, in review, failed or canceled -
+    /// to start again from nothing. No file is deleted or moved. The
+    /// Completed view, with its history and undo, is left as it is.
+    ///
+    /// What is being read is stopped first, as Cancel stops it. A document
+    /// Intern renamed `NEEDS REVIEW - <name>` where it lies, because it could
+    /// not read it, gets its own name back in the journaled step Keep
+    /// original takes - or, failed or canceled, the one Clear completed
+    /// takes - before its row goes: a file left under that name with no row
+    /// behind it would be skipped by every scan for good. Some are kept
+    /// rather than cleared, and counted by why ([`ClearedQueue`]): one whose
+    /// earlier rename or copy did not finish (its files need checking, and
+    /// Remove asks to be confirmed for it), one being renamed or read that
+    /// cannot be stopped part-way, and one whose name could not be given
+    /// back.
+    ///
+    /// The documents stay in the Queue folder, and the intake watcher is not
+    /// to hand them over again as they are: the claim each was handed over by
+    /// is marked set aside, durably, so even a watcher started after this,
+    /// which never saw them in the queue, closes the claim as kept, as Keep
+    /// original's is (see `QueueStore::intake_claim_set_aside`). A document
+    /// that changes (saved again, renamed, put back under another name) is a
+    /// new document to the watcher and comes in as one; and adding the
+    /// folder's documents on purpose (Add files, or the Queue folder's own
+    /// add) takes them in again.
+    pub fn clear_queue(&self) -> PipelineResult<ClearedQueue> {
+        let mut outcome = ClearedQueue::default();
+        // What waits goes first, so the queue has nothing left to start on
+        // while the rest is stopped and cleared.
+        let waiting = self
+            .store
+            .list()?
+            .into_iter()
+            .filter(|item| item.status == QueueStatus::Queued)
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+        outcome.cleared += self.store.clear_items(&waiting)?;
+        let mut restored = std::collections::HashSet::new();
+        for item in self.store.list()? {
+            match item.status {
+                // Stopped as Cancel stops it; one that ended meanwhile is judged below.
+                QueueStatus::Extracting | QueueStatus::Analyzing => {
+                    let _ = self.cancel(item.id);
+                }
+                // Names back, as Keep original gives one: completed as kept,
+                // and cleared below with the rest.
+                QueueStatus::NeedsReview if self.store.current_review_mark(item.id)?.is_some() => {
+                    if unsettled_files(&item, self.unsettled_receipt(&item)?.as_ref()).is_none() {
+                        let _files = self.hold_file_ops();
+                        if let Ok(true) = self.files.restore_from_review(item.id) {
+                            restored.insert(item.id);
+                        }
+                    }
+                }
+                QueueStatus::Failed | QueueStatus::Canceled => self.unmark_if_marked(item.id),
+                _ => {}
+            }
+        }
+        let cleared = {
+            // Under the hold every rename runs under, so no filing starts on
+            // a row while it is being taken out.
+            let _files = self.hold_file_ops();
+            let mut clear = Vec::new();
+            for item in self.store.list()? {
+                match item.status {
+                    // Ready or in review a moment ago, kept by its own name:
+                    // done with the mark, and cleared. A filed document
+                    // stays filed.
+                    QueueStatus::Completed => {
+                        if restored.contains(&item.id) {
+                            clear.push(item.id);
+                        }
+                        continue;
+                    }
+                    QueueStatus::Applying | QueueStatus::Extracting | QueueStatus::Analyzing => {
+                        outcome.busy += 1;
+                        continue;
+                    }
+                    _ => {}
+                }
+                if unsettled_files(&item, self.unsettled_receipt(&item)?.as_ref()).is_some() {
+                    outcome.unsettled += 1;
+                } else if self.store.current_review_mark(item.id)?.is_some() {
+                    outcome.still_marked += 1;
+                } else {
+                    clear.push(item.id);
+                }
+            }
+            self.store.clear_items(&clear)?
+        };
+        outcome.cleared += cleared;
+        self.forget_removed();
+        self.events.queue_changed();
+        Ok(outcome)
+    }
+
     /// Drops what the extraction memo holds for every document no longer in
     /// the queue, as [`Self::remove`] does for one: Discard waiting and Clear
     /// history delete rows without naming them. An item id is never used
@@ -6448,6 +6823,13 @@ impl Pipeline {
     /// The item a claim handed over, with its proposal and receipts:
     /// `None` for a claim never recorded, `Some(None)` for one whose item is
     /// gone.
+    /// Whether the item a claim handed over was taken out by Clear queue,
+    /// which keeps the document out of the queue as it is (see
+    /// [`Self::clear_queue`]).
+    pub fn intake_claim_set_aside(&self, claim_key: &str) -> PipelineResult<bool> {
+        Ok(self.store.intake_claim_set_aside(claim_key)?)
+    }
+
     pub fn find_by_intake_claim(
         &self,
         claim_key: &str,
@@ -7828,6 +8210,63 @@ fn waits_at(record: &ProposalRecord, level: ReviewLevel) -> bool {
     !record.approved && !record.is_synthetic() && !readiness(&record.analysis, level).ready
 }
 
+/// Gives `analysis`, a reading of the file at `source_path`, a date from
+/// the file itself where the document gave none and nothing else about the
+/// date is in doubt, and says where it came from (see
+/// [`crate::fallback_date`]). The proposal takes the date and the engine's
+/// own name is composed again with it, as the engine would have composed
+/// it, so the name starts with it; `DATE_MISSING` stays among the reading's
+/// reasons, which is how a date so given is told from the document's own
+/// ([`supplied_date`]). A missing date beside any other doubt about the
+/// date - a date withheld as unsupported, a deadline, one end of a period -
+/// is not answered from the file: that reading waits as it always did, and
+/// so does one whose file gives no date either.
+fn date_from_the_file(
+    analysis: &mut DocumentAnalysis,
+    source_path: &Path,
+    extension: &str,
+    existing: &[String],
+) -> Option<DateSource> {
+    let reasons = &analysis.review_reasons;
+    let only_missing = reasons.contains(&ReviewReason::DateMissing)
+        && reasons.iter().all(|reason| {
+            *reason == ReviewReason::DateMissing || !reason.as_str().starts_with("DATE_")
+        });
+    let undated = analysis
+        .proposal
+        .document_date
+        .as_deref()
+        .is_none_or(|date| date.trim().is_empty());
+    if !only_missing || !undated {
+        return None;
+    }
+    let (date, source) = fallback_date::date_for(source_path)?;
+    analysis.proposal.document_date = Some(date);
+    let existing = existing.iter().map(String::as_str).collect::<Vec<_>>();
+    analysis.filename = compose_filename(&analysis.proposal, extension, &existing).value;
+    Some(source)
+}
+
+/// The description a record made of `analysis` keeps. A sentence the model
+/// wrote itself - a hosted model's reply, or any reading with no validated
+/// facts behind it - that says something the document does not is left
+/// out: it is not in the name and does not hold it, so it could otherwise
+/// be filed, and written to a library's Description column, unseen.
+/// The evidence pipeline's description is composed from validated facts
+/// only, a fact it could not find left out already, and is kept whole.
+fn kept_description(analysis: &DocumentAnalysis) -> String {
+    let model_wrote_it = analysis.facts.is_none();
+    if model_wrote_it
+        && analysis
+            .review_reasons
+            .contains(&ReviewReason::DescriptionUnsupported)
+    {
+        String::new()
+    } else {
+        analysis.description.clone()
+    }
+}
+
 /// What judging a waiting document again at another review level did (see
 /// [`Pipeline::review_level_changed`]).
 enum JudgedAgain {
@@ -8827,15 +9266,22 @@ mod party_choice_tests {
 mod as_filed_tests {
     use intern_engine::{
         Evidence, HouseRule, ModelFacts, ModelProposal, PartyFact, PartyRelation, RuleKind,
-        Support, ValidatedFacts, ValidatedParty, ValidatedProposal, compose_styled_filename,
+        Support, ValidatedFacts, ValidatedParty, ValidatedProposal,
     };
 
     use super::{ProposalRecord, layout_subfolder, shown_rules};
     use crate::settings::DestinationLayout;
 
+    /// The person's own organization, which every document here names
+    /// besides its parties: the name leads with it, and what follows it -
+    /// the subject these read - gives the parties as the engine's grammar
+    /// composes them, each of the document's parties among them.
+    const OWN: &str = "Wingtip Partners";
+
     /// A `document_type` whose proposal gives `parties` behind `relation`,
-    /// in a document validation found `found` in as well, named with the
-    /// party rules `rules` ("from -> to") applied, as Intern proposes it.
+    /// in a document validation found `found` and the person's own
+    /// organization ([`OWN`]) in as well, named with the party rules
+    /// `rules` ("from -> to") applied, as Intern proposes it.
     fn record(
         document_type: &str,
         (relation, parties): (PartyRelation, &[&str]),
@@ -8845,9 +9291,11 @@ mod as_filed_tests {
         let all = parties
             .iter()
             .chain(found)
+            .chain([&OWN])
             .map(|name| (*name).to_owned())
             .collect::<Vec<_>>();
         let mut record = ProposalRecord::synthetic(String::new(), String::new());
+        record.own_names = vec![OWN.to_owned()];
         record.analysis.proposal = ValidatedProposal {
             document_type: Some(document_type.into()),
             document_date: Some("2024-04-12".into()),
@@ -8888,9 +9336,7 @@ mod as_filed_tests {
             .map(|(from, to)| HouseRule::new(RuleKind::Party, *from, *to))
             .collect();
         record.manual = false;
-        record.filename =
-            compose_styled_filename(&record.styled_proposal(), &record.house_rules, "pdf", &[])
-                .value;
+        record.filename = record.composed_name("pdf");
         record
     }
 
@@ -8898,7 +9344,7 @@ mod as_filed_tests {
     /// the name `approved` (without date or extension) is approved for it.
     fn filed(record: &ProposalRecord, approved: &str) -> Vec<String> {
         record
-            .as_filed("pdf", &format!("2024-04-12 {approved}.pdf"))
+            .as_filed("pdf", &format!("2024-04-12 {OWN} - {approved}.pdf"))
             .parties
     }
 
@@ -9333,13 +9779,11 @@ mod as_filed_tests {
             agreement,
             "Employment Agreement - Jane Doe",
         )];
-        record.filename =
-            compose_styled_filename(&record.styled_proposal(), &record.house_rules, "pdf", &[])
-                .value;
+        record.filename = record.composed_name("pdf");
         record.rejected_rules = record.house_rules.clone();
         let filed = record.as_filed(
             "pdf",
-            "2024-04-12 Employment Agreement with John Smith re Probate.pdf",
+            &format!("2024-04-12 {OWN} - Employment Agreement with John Smith re Probate.pdf"),
         );
         if filed.document_type.as_deref() != Some(agreement) {
             failed.push(format!("type filed as {:?}", filed.document_type));
@@ -9372,12 +9816,13 @@ mod as_filed_tests {
             "Beacon Staffing LLC and Jane Doe",
         );
         let short = HouseRule::new(RuleKind::Party, "Acme Corporation", "Acme");
-        let proposal = &third.analysis.proposal;
+        let analysis = &third.analysis;
         let used = |fired: &[&HouseRule], checked: bool| {
             shown_rules(
-                proposal,
+                analysis,
                 fired.iter().map(|rule| (*rule).clone()).collect(),
-                &[],
+                &[OWN.to_owned()],
+                None,
                 "pdf",
                 |_| checked,
             )
@@ -9387,9 +9832,10 @@ mod as_filed_tests {
         assert_eq!(used(&[&short, &joined], false), vec![short.clone()]);
         assert_eq!(
             shown_rules(
-                proposal,
+                analysis,
                 vec![short.clone(), joined.clone()],
-                &[],
+                &[OWN.to_owned()],
+                None,
                 "pdf",
                 |rule| *rule == joined
             ),
@@ -9400,9 +9846,10 @@ mod as_filed_tests {
         let own = HouseRule::new(RuleKind::Party, "Acme Corporation", "ACME CORPORATION");
         assert_eq!(
             shown_rules(
-                proposal,
+                analysis,
                 vec![own.clone()],
                 &["Acme Corporation".into()],
+                None,
                 "pdf",
                 |_| false
             ),
@@ -9924,8 +10371,7 @@ mod hold_tests {
     use intern_core::QueueStatus;
     use intern_engine::{
         DocumentAnalysis, DocumentSource, Evidence, ExtractProgress, HouseRule, PartyRelation,
-        ProposalStatus, ReviewLevel, ReviewReason, RuleKind, ValidatedProposal,
-        compose_styled_filename, fingerprint,
+        ProposalStatus, ReviewLevel, ReviewReason, RuleKind, ValidatedProposal, fingerprint,
     };
     use rusqlite::{Connection, params};
 
@@ -10007,9 +10453,7 @@ mod hold_tests {
             evidence: Evidence::default(),
         };
         record.house_rules = vec![HouseRule::new(RuleKind::Party, "Acme Corporation", "Acme")];
-        record.filename =
-            compose_styled_filename(&record.styled_proposal(), &record.house_rules, "pdf", &[])
-                .value;
+        record.filename = record.composed_name("pdf");
         let connection = Connection::open(&database).unwrap();
         connection
             .execute(
@@ -10101,11 +10545,13 @@ mod hold_tests {
                 confidence: 0.9,
                 evidence: Evidence::default(),
             };
-            record.filename =
-                compose_styled_filename(&record.styled_proposal(), &[], "pdf", &[]).value;
+            record.filename = record.composed_name("pdf");
             record.analysis.filename.clone_from(&record.filename);
-            record.analysis.review_reasons = vec![ReviewReason::TypeInferred];
-            record.reasons = vec![ReviewReason::TypeInferred.as_str().to_owned()];
+            // A note at balanced that strict holds: a type the document
+            // does not confirm. (A type its title gave is minor, and
+            // strict files it too.)
+            record.analysis.review_reasons = vec![ReviewReason::TypeUnsupported];
+            record.reasons = vec![ReviewReason::TypeUnsupported.as_str().to_owned()];
             record.status = ProposalStatus::Ready;
             assert_eq!(record.analysis.status, ProposalStatus::NeedsReview);
             let connection = Connection::open(&database).unwrap();
@@ -10209,8 +10655,7 @@ mod hold_tests {
                 confidence: 0.9,
                 evidence: Evidence::default(),
             };
-            record.filename =
-                compose_styled_filename(&record.styled_proposal(), &[], "pdf", &[]).value;
+            record.filename = record.composed_name("pdf");
             record.analysis.filename.clone_from(&record.filename);
             record.analysis.status = ProposalStatus::Ready;
             record.analysis.text_fingerprint = Some(fingerprint::encode(FINGERPRINT));
@@ -10301,8 +10746,7 @@ mod hold_tests {
                 confidence: 0.9,
                 evidence: Evidence::default(),
             };
-            record.filename =
-                compose_styled_filename(&record.styled_proposal(), &[], "pdf", &[]).value;
+            record.filename = record.composed_name("pdf");
             let connection = Connection::open(&database).unwrap();
             connection
                 .execute(
@@ -10387,13 +10831,15 @@ mod hold_tests {
             document_type: Some("Employment Agreement".into()),
             document_date: Some("2024-04-12".into()),
             date_role: None,
-            parties: vec!["John Smith".into(), "Acme Corporation".into()],
+            // Led by the first organization until Settings names the
+            // second as the person's own.
+            parties: vec!["Beacon Staffing LLC".into(), "Acme Corporation".into()],
             party_relation: PartyRelation::Between,
             description: "An agreement.".into(),
             confidence: 0.9,
             evidence: Evidence::default(),
         };
-        record.filename = compose_styled_filename(&record.styled_proposal(), &[], "pdf", &[]).value;
+        record.filename = record.composed_name("pdf");
         let filing = record.filename.clone();
         let connection = Connection::open(&database).unwrap();
         connection

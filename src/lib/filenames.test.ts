@@ -75,7 +75,7 @@ describe('validateFilename', () => {
     expect(validateFilename('2024-03-01 Lease.PDF', 'pdf')).toBeUndefined();
     expect(validateFilename('2024-03-01 Lease.docx', 'pdf')).toBe('The filename must end with \u201c.pdf\u201d, the file\'s own extension.');
     expect(validateFilename('2024-03-01 Lease', 'pdf')).toMatch(/must end with/);
-    expect(validateFilename('2024-03-01 Lease.pdf', undefined)).toBe('This file has no extension, so Intern cannot rename it.');
+    expect(validateFilename('2024-03-01 Lease.pdf', undefined)).toBe('This file has no extension, so ATLAS cannot rename it.');
   });
 
   it('reads an extension the way Path::extension does', () => {

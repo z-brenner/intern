@@ -47,7 +47,7 @@ describe('describeSharePointProblem', () => {
     expect(describeSharePointProblem({ code: 'SHAREPOINT_SYNC_PENDING' }).getOneDrive).toBeUndefined();
   });
 
-  it('asks for OneDrive and Intern to use the same work account, offering a different one only as a secondary choice', () => {
+  it('asks for OneDrive and ATLAS to use the same work account, offering a different one only as a secondary choice', () => {
     const problem = describeSharePointProblem({ code: 'ONEDRIVE_ACCOUNT_MISMATCH' });
     expect(problem.action).toMatch(/^Sign in to OneDrive with the same work account/);
     expect(problem.switchAccount).toBeUndefined();

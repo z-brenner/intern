@@ -21,7 +21,7 @@ describe('queue grid', () => {
     expect(cellText(rows[0], 'description')).toBe('A lease.');
     // The same few words the Check cell shows: the reason about a part of the
     // name first, the rest counted.
-    expect(cellText(rows[0], 'check')).toBe('Date could be day- or month-first (+1 more)');
+    expect(cellText(rows[0], 'check')).toBe('Date order unclear (+1 more)');
     expect(cellText(rows[1], 'check')).toBe('All checks passed');
     // Nothing yet is empty, not an em dash.
     expect(['proposed', 'description', 'check'].map((column) => cellText(rows[2], column as 'proposed'))).toEqual(['', '', '']);
@@ -69,7 +69,7 @@ describe('queue grid', () => {
     const table = tableBlock(rows);
     expect(toTsv(table)).toBe([
       'Original filename\tProposed filename\tDescription\tCheck',
-      'Scan 0001.pdf\t2024-01-02 Lease.pdf\tA lease.\tDate could be day- or month-first (+1 more)',
+      'Scan 0001.pdf\t2024-01-02 Lease.pdf\tA lease.\tDate order unclear (+1 more)',
       'Scan 0002.pdf\t2024-02-03 Invoice.pdf\tAn invoice.\tAll checks passed',
       'Scan 0003.pdf\t\t\t',
     ].join('\r\n'));

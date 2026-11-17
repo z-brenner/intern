@@ -238,6 +238,18 @@ describe('TauriBridge', () => {
     ]);
   });
 
+  // Clear queue says what it did; a count the backend leaves out is none,
+  // so nothing is said to have been kept that was not.
+  it('clears the queue with queue_clear and reads what it did', async () => {
+    const fake = fakeTransport({ queue_clear: { cleared: 12, unsettled: 1, busy: 0, stillMarked: 2 } });
+    const bridge = new TauriBridge(fake.transport);
+    expect(await bridge.clearQueue()).toEqual({ cleared: 12, unsettled: 1, busy: 0, stillMarked: 2 });
+    expect(fake.calls).toEqual([{ command: 'queue_clear', args: undefined }]);
+
+    const sparse = new TauriBridge(fakeTransport({ queue_clear: { cleared: 3 } }).transport);
+    expect(await sparse.clearQueue()).toEqual({ cleared: 3, unsettled: 0, busy: 0, stillMarked: 0 });
+  });
+
   // The review menu, Open and Show in folder name an item by id and nothing
   // else; which file that is stays the backend's decision.
   it('reanalyze_open_reveal_invoke_expected_commands', async () => {
@@ -257,6 +269,34 @@ describe('TauriBridge', () => {
       { command: 'queue_remove', args: { id: '8', confirmed: true } },
       { command: 'queue_remove', args: { id: '9', confirmed: false } },
     ]);
+  });
+
+  // The document viewer reads a document by its item's id too: its file as
+  // raw bytes, which arrive as an ArrayBuffer, and the text Intern read.
+  it('reads a document for the viewer by its id, as bytes and as the pages ATLAS read', async () => {
+    const pdf = new TextEncoder().encode('%PDF-1.7');
+    const fake = fakeTransport({
+      document_file: pdf.buffer,
+      document_text: { pages: [{ number: 1, text: 'INVOICE INV-3301', ocr: false }, { number: 2, text: 'Total due', ocr: true }], readNow: true, changed: false },
+    });
+    const bridge = new TauriBridge(fake.transport);
+
+    const bytes = await bridge.documentFile('7');
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(new TextDecoder().decode(bytes)).toBe('%PDF-1.7');
+    expect(await bridge.documentText('7')).toEqual({
+      pages: [{ number: 1, text: 'INVOICE INV-3301', ocr: false }, { number: 2, text: 'Total due', ocr: true }],
+      readNow: true,
+      changed: false,
+    });
+    expect(fake.calls).toEqual([
+      { command: 'document_file', args: { id: '7' } },
+      { command: 'document_text', args: { id: '7' } },
+    ]);
+    // A transport that hands the bytes over as numbers, and a reply with fields missing, read the same way.
+    const plain = new TauriBridge(fakeTransport({ document_file: [37, 80], document_text: { pages: [{ number: 1 }] } }).transport);
+    expect([...await plain.documentFile('8')]).toEqual([37, 80]);
+    expect(await plain.documentText('8')).toEqual({ pages: [{ number: 1, text: '', ocr: false }], readNow: false, changed: false });
   });
 
   // The humanized reason cannot say which review items the backend will
@@ -919,7 +959,7 @@ describe('TauriBridge', () => {
 
   // Installing closes Intern on Windows. What must happen first gets its turn
   // after the download, however long that took, and can stop the install.
-  it('downloads, runs what must happen before Intern closes, and only then installs', async () => {
+  it('downloads, runs what must happen before ATLAS closes, and only then installs', async () => {
     const steps = updateDownloading([{ event: 'Started', data: { contentLength: 10 } }, { event: 'Finished' }]);
     const bridge = new TauriBridge(fakeTransport().transport);
     await bridge.checkForUpdate();

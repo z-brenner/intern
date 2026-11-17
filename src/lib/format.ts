@@ -1,6 +1,26 @@
 import type { ProcessingStage, QueueStatus } from '../types';
 
-export const confidence = (value?: number) => value === undefined ? '—' : `${Math.round(value * 100)}%`;
+/**
+ * A confidence figure as a percentage. The figure is how sure Intern is of
+ * the name (`name_confidence` in the engine's review_level.rs): never the
+ * model's own rating, which the local model does not give and used to read
+ * 100% beside a document in review. One that is missing, or not a number,
+ * is a dash: not measured is not zero.
+ */
+export const confidence = (value?: number) => value === undefined || !Number.isFinite(value) ? '—' : `${Math.round(value * 100)}%`;
+
+/**
+ * The tone a confidence figure is shown in: its row's status, never the
+ * figure's size. A ready or renamed row's is green and a row in review's
+ * amber, whatever the number, so the color can never say ready of a
+ * document that waits, nor the reverse. Any other row's takes the color
+ * around it.
+ */
+export function confidenceTone(status: QueueStatus): 'ready' | 'review' | undefined {
+  if (status === 'ready' || status === 'completed') return 'ready';
+  if (status === 'review') return 'review';
+  return undefined;
+}
 
 const STAGE_LABELS: Record<ProcessingStage, string> = {
   reading: 'Reading document…',

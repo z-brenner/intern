@@ -1,7 +1,9 @@
-import { Ban, CalendarPlus, CircleAlert, ChevronRight, ClipboardCopy, Ellipsis, ExternalLink, FileCheck2, FileText, FolderOpen, Info, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
+import { Ban, CalendarPlus, CircleAlert, ChevronRight, ClipboardCopy, Ellipsis, ExternalLink, Eye, FileCheck2, FileText, FolderOpen, Info, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
 import { useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 import type { FocusEvent, KeyboardEvent, MouseEvent, Ref } from 'react';
 import { ConfidenceMeter } from './ConfidenceMeter';
+import { DocumentViewer } from './DocumentViewer';
+import type { OpenPdf } from './DocumentViewer';
 import { FileKindIcon } from './FileKindIcon';
 import { Icon } from './Icon';
 import { StatusCell } from './StatusCell';
@@ -10,21 +12,16 @@ import { isUnreadable, itemActions, keptOriginal, withoutReviewPrefix } from '..
 import { proposalOf } from '../features/review/drafts';
 import type { KeptText, ReviewDraft, ReviewDrafts } from '../features/review/drafts';
 import { carriedNotes, itemFlaggedFields, itemNote, itemReasonCodes, nameParts, partyGiven, withParty } from '../features/queue/check';
+import { humanizeReason, noteLabel, noteWhy, reasonLabel, reasonWhy } from '../lib/reasons';
 import type { ReasonField } from '../lib/reasons';
+import { ReasonChips } from '../features/review/ReasonChips';
+import type { Reason } from '../features/review/ReasonChips';
 import type { ReviewInspectorHandle } from '../features/review/useReviewShortcuts';
+import type { DocumentSource } from '../lib/bridge';
 import { filenameExtension, joinFilename, leadingDate, splitFilename, validateFilename, withLeadingDate } from '../lib/filenames';
 import type { ModelReading, QueueItem } from '../types';
 import { afterAPress } from '../lib/lastInput';
 import { firstPress } from '../lib/aimedPress';
-
-/**
- * Below this the model's own figure already says it was unsure, and is by
- * itself why the engine sends a reading to review (READY_CONFIDENCE in
- * validate.rs, which a test holds this to). At or above it, a reading
- * flagged as unsure was flagged by what Intern measured, and the figure
- * needs a word of explanation.
- */
-export const SELF_RATED_UNSURE = 0.6;
 
 /** Where "Analysis details" being open or closed is remembered, between documents and between launches. */
 export const ANALYSIS_DETAILS_KEY = 'intern.analysisDetails';
@@ -50,7 +47,7 @@ export const DATE_REQUIRED_MESSAGE = 'Every rename needs a date. Start the filen
 function stemProblem(stem: string, extension: string | undefined, sourceExtension: string | undefined): string | undefined {
   if (!stem.trim()) return undefined;
   if (extension !== undefined && stem.trim().toLowerCase().endsWith(`.${extension.toLowerCase()}`)) {
-    return `Leave \u201c.${extension}\u201d off: Intern adds the extension itself.`;
+    return `Leave \u201c.${extension}\u201d off: ATLAS adds the extension itself.`;
   }
   return validateFilename(joinFilename(stem, extension), sourceExtension);
 }
@@ -106,6 +103,13 @@ interface Props {
   onOpen(): void;
   onReveal(): void;
   /**
+   * Where the document viewer reads the document from: the bridge. Without
+   * one the panel offers no View document, only Open and Show in folder.
+   */
+  preview?: DocumentSource;
+  /** How the viewer opens a PDF; pdf.js unless a test says otherwise. */
+  openPdf?: OpenPdf;
+  /**
    * Where what is typed and not filed is kept: the window's, so that it
    * outlives the panel (see `ReviewDrafts`). Without one the panel keeps
    * its own, which goes with it.
@@ -120,7 +124,7 @@ interface Props {
   onDiscardEarlier?(kept: KeptText): void;
 }
 
-export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext, onClose, onApprove, onKeep, onCancel, onRetry, onReanalyze, onRemove, onUndo, onOpen, onReveal, drafts, earlier, onDiscardEarlier }: Props) {
+export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext, onClose, onApprove, onKeep, onCancel, onRetry, onReanalyze, onRemove, onUndo, onOpen, onReveal, preview, openPdf, drafts, earlier, onDiscardEarlier }: Props) {
   // Exactly what the backend accepts for this item. Retry on an ordinary
   // review item, and nothing at all for a ready or waiting one, were the
   // two ways this panel used to be wrong (FRONTEND_UX-3, FRONTEND_UX-4).
@@ -177,7 +181,15 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   const [error, setError] = useState('');
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
-  // "Analysis details" - the evidence, the model's own figure, who read it -
+  // The document viewer, by the document it was opened for: it shows only
+  // while the panel shows that document, so review moving on closes it.
+  // Offered wherever Open is - the backend reads the document under Open's
+  // rules - and where the window has a bridge to read it through.
+  const [viewing, setViewing] = useState<string>();
+  const canView = preview !== undefined && actions.open;
+  const viewerOpen = canView && viewing === item.id;
+  const openViewer = () => { if (canView) setViewing(item.id); };
+  // "Analysis details" - the evidence, the confidence, who read it -
   // stays as the person left it. It used to close itself for every document,
   // so checking each name against its evidence cost Tab, Tab, Enter (or a
   // click) per document, on a queue where nearly every document is reviewed.
@@ -442,6 +454,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     approve: () => { if (actions.approve && !busy && !confirmingRemove) approve(); },
     keep: () => { if (actions.keep && !busy && !confirmingRemove) onKeep(); },
     requestRemove: () => { if (remove && !busy) { setMoreOpen(false); setConfirmingRemove(true); } },
+    view: () => { if (canView && !confirmingRemove) { setMoreOpen(false); openViewer(); } },
     focus: (target) => {
       if (target === 'filename' && filenameRef.current) filenameRef.current.focus();
       else headingRef.current?.focus();
@@ -477,11 +490,6 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // not waiting, so said under "Note" below as notes and not as a review's
   // instructions.
   const carried = carriedNotes(item);
-  // In review because the model was unsure (LOW_CONFIDENCE) while the model's
-  // own figure, shown under Analysis details, says it was sure. The same
-  // two can stand side by side on a document with that as its note.
-  const unsureCodes = item.status === 'review' ? itemReasonCodes(item) : note?.codes ?? (carried ? item.reasonCodes ?? [] : []);
-  const sureByItsOwnFigure = item.confidence !== undefined && item.confidence >= SELF_RATED_UNSURE && unsureCodes.includes('LOW_CONFIDENCE');
   /*
     The Parties row is another matter whoever read it: what the backend
     sends there is the names the proposal settled on, not the lines that
@@ -493,6 +501,15 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // The parts of the name being edited that the review is about, as they now read.
   const nameFlags = editable ? flaggedNameParts(joinFilename(stem, extension), flagged) : [];
   const reviewNote = item.reason && (item.status === 'review' || item.status === 'failed');
+  // Why it waits, or why it failed, a few words a code: chips, each with its
+  // sentence one press away. The words that came are said as well when they
+  // say more than the codes do - free text such as "Duplicate of ...", or a
+  // reason with a code this build has no words for, which is shown as it
+  // came rather than dressed up.
+  const codes = itemReasonCodes(item);
+  const chips: Reason[] = reviewNote ? codes.map((code) => ({ code, label: reasonLabel(code), why: reasonWhy(code) })) : [];
+  const reasonText = reviewNote && (!codes.length || item.reason !== humanizeReason(codes.join(', '))) ? item.reason : undefined;
+  const noteChips: Reason[] = note?.codes.map((code) => ({ code, label: noteLabel(code), why: noteWhy(code) })) ?? [];
   return <aside ref={inspectorRef} id={id} className="inspector" aria-label="Review item" role={drawer ? 'dialog' : 'complementary'} aria-modal={drawer || undefined} onKeyDown={onKeyDown} onFocus={keepFocusInSight}>
     {/* A filed document's name is no longer its "current" one; it said so anyway (FRONTEND_UX-8). */}
     {/* Focusable so selecting a row can bring a keyboard user here, past the rest of the queue. */}
@@ -503,13 +520,36 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       {onNext && <button type="button" className="link-button" onClick={onNext} aria-keyshortcuts="Alt+N" title="Leave this one for now and go to the next still to decide (Alt+N)">Next undecided<Icon icon={ChevronRight} /></button>}
     </div>}
     {/*
-      What to check comes first. It used to be the last thing in the panel,
-      under the name, the description and the evidence, so for the documents
-      that most needed it the reason was below the fold.
+      The document first, and a way to read it without leaving Intern: the
+      reviewer is asked to name a document, and used to have to open it in
+      another program to check the name against it. View document shows it
+      here (DocumentViewer); Open and Show in folder, quieter, still hand it
+      to the system - before filing the file as it arrived, after it the
+      filed copy.
+    */}
+    <div className="source-file">
+      <p className="field-label">{completed ? 'Original name' : 'Current name'}</p>
+      <p className="selected-file"><FileKindIcon filename={item.originalFilename} />{item.originalFilename}</p>
+      {item.status === 'ready' && item.approved && <p className="filed-outcome">Approved. It will be renamed when the queue is free.</p>}
+      {completed && (keptOriginal(item)
+        ? <p className="filed-outcome">Kept its original name</p>
+        : filedAs && <p className="filed-outcome">Renamed to <strong>{filedAs}</strong></p>)}
+      <StatusCell item={item} />
+      {(canView || actions.open || actions.reveal) && <div className="document-actions" role="group" aria-label="Document">
+        {canView && <button type="button" className="view-document" onClick={openViewer} aria-keyshortcuts="Alt+V V"><Icon icon={Eye} />View document<Shortcut keys="Alt+V" /></button>}
+        {actions.open && <button type="button" className="quiet-action" title="Open the document in the program your computer uses for it" onClick={onOpen}><Icon icon={ExternalLink} />Open</button>}
+        {actions.reveal && <button type="button" className="quiet-action" onClick={onReveal}><Icon icon={FolderOpen} />Show in folder</button>}
+      </div>}
+    </div>
+    {/*
+      What to check comes before the name it is about. It used to be the last
+      thing in the panel, and then a paragraph or more of sentences at the
+      top of it; now it is a few words a reason, each with its "why".
     */}
     {reviewNote && <section className={`check-first${item.status === 'failed' ? ' failed' : ''}`}>
-      <h3><Icon icon={CircleAlert} />{item.status === 'failed' ? 'Failure details' : 'What to check'}</h3>
-      <p>{item.reason}</p>
+      <h3><Icon icon={CircleAlert} />{item.status === 'failed' ? 'Why it failed' : 'What to check'}</h3>
+      {chips.length > 0 && <ReasonChips key={item.id} reasons={chips} label={item.status === 'failed' ? 'Why it failed' : 'What to check'} />}
+      {reasonText && <p className="reason-text">{reasonText}</p>}
       {/*
         The sentence says "a document that was filed already"; this says
         which one, so the person can open it and compare rather than take
@@ -524,29 +564,11 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       note is there to be seen all the same - at this level a document can
       be renamed with nobody having looked at it.
     */}
-    {note && <section className="check-first noted" aria-label="Intern's note">
+    {note && <section className="check-first noted" aria-label="ATLAS's note">
       <h3><Icon icon={Info} />{completed ? 'Renamed with a note' : 'Ready with a note'}</h3>
-      <p>{completed ? RENAMED_NOTE_LEAD : READY_NOTE_LEAD}</p>
-      <p>{note.text}</p>
+      <p className="note-lead">{completed ? RENAMED_NOTE_LEAD : READY_NOTE_LEAD}</p>
+      {noteChips.length > 0 ? <ReasonChips key={item.id} reasons={noteChips} label="ATLAS noted" /> : <p className="reason-text">{note.text}</p>}
     </section>}
-    <div className="source-file">
-      <p className="field-label">{completed ? 'Original name' : 'Current name'}</p>
-      <p className="selected-file"><FileKindIcon filename={item.originalFilename} />{item.originalFilename}</p>
-      {item.status === 'ready' && item.approved && <p className="filed-outcome">Approved. It will be renamed when the queue is free.</p>}
-      {completed && (keptOriginal(item)
-        ? <p className="filed-outcome">Kept its original name</p>
-        : filedAs && <p className="filed-outcome">Renamed to <strong>{filedAs}</strong></p>)}
-      <StatusCell item={item} />
-      {/*
-        The reviewer is asked to name a document they could not open from
-        here, and once it was filed they could not find it. Before filing
-        these reach the file as it arrived; after, the filed copy.
-      */}
-      {(actions.open || actions.reveal) && <div className="document-actions" role="group" aria-label="Document">
-        {actions.open && <button type="button" onClick={onOpen}><Icon icon={ExternalLink} />Open</button>}
-        {actions.reveal && <button type="button" onClick={onReveal}><Icon icon={FolderOpen} />Show in folder</button>}
-      </div>}
-    </div>
     {/*
       What was typed for this document before it changed by itself: read
       again, filed from somewhere else, or given another proposal where it
@@ -565,7 +587,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
           Rename all ready leaves for the person is exactly what shows this.
           In the heading's line, so nothing moves when it comes and goes.
         */}
-        {draft.edited && <button type="button" data-acts className="link-button" disabled={busy} title="Puts the name and the description back as they were before you typed. What you typed for this document is dropped." onClick={backToProposal}>{unreadable ? 'Back to the name it came with' : "Back to Intern's proposal"}</button>}
+        {draft.edited && <button type="button" data-acts className="link-button" disabled={busy} title="Puts the name and the description back as they were before you typed. What you typed for this document is dropped." onClick={backToProposal}>{unreadable ? 'Back to the name it came with' : "Back to ATLAS's proposal"}</button>}
       </div>
       <label className="filename-label">Filename
         <span className="filename-field">
@@ -584,31 +606,31 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       {/*
         A name that differs from the evidence under it looks like a mistake
         unless the reason is on screen: the reviewer's own spelling, learned
-        from their edits, was applied. Said here, beside the name, with the
-        document's words kept in the evidence below. A spelling ending in
-        its own period ("Inc.") ends the list without a second one. Settings
-        forgets a spelling; it has no way to change one, so the note does
-        not say it has.
+        from their edits, was applied. Said here, beside the name, in a line:
+        the document's word and the spelling used, with the document's words
+        kept in the evidence below. Where to forget one is in the tooltip.
+        Settings forgets a spelling; it has no way to change one, so the line
+        does not say it has.
       */}
-      {item.houseRules && item.houseRules.length > 0 && <p className="check-hint house-style-hint" role="note" aria-label="Learned spellings applied">
-        Uses your spelling: {item.houseRules.map((rule, index) => <span key={`${rule.kind}-${rule.from}`}>{index > 0 ? '; ' : ''}<q>{rule.from}</q> written as <strong>{rule.to}</strong></span>)}{item.houseRules[item.houseRules.length - 1].to.trimEnd().endsWith('.') ? '' : '.'} {item.houseRules.length === 1 ? 'Forget it' : 'Forget any of them'} in Settings, under Learned spellings.
+      {item.houseRules && item.houseRules.length > 0 && <p className="check-hint house-style-hint" role="note" aria-label="Learned spellings applied" title={`Forget ${item.houseRules.length === 1 ? 'it' : 'any of them'} in Settings, under Learned spellings.`}>
+        Uses your spelling: {item.houseRules.map((rule, index) => <span key={`${rule.kind}-${rule.from}`}>{index > 0 ? '; ' : ''}<q>{rule.from}</q> as <strong>{rule.to}</strong></span>)}
       </p>}
       {/*
         A name held for a spelling nobody has checked says why it waits, and
-        where "Use on its own" is: in Settings only. The review window asks
-        no question and checks no spelling - a word typed into a question
-        here reached review's own keys, which move on and file names.
+        where "Always use" is: in Settings only. The review window asks no
+        question and checks no spelling - a word typed into a question here
+        reached review's own keys, which move on and file names.
       */}
       {heldForSpelling && item.houseRules && item.houseRules.length > 0 && <p className="check-hint held-spelling-hint" role="note" aria-label="Why the name waits">
-        This name waits for you because Intern has not been told to use {item.houseRules.length === 1 ? 'this spelling' : 'every one of these spellings'} on its own: <q>Use on its own</q> is in Settings, under Learned spellings.
+        This name waits for you because ATLAS has not been told to use {item.houseRules.length === 1 ? 'this spelling' : 'every one of these spellings'} on its own: <q>Always use</q> is in Settings, under Learned spellings.
       </p>}
       {/*
         The same for a party the evidence names and the name does not: the
         person's own organization, left out so the name says who the
         document is with.
       */}
-      {omitted.length > 0 && <p className="check-hint own-names-hint" role="note" aria-label="Filed by the other side">
-        Filed by the other side: {omitted.map((name, index) => <span key={`${index}-${name}`}>{index === 0 ? '' : index === omitted.length - 1 ? ' and ' : ', '}<q>{name}</q></span>)} {omitted.length === 1 ? 'is your organization, so it is' : 'are your organization, so they are'} left out of the name. Change this under Settings.
+      {omitted.length > 0 && <p className="check-hint own-names-hint" role="note" aria-label="Filed by the other side" title="Your organization's names are in Settings.">
+        Left out as your organization: {omitted.map((name, index) => <span key={`${index}-${name}`}>{index === 0 ? '' : index === omitted.length - 1 ? ' and ' : ', '}<q>{name}</q></span>)}
       </p>}
       {/*
         The gate above would otherwise be a dead end for the commonest review:
@@ -632,7 +654,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
         </div>
       </div>}
       {suggestedDate && <div className="suggestion" role="group" aria-label="Suggested date">
-        <p><Icon icon={CalendarPlus} />Suggested date: <strong>{suggestedDate}</strong> (unverified). Check it against the document before using it.</p>
+        <p><Icon icon={CalendarPlus} />Suggested date <strong>{suggestedDate}</strong>, not found in the document.</p>
         <div className="suggestion-actions">
           <button type="button" data-acts disabled={busy} onClick={useSuggestedDate}>Use this date</button>
           <button type="button" data-acts className="primary" disabled={busy} onClick={decides(acceptSuggestedDate)}>Use date &amp; rename</button>
@@ -660,23 +682,12 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       onToggle={(event) => { if (event.currentTarget.open !== analysisOpen) setAnalysisOpen(event.currentTarget.open); }}>
       <summary onClick={(event) => { event.preventDefault(); rememberAnalysis(!analysisOpen); }}>Analysis details</summary>
       {/*
-        The model's figure for its own reading. It no longer has a column:
-        a small model overstates it, and what decides review is the checks
-        above. Kept here for anyone who wants it, and named as the model's
-        own so it is not read as Intern's.
+        The reading's confidence, once, here: one figure that agrees with
+        the document's status, so it needs no word of explanation beside it
+        (the backend's; ConfidenceMeter draws it). The checks above are what
+        decide review.
       */}
-      {item.confidence !== undefined && <p className={`confidence-readout confidence ${item.status}`}><span className="field-label">Model's own confidence</span><ConfidenceMeter value={item.confidence} status={item.status} variant="panel" /></p>}
-      {/*
-        "The model was unsure of its reading" above, and "100%" here: both
-        true, and a contradiction unless the panel says why. The review
-        reason comes from what Intern measured as the model wrote the date
-        and the parties, or from this figure when it is low - and then the
-        two agree and there is nothing to explain. The line says only that
-        they are different measures, not which one flagged this reading.
-      */}
-      {sureByItsOwnFigure && <p className="check-hint confidence-note" role="note" aria-label="About the model's own confidence">
-        This is the model's rating of its whole answer, and small models rate themselves high. Intern also measures how sure the model was of each word of the date and the parties as it wrote them, so a reading can be flagged as unsure while this figure is high.
-      </p>}
+      {item.confidence !== undefined && <p className={`confidence-readout confidence ${item.status}`}><span className="field-label">Confidence</span><ConfidenceMeter value={item.confidence} status={item.status} variant="panel" /></p>}
       {/*
         Which local model read it, in a quiet line: worth knowing when two
         models can, and the reason a reading may change by itself - one the
@@ -714,8 +725,8 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
         if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelRemove(); }
       }}>
         <p>{remove.resolvedFiles
-          ? 'This rename stopped part-way, so its files may need putting right by hand. Remove it only once you have: Intern will not touch them again.'
-          : <>Remove <q>{item.originalFilename}</q> from the queue? The file itself stays where it is{isUnreadable(item) ? ', under this name, and Intern leaves it alone' : ''}.</>}</p>
+          ? 'This rename stopped part-way, so its files may need putting right by hand. Remove it only once you have: ATLAS will not touch them again.'
+          : <>Remove <q>{item.originalFilename}</q> from the queue? The file itself stays where it is{isUnreadable(item) ? ', under this name, and ATLAS leaves it alone' : ''}.</>}</p>
         <button ref={confirmRef} type="button" data-acts className="primary" disabled={busy} onClick={decides(() => { setConfirmingRemove(false); onRemove(remove.resolvedFiles); })}>{remove.resolvedFiles ? 'I have resolved the files myself' : remove.label}</button>
         <button type="button" disabled={busy} onClick={cancelRemove}>Cancel</button>
       </div> : <>
@@ -738,6 +749,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
         {actions.undo && <button type="button" data-acts disabled={busy} onClick={onUndo}><Icon icon={RotateCcw} />Undo</button>}
       </>}
     </div>
+    {viewerOpen && <DocumentViewer item={item} source={preview} onClose={() => setViewing(undefined)} onOpen={actions.open ? onOpen : undefined} openPdf={openPdf} />}
   </aside>;
 }
 
@@ -756,8 +768,8 @@ export function readByLine(reading: ModelReading, pending: boolean): string {
  * only that the note was there when it was renamed, not who renamed it:
  * the row does not say.
  */
-const READY_NOTE_LEAD = 'This document is ready: nothing holds it. Intern noted this about its reading.';
-const RENAMED_NOTE_LEAD = 'Intern had this noted about its reading when the document was renamed.';
+const READY_NOTE_LEAD = 'Nothing holds it. ATLAS only noted this about its reading.';
+const RENAMED_NOTE_LEAD = 'ATLAS noted this about its reading when it was renamed.';
 
 const FIELD_WORDS: Record<ReasonField, string> = { date: 'date', type: 'document type', parties: 'parties', description: 'description' };
 
@@ -770,7 +782,7 @@ function evidenceLead(fields: readonly ReasonField[]): string {
   const names = fields.includes('parties');
   return [
     lines.length > 0 ? `Lines from the document behind the ${listOf(lines)}.` : '',
-    names ? `The parties are the names Intern read${lines.length > 0 ? ', not lines from the document' : '. They are not lines from the document'}.` : '',
+    names ? `The parties are the names ATLAS read${lines.length > 0 ? ', not lines from the document' : '. They are not lines from the document'}.` : '',
   ].filter(Boolean).join(' ');
 }
 

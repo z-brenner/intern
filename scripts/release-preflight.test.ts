@@ -40,7 +40,7 @@ async function releaseCommit(): Promise<string> {
   await writeFile(join(root, '.github', 'workflows', 'release.yml'), `name: Release v${version}\n\non:\n  workflow_dispatch:\n`);
   await mkdir(join(root, 'scripts'), { recursive: true });
   await writeFile(join(root, 'scripts', 'validate-release-evidence.mjs'), evidenceValidator(version));
-  await writeFile(join(root, 'docs', 'releases', `v${version}.md`), `# Intern v${version}\n\nThe installer is not Authenticode signed.\n`);
+  await writeFile(join(root, 'docs', 'releases', `v${version}.md`), `# ATLAS v${version}\n\nThe installer is not Authenticode signed.\n`);
   await writeFile(join(root, 'docs', 'qa', 'latest-implementation.png'), screenshot);
   git('add', '-A');
   git('commit', '-qm', 'release commit');
@@ -146,19 +146,25 @@ describe('release preflight', () => {
     expect(preflightProblems(missing)).toEqual([`docs/releases/v${version}.md is missing; it is published as the release notes.`]);
 
     const quiet = await releaseCommit();
-    await writeFile(join(quiet, 'docs', 'releases', `v${version}.md`), `# Intern v${version}\n\nSigned and sealed.\n`);
+    await writeFile(join(quiet, 'docs', 'releases', `v${version}.md`), `# ATLAS v${version}\n\nSigned and sealed.\n`);
     expect(preflightProblems(quiet)).toEqual([expect.stringContaining('not Authenticode signed')]);
 
     const untitled = await releaseCommit();
     await writeFile(join(untitled, 'docs', 'releases', `v${version}.md`), 'The installer is not Authenticode signed.\n');
-    expect(preflightProblems(untitled)).toEqual([expect.stringContaining(`"# Intern v${version}"`)]);
+    expect(preflightProblems(untitled)).toEqual([expect.stringContaining(`"# ATLAS v${version}"`)]);
+
+    // The app was called Intern before alpha.20; notes under the old name are
+    // for a release that has been.
+    const renamed = await releaseCommit();
+    await writeFile(join(renamed, 'docs', 'releases', `v${version}.md`), `# Intern v${version}\n\nThe installer is not Authenticode signed.\n`);
+    expect(preflightProblems(renamed)).toEqual([expect.stringContaining(`"# ATLAS v${version}"`)]);
 
     const unfinished = await releaseCommit();
-    await writeFile(join(unfinished, 'docs', 'releases', `v${version}.md`), `# Intern v${version}\n\nFaster on Windows: PENDING-WINDOWS-SPEED.\n\nThe installer is not Authenticode signed.\n`);
+    await writeFile(join(unfinished, 'docs', 'releases', `v${version}.md`), `# ATLAS v${version}\n\nFaster on Windows: PENDING-WINDOWS-SPEED.\n\nThe installer is not Authenticode signed.\n`);
     expect(preflightProblems(unfinished)).toEqual([expect.stringContaining('still holds a placeholder (PENDING)')]);
 
     const prose = await releaseCommit();
-    await writeFile(join(prose, 'docs', 'releases', `v${version}.md`), `# Intern v${version}\n\nA reading still pending is read again; a TODAY() cell is not a date.\n\nThe installer is not Authenticode signed.\n`);
+    await writeFile(join(prose, 'docs', 'releases', `v${version}.md`), `# ATLAS v${version}\n\nA reading still pending is read again; a TODAY() cell is not a date.\n\nThe installer is not Authenticode signed.\n`);
     expect(preflightProblems(prose)).toEqual([]);
   });
 

@@ -26,9 +26,9 @@ describe('Settings: Descriptions for SharePoint', () => {
 
     expect(screen.getByRole('heading', { name: 'Descriptions for SharePoint' })).toBeVisible();
     expect(screen.getByText(/one-sentence description of each filed document in your SharePoint library's Description column/)).toBeVisible();
-    expect(screen.getByText(/Intern itself sends nothing/)).toBeVisible();
+    expect(screen.getByText(/ATLAS itself sends nothing/)).toBeVisible();
     const status = await screen.findByRole('status', { name: 'Description records status' });
-    expect(status).toHaveTextContent('On · writing to C:\\Filed\\.intern\\descriptions · 3 records written since Intern started · Last recorded:');
+    expect(status).toHaveTextContent('On · writing to C:\\Filed\\.intern\\descriptions · 3 records written since ATLAS started · Last recorded:');
     expect(status).toHaveTextContent(new Date(1775001600 * 1000).toLocaleString());
   });
 
@@ -55,7 +55,7 @@ describe('Settings: Descriptions for SharePoint', () => {
     await waitFor(() => expect(push).toBeDefined());
 
     act(() => push!({ ...on, recordedThisSession: 4 }));
-    expect(status).toHaveTextContent('4 records written since Intern started');
+    expect(status).toHaveTextContent('4 records written since ATLAS started');
   });
 
   it('edits only the draft setting from the checkbox', () => {

@@ -1,5 +1,7 @@
 # Shared intake folders, OneDrive, and SharePoint
 
+ATLAS was called Intern before v0.1.0-alpha.20; this document uses the old name.
+
 Intern always watches the **input folder** (the `intakeFolder` setting, called
 the intake folder below): documents that appear in it are analyzed, named, and
 moved to the **output folder** (the `destination` setting). Intern is not
@@ -138,12 +140,17 @@ leaves the record only once whole scans have missed it for a day, so a file a
 sync client takes away for a moment is not mistaken for a new one when it
 comes back.
 
-A document taken out of the queue — **Remove**, **Discard waiting**, or
+A document taken out of the queue — **Remove**, **Clear queue**, or
 **Cancel** — stays where it is in the folder and is not picked up again; the
 claim records it as kept, for as long as the document stays there unchanged.
-One limit: if Intern restarts in the seconds between taking a document out of
-the queue and the next scan, it cannot tell that from a document whose hand-over
-was cut short, and the document is analyzed again. Clearing the history of a
+One limit, for **Remove**: if Intern restarts in the seconds between taking a
+document out of the queue and the next scan, it cannot tell that from a
+document whose hand-over was cut short, and the document is analyzed again.
+**Clear queue** records the decision in the queue's own database
+(`intake_claims.set_aside`), so a cleared document stays out across a restart
+too. Changed (saved again, renamed), it is a new document and comes in as one;
+added on purpose (Add files, or "Process them too" in Settings), it is taken in
+again. Clearing the history of a
 document that failed while its content was still in the cloud is not a
 decision about it either; the document is handed over again once its content
 can be read. A document the queue cannot take at all — a file this account may

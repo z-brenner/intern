@@ -19,6 +19,16 @@ export function queueCell(page: Page, originalFilename: string, column: Column =
 
 export const detailsToggle = (page: Page) => page.getByRole('button', { name: 'Details', exact: true });
 
+/**
+ * The entry `name` of the toolbar's More menu - Copy, Clear queue, Clear
+ * completed - opening the menu first when it is closed.
+ */
+export async function moreAction(page: Page, name: string | RegExp): Promise<Locator> {
+  const more = page.getByRole('button', { name: 'More actions' });
+  if (await more.getAttribute('aria-expanded') !== 'true') await more.click();
+  return page.getByRole('menuitem', { name });
+}
+
 /** Select a row (when named) and open the Details panel for it. Resolves with the panel. */
 export async function openDetails(page: Page, originalFilename?: string): Promise<Locator> {
   if (originalFilename) await queueCell(page, originalFilename).click();

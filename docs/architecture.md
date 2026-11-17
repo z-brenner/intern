@@ -1,5 +1,7 @@
 # Intern architecture
 
+ATLAS was called Intern before v0.1.0-alpha.20; this document uses the old name.
+
 Intern turns a document into a filename, a one-sentence description, and the
 evidence behind both. This document explains how, why the pieces are shaped the
 way they are, and what the design costs on an ordinary Windows laptop.
@@ -335,6 +337,34 @@ implemented in Rust with no dependencies beyond the standard library.
 
 ### Budgets
 
+**What the local model reads** is retrieval's evidence, not the digest
+([`evidence-retrieval.md`](evidence-retrieval.md#the-chosen-configuration)):
+
+| Document | Behavior |
+| --- | --- |
+| its units cost ≤ 3,000 estimated tokens | sent whole, every unit as an `[id] text` line |
+| larger | each field retrieved within its own budget: type 180, date 675, parties 525, subject 450, identifier 180, key facts 300 tokens; 150% of them where the evidence is crowded (the dense tier) |
+
+These were widened in November 2026 from Stage 4's whole-document threshold
+of 1,800 tokens and budgets two thirds the size, which had the model reading
+about a tenth of every long document. On a CPU a document's cost is the
+prefill of its evidence, the instructions being read once and kept in the
+slot: about 70 s per 1,000 prompt tokens on the 9B and 39 s on the 4B on the
+slowest runner measured (AMD EPYC 7763), roughly half that on faster ones.
+On InternBench and the fixtures the widening costs nothing on the 78% of
+documents that went whole before, about 30% more model time on an excerpted
+one (33 s on the 9B at the median), and 69 to 95 s on the four 2- and
+3-page documents now read whole; it brings back five of the twelve subject
+terms and facts the narrower evidence lacked. The widest evidence, about
+3,000 tokens, fits the 8,192-token context beside the instructions, the
+file's name and the 1,024-token reply with more than 2,500 tokens to spare,
+so the context did not grow (a larger one would cost the 9B memory). The
+file's current name, when a person chose it rather than a scanner or a
+camera, goes before the evidence as a hint the reply cannot cite
+([`evidence-pipeline.md`](evidence-pipeline.md)).
+
+**The digest**, which a hosted model reads:
+
 | Source size | Behavior |
 | --- | --- |
 | ≤ 12,000 characters | passed through untouched |
@@ -502,7 +532,13 @@ the document's text, instead of taking the model thread down with it.
 
 Self-reported confidence below 0.60 also routes to review, as does any
 fact-affecting parser warning, and any document with no defining date or no
-specific type.
+specific type. The local model's reply carries no self-rating and reads as
+1.0, so for it the confidence that counts is the token gate's: the least
+probable token of the date and the parties' names, below 0.7
+(`tiers::REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE`), raises `LOW_CONFIDENCE`.
+A document with no defining date is not always left there: the queue dates
+it from the file when that is its only doubt about the date (see the review
+level below).
 
 Three things are then decided from the document rather than from the model,
 because a two-billion-parameter model is good at finding facts and poor at
@@ -553,16 +589,41 @@ renamed with no person when automatic renaming is on.
 written. The queue asks it for every reading it stores (`record_for`) and the
 benchmark for every reading it scores (`intern-bench run --review-level`).
 
-* **`strict`**, the default: the engine's own status, exactly, as in every
-  release before the levels. Settings with no `reviewLevel`, or with a value
-  this build does not know, are strict; an unknown value is also named in the
-  notice that says which settings could not be read.
+**Minor reasons, at every level.** A few reasons leave the facts the name is
+made of standing, and hold a reading at no level, strict included
+(`review_level::MINOR`). A reading whose every reason is minor is ready, at
+either level, when it has a date its name starts with and a document type:
+
+* `DATE_MISSING`, once the queue has given the reading a date from the file
+  itself (see *A date from the file* below). With none it holds, as before.
+* `TYPE_INFERRED`: the type is the document's own title, or the kind its
+  layout shows. It still holds where the name would say "Document", and
+  where a title stood in for a type the document did not support (clause 5
+  below).
+* `DESCRIPTION_INVALID` and `DESCRIPTION_UNSUPPORTED`: the description is not
+  in the name. The evidence pipeline composes it from validated facts and
+  leaves out any fact it could not find, so it is kept; a sentence the model
+  wrote itself (a hosted model's, the digest pipeline's) that says more than
+  the document is not kept on the record, which is then filed with no
+  description rather than with a claim nobody checked.
+
+Everything that touches the date's correctness (`DATE_UNSUPPORTED`,
+`DATE_AMBIGUOUS`, `DATE_IS_DEADLINE`, `DATE_IMPLAUSIBLE`, `DATE_IS_PERIOD`,
+`DATE_IS_FORMULA`), every party reason, a type the reply gave that the
+document does not confirm, `LOW_CONFIDENCE`, `PARSER_WARNING`, the model's
+own request, the quick model's `FAST_MODEL_READING`, the queue's own holds
+and any reason added later still hold at strict.
+
+* **`strict`**, the default: the engine's own status, but for the minor
+  reasons. Settings with no `reviewLevel`, or with a value this build does
+  not know, are strict; an unknown value is also named in the notice that
+  says which settings could not be read.
 * **`balanced`**: a reading strict holds is ready when all of these are true.
   1. It has a date and its name starts with it.
-  2. Every reason on it is one of `TYPE_MISSING`, `TYPE_UNSUPPORTED`,
-     `TYPE_INFERRED`, `DESCRIPTION_UNSUPPORTED` and `LOW_CONFIDENCE`. The
-     list names what does not hold a reading, so everything else does: every
-     date reason, every party reason, `DESCRIPTION_INVALID`,
+  2. Every reason on it is minor or one of `TYPE_MISSING`,
+     `TYPE_UNSUPPORTED` and `LOW_CONFIDENCE`. The lists name what does not
+     hold a reading, so everything else does: every date reason but a
+     missing date the queue has filled in, every party reason,
      `PARSER_WARNING`, the model's own request for review, the quick model's
      `FAST_MODEL_READING`, and any reason added after this was written.
   3. A `LOW_CONFIDENCE` on it is there for the token probabilities only. A
@@ -574,13 +635,71 @@ benchmark for every reading it scores (`intern-bench run --review-level`).
      `TYPE_UNSUPPORTED` with `TYPE_INFERRED` and without `TYPE_MISSING`
      waits.
 
-A level takes no reason off a reading. At balanced a ready record carries its
-reasons, and the window shows them as notes: "Ready with a note", and
-"Completed with a note" once Intern has renamed the document by itself. A
-person's approval clears the reasons, so "Completed with a note" marks only
-names nobody approved: those Intern renamed by itself while their reading
-had a note. A name Intern gave by itself to a reading with no note, every
-one at strict among them, is not marked.
+A level takes no reason off a reading. A ready record carries its reasons -
+at strict only minor ones - and the window shows them as notes: "Ready with
+a note", and "Completed with a note" once Intern has renamed the document by
+itself. A person's approval clears the reasons, so "Completed with a note"
+marks only names nobody approved: those Intern renamed by itself while their
+reading had a note. A name Intern gave by itself to a reading with no note
+is not marked.
+
+**A date from the file.** A name must start with a date, and a reading the
+document gave no date used to wait for a person to type one. When
+`DATE_MISSING` is the reading's only doubt about the date, the queue gives it
+one from the file itself as it stores the reading
+(`intern_queue::fallback_date`, applied in `record_for`), in this order:
+
+1. The one date the original filename states unambiguously: a year first
+   (`2024-03-08`, `2024_03_08`, `2024.03.08`, `20240308` standing alone), or
+   a day and a month before a four-digit year where only one reading is a
+   date (`31-01-2024`). Two different dates, a two-digit year, a date not
+   yet come or before 1900 give none.
+2. The day the file was last modified, in this machine's calendar, where it
+   is a day that has come and is from 1900 on. A document added through
+   Intern is copied into the input folder with its times kept (`keep_times`
+   in intern-core; `a_copy_keeps_the_originals_last_modified_time`), so this
+   is the original's date, not the day it was added.
+3. Neither: the reading waits, undated, exactly as before.
+
+The date goes into the stored reading's proposal, so the name starts with it
+and the layout's year folder follows it, and `DATE_MISSING` stays among the
+reading's reasons beside it: that pair is how a supplied date is told from
+the document's own (`review_level::supplied_date`). The record's reasons say
+where it came from instead of `DATE_MISSING` - `DATE_FROM_FILENAME` or
+`DATE_FROM_FILE_MODIFIED` - so a document so dated is ready with a note and
+can be found afterwards. A reading held for something else takes the date
+too, and waits with its name dated for whoever approves it. A missing date
+beside any other doubt about the date is not answered from the file. The
+near-duplicate check reads a reading so dated as undated: two scans of one
+document made on different days are still one document.
+
+The price: a file whose last-modified day is not the document's - a scan
+saved weeks after the letter, a document edited and saved again, a web
+upload stamped with the day it arrived - is filed under that day, with the
+note saying where the day came from.
+
+**The confidence a person is shown** is how sure Intern is of the name, not
+the model's own rating (the local model gives none, and the engine writes
+1.0, which is how a document in review used to read 100%). It is worked out
+in one place, `review_level::name_confidence`, and sent as the queue item's
+`confidence` (`ProposalRecord::name_confidence`):
+
+1. The lower of the model's two figures: its rating of the reading, and the
+   least probable token of its date and its parties' names. A reading with
+   no token probabilities - a hosted model's, or one stored before they were
+   kept - has its rating alone.
+2. A document waiting for a person shows no more than 50%
+   (`WAITING_CEILING`).
+3. Each reason on the record, a hold or a note, the queue's own included,
+   leaves nine tenths of what is left (`DOUBT_FACTOR`); only
+   `ALREADY_NAMED`, which says the file had the name already, is no doubt.
+
+So a ready document with nothing on it shows the model's figure, at least
+70% for the local model by the token gate; one ready with a note a little
+less; and one in review 45% at most with one reason on it, less with each
+further reason. The window colors the figure by the document's status,
+never by its size: green for ready or renamed, amber for review
+(`confidenceTone` in `src/lib/format.ts`).
 
 What a level does not decide:
 
@@ -683,9 +802,68 @@ many waiting documents became ready or went back to review
 
 ## The filename
 
+The name a document is filed under leads with the organization it is filed
+for, the entity, and the subject follows:
+
 ```text
-YYYY-MM-DD <document type> <relation> <party>[ and <party>].<ext>
+YYYY-MM-DD <entity> - <subject>.<ext>
+<subject> = <document type> <relation> <party>[ and <party>]
+
+2026-10-16 Vistage International - Host Chair SOW for John Smith.pdf
+2024-11-09 EGN Denmark - Incorporation Email Communications.pdf
+2025-03-26 Vistage Malaysia - Employment Termination Letter for Johnny Appleseed.pdf
+2025-04-30 Nimbus Orchard Supply - Invoice.pdf
 ```
+
+The engine composes the subject's grammar, and its own name - the one the
+corpus is scored on and the replay baselines record - is the subject with
+every party in it (`YYYY-MM-DD <document type> <relation> <party>[ and
+<party>]`). The entity is a deterministic stage in the queue after
+validation and house style (`own_names::NameView`), so the bench gold and the
+recorded baselines stay what they were. The entity is, in order:
+
+1. the person's own organization, as Settings names it (see [Your
+   organization](#your-organization)), wherever the reading found it - among
+   the name's parties, or among the parties the reading's facts support,
+   which is where it is when validation kept only the other side for a
+   one-sided relation ("for John Smith"). The configured name that matches
+   it most specifically leads; where only a shorter one matches (`Vistage`)
+   and the document's party is more specific (`Vistage Malaysia Sdn. Bhd.`),
+   the document's party leads;
+2. otherwise the first organization among the name's parties, where the
+   relation leaves them first (`from`, `between`, `with`, or none), or the
+   side that issued the document - its issuer, sender, seller, employer,
+   landlord, lender or licensor in the facts - where the relation is about
+   the other side (`for`, `to`): a termination notice "for John Smith" is
+   the employer's, and a letter "to Acme Corporation" from a person leads
+   with nobody. A party is an organization when it ends on a legal form or
+   the engine's party reading takes it for one (`facts::is_organization_name`:
+   "Supply", "Holdings", "Bank", "Office for ...");
+3. otherwise none, and the name is the engine's own: `2026-12-29 Notice of
+   Termination - John Smith`.
+
+In the entity slot only, the legal form a name ends on is left off
+(`without_legal_form`: Inc., LLC, Ltd, Limited, Sdn Bhd, Pte Ltd, Pty Ltd,
+GmbH, AG, A/S, ApS, AB, B.V., N.V., S.A., SAS, SARL, Corp., Corporation, Co.,
+PLC, LLP and the like, with the commas and stops around them); the subject
+keeps a party's whole name. The subject never gives the entity again: its
+party is left out, the person's own organization's others too where someone
+else is left, `between` with one party left is `with`, and a directional
+word that was about the party that went (`from`, `to`, `for` about the first)
+becomes the plain separator rather than a direction the document never
+stated about the other side. A house-style spelling of the entity's party is
+the reviewer's and is carried as typed, legal form and all.
+
+Every queue path reads the one view - the name shown, the name composed
+against the destination, the layout folder, the filing report, a lesson from
+an edit, the spellings a name shows, and a recompose after Settings or a
+learned spelling changes - so they agree. The Party folder is the entity's,
+except the person's own organization, whose documents are filed by the other
+side (or under the organization where the document names nobody else).
+
+Over 120 characters the subject sheds detail first, as below; the type is
+then cut at a word beside the entity while at least twelve characters of it
+are left, and past that the entity goes too.
 
 `<relation>` is one of `between`, `for`, `with`, `from`, `to`, or — when the model
 declines to state one — a bare `-`, which keeps a validated party in the name
@@ -759,6 +937,41 @@ proposed under that name rather than as ` (2)`. Filing it under its own name,
 or that name in other letter case, which Windows takes for the same file,
 completes it without touching the file and records `ALREADY_NAMED`; this
 release makes no case-only renames.
+
+The document's own file name is read last (`NameView::with_original`, kept
+on the record as `original_name`, without a `NEEDS REVIEW - ` mark), because
+a person or a system often named it nearly right already. Its words for the
+type replace the reading's in the subject - the entity, the relation and the
+parties stay the reading's - where the name agrees with the reading and
+contradicts nothing in it:
+
+- it is not a scanner's, a camera's or a copy's name (`is_junk_filename`:
+  `scan0001`, `IMG_1234`, `Document1`, `untitled`, `Doc (3)`, a hash,
+  `final_v2`; "Copy of" in front and "final", "v2", "(2)" at the end are
+  set aside);
+- any date in it reads one way only and is the reading's
+  (`naming::date_in_filename`: ISO, `20250326`, `26.03.2025`,
+  `March 26 2025`, `26 Mar 2025`; `03.04.2025`, a two-digit year or two
+  different dates are none);
+- its parts - between " - ", and around a date - are the entity, the
+  subject's parties with the connecting word before one, another party the
+  reading found, and words for the type in one part only that hold no
+  party's name; and it names the entity and every party of the subject, in
+  any spelling the reading or a name gives them;
+- its type words give the reading's type: all of its words, the same kind
+  of document ("Letter", "Invoice", "Email"), or its initials ("SOW" for
+  "Statement of Work", "NDA" for "Non-Disclosure Agreement"). A reading
+  with no type needs the entity or a party named instead.
+
+So `2025-03-26 Vistage Malaysia - Employment Termination Letter for Johnny
+Appleseed` with that date is proposed as it is, and, filed where it is,
+completes as `ALREADY_NAMED`; the same words with `26.03.2025` at the end
+are put in order with the date first; and `Host Chair SOW - John Smith -
+Vistage International` gives `2026-10-16 Vistage International - Host Chair
+SOW for John Smith`. A date the name gives in one way only dates a reading
+that found none. A type a house-style spelling wrote is kept, and an edit of
+words the filename gave teaches no spelling: they are the file's, not the
+document's. The reading itself keeps the document's own type.
 
 Where a document lands is the destination folder plus, optionally, a
 subfolder the queue derives from the validated facts: the year, the year and
@@ -882,6 +1095,20 @@ still waiting when Intern is upgraded teaches as before. Reading the grammar
 rather than diffing matters, because the smallest edit lies: "Acme and
 Contoso" becomes "Acme Corp and Contoso Inc" by inserting text one character
 into the connector, and a diff would credit it all to one party.
+
+A name that leads with an entity is read around it first
+(`NameView::read_edit`). Kept as proposed, it is set aside with the date and
+what follows is read as above. Changed alone - the subject as proposed after
+the new words and " - " - it is a respelling of the party the entity stands
+for, and teaches like one, under the same checks: "ACME Corp - Employment
+Agreement with John Smith" for "Acme - Employment Agreement with John Smith"
+teaches "Acme Corporation" -> "ACME Corp", and the next name leads with
+"ACME Corp", as typed. The person's own organization teaches nothing that
+way: its name is the one Settings gives, and a respelling of it, learned,
+would no longer be recognized as the organization. Nor does an issuer the
+name's parties do not hold, which no rule ever respells. An edit that
+changes both the entity and the subject teaches nothing. A name composed
+before names led with their entity is read with that build's grammar.
 
 A rule takes effect on the second identical edit (`EDITS_TO_LEARN`), or at
 once when a person says "Use now" in Settings, and every document still
@@ -1306,23 +1533,28 @@ no longer what keeps a wrong name from being filed.
 ### Your organization
 
 A firm's own name is on almost everything it files, so a name that carries
-every party says the firm over and over, and the Party layout files one
-client's documents under whichever side the model happened to name first.
-Settings takes the organization's names, one per line, and the queue applies
-them after house style (`own_names::counterparty_view`): when a document
-names the organization and someone else, the organization's parties are left
-out of the name and the others keep their order, "between" becoming "with"
-when one is left. A document that names only the organization keeps it - a
-name with no party says less than one that names the firm. Matching is house
-style's key, plus a whole-word prefix either way round ("Contoso" is
+it among the parties says the firm over and over, and the Party layout files
+one client's documents under whichever side the model happened to name
+first. Settings takes the organization's names, one per line, and the queue
+applies them after house style (`own_names::NameView`): when a document names
+the organization, the name leads with it - the configured name that matches
+it most specifically, without its legal form (see [The
+filename](#the-filename)) - and the subject carries the other side, "between"
+becoming "with" when one is left. The organization's other parties are left
+out of the subject where someone else is left, and the review panel says so
+(`NameView::left_out`). A document that names only the organization is filed
+under it: `2026-05-04 Contoso Worldwide - Statement of Work`. Matching is
+house style's key, plus a whole-word prefix either way round ("Contoso" is
 "Contoso Worldwide, Inc."), and an own name under four characters is ignored
-because it would match far too much.
+because it would match far too much. The organization is found among the
+parties the reading's facts support as well as the name's: validation keeps
+only the other side for a one-sided relation ("for John Smith"), and the firm
+that wrote the document is still the one it is filed for.
 
 Like house style it is deterministic and after validation: the evidence and
-the description stay the document's words, and the review panel says which
-party was left out and why. The names in force are recorded with each
-proposal, so the name, the layout folder, a lesson from an edit, and the
-filing report all read the same view. Changing them in Settings recomposes
+the description stay the document's words. The names in force are recorded
+with each proposal, so the name, the layout folder, a lesson from an edit,
+and the filing report all read the same view. Changing them in Settings recomposes
 every document still waiting, as a learned spelling does; an approved name
 keeps what the person typed, and a parked rename the name it is filing.
 Every save asks, not only one that changed the
@@ -1609,9 +1841,13 @@ it with `FAST_MODEL_READING` (`tiers::hold_fast_reading`), as the builds
 before alpha.13 held Bonsai's: on the four real-document sets the 4B filed
 a wrong name for about every right one at any gate threshold
 (`bench/reports/model-qualification-2026-11`), where the 9B at the 0.7
-gate it had then filed one wrong name in seven. Its gate is 0.8 from
-alpha.17 (`tiers::REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE`,
-[`bench/reports/review-gate-2026-11`](../bench/reports/review-gate-2026-11/README.md)). What sets a quick reading apart beyond
+gate it had then filed one wrong name in seven. Its gate was 0.8 from
+alpha.17 ([`bench/reports/review-gate-2026-11`](../bench/reports/review-gate-2026-11/README.md))
+and is 0.7 again after alpha.19, at the owner's word, for a little less
+review at a measured price: InternBench's committed recording files 38 of
+77 where 0.8 filed 28, one of them wrong where 0.8 filed none, and the sixth
+real set 4 right and 2 wrong where 0.8 filed 3 and 1
+(`tiers::REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE` gives the rest). What sets a quick reading apart beyond
 that is whether it stands in: made while the accurate model was wanted and
 not installed yet, or did not fit in memory, it is provisional, and once the
 accurate model can read - its download verified, or memory back - the queue

@@ -108,7 +108,7 @@ describe('setup and queue controls', () => {
       selection={setupSelection(async () => undefined)}
     />);
 
-    expect(await screen.findByRole('heading', { name: 'Set up Intern' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Set up ATLAS' })).toBeVisible();
     expect(screen.getByText(/documents.*stay on this device/i)).toBeVisible();
     expect(screen.getByText(/processing runs fully locally/i)).toBeVisible();
     expect(screen.getByRole('button', { name: 'Download model' })).toBeEnabled();
@@ -127,7 +127,7 @@ describe('setup and queue controls', () => {
   it('keeps the queue inaccessible after local setup failure', async () => {
     render(<App bridge={createInMemoryBridge({ setup: { state: 'failed', error: 'The local model could not be downloaded.' } })} />);
 
-    expect(await screen.findByRole('main', { name: 'Intern setup' })).toBeVisible();
+    expect(await screen.findByRole('main', { name: 'ATLAS setup' })).toBeVisible();
     expect(screen.queryByRole('navigation', { name: 'Queue navigation' })).not.toBeInTheDocument();
   });
 
@@ -230,7 +230,7 @@ describe('setup and queue controls', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Check for updates' }));
 
       const alert = await screen.findByRole('alert');
-      expect(alert).toHaveTextContent(/was not signed by this project's key, so Intern refused it/i);
+      expect(alert).toHaveTextContent(/was not signed by this project's key, so ATLAS refused it/i);
     });
 
     it('reports an unreachable endpoint as a network problem, not a rejection', async () => {
@@ -246,7 +246,7 @@ describe('setup and queue controls', () => {
   });
 
   it.each([
-    ['MODEL_FILE_INVALID', /did not match a model Intern pins/i],
+    ['MODEL_FILE_INVALID', /did not match a model ATLAS pins/i],
     ['MODEL_SELF_TEST_FAILED', /local self-test failed/i],
     ['MODEL_SERVER_START_FAILED', /runtime would not start on this computer/i],
     ['MODEL_SERVER_UNHEALTHY', /did not become ready in time/i],

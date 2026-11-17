@@ -1,6 +1,6 @@
 import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import { SUPPORTED_EXTENSIONS } from './formats';
-import type { DesktopBridge, FileSelection, FolderSelection, SelectionBoundary, SelectionResult, UpdateStatus } from './bridge';
+import type { DesktopBridge, DocumentTextPage, FileSelection, FolderSelection, SelectionBoundary, SelectionResult, UpdateStatus } from './bridge';
 import type { AddReport, AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupPhase, TierSetup, SharePointSetupProblem, SharePointSetupStatus } from '../types';
 import { filenameExtension, leadingDate, validateFilename, validateLeafFilename } from './filenames';
 import { OWN_NAME_MIN_CHARS, nameKey } from './ownNames';
@@ -93,16 +93,33 @@ function isOwnName(party: string, own: string): boolean {
 /** A party as a filename carries it, without the trailing period a name segment cannot end in. */
 const nameSegment = (party: string) => party.replace(/[. ]+$/, '');
 
-/** The counterparty view of a seeded two-party proposal, composed as its name. */
+/**
+ * A legal form at the end of an organization's name, which the entity a name
+ * leads with is written without ("TenantCo Inc." leads as "TenantCo"), as the
+ * backend's NameView writes it. Only the entity loses it; the subject keeps
+ * the document's words.
+ */
+const LEGAL_FORM = /,?\s+(inc|incorporated|llc|l\.l\.c|ltd|limited|corp|corporation|co|plc|llp|gmbh|ag|a\/s|aps|ab|b\.?v|n\.?v|s\.?a|sas|sarl|pty ltd|pte ltd|sdn\.? bhd)\.?$/i;
+const entityOf = (party: string) => nameSegment(party).replace(LEGAL_FORM, '').trim();
+
+/**
+ * A seeded two-party proposal as the backend's NameView composes it once
+ * Settings names the organization: the date, the organization the document
+ * is filed for, then the subject with the other side - "2023-09-15 TenantCo
+ * - Lease Agreement with ABC Properties LLC". With no organization of the
+ * person's own in it the demo keeps the seeded name as it was: it stands in
+ * for the engine, and the rest of the window's journeys read that name.
+ */
 function seededName(name: SeedName, own: string[]): Pick<QueueItem, 'proposedFilename' | 'omittedParties'> {
   const mine = (party: string) => own.some((entry) => isOwnName(party, entry));
+  const firm = name.parties.find(mine);
   const others = name.parties.filter((party) => !mine(party));
-  const omitted = name.parties.filter(mine);
-  if (!omitted.length || !others.length) {
+  if (!firm || !others.length) {
     return { proposedFilename: `${name.stem} between ${nameSegment(name.parties[0])} and ${nameSegment(name.parties[1])}.${name.extension}` };
   }
-  // "between" needs two sides; the one left is "with" it.
-  return { proposedFilename: `${name.stem} with ${nameSegment(others[0])}.${name.extension}`, omittedParties: omitted };
+  const [date, ...type] = name.stem.split(' ');
+  // "between" needs two sides; with the firm leading, the one left is "with" it.
+  return { proposedFilename: `${date} ${entityOf(firm)} - ${type.join(' ')} with ${nameSegment(others[0])}.${name.extension}` };
 }
 
 /**
@@ -314,6 +331,64 @@ function folderPairProblem(previous: AppSettings, next: AppSettings): { code: st
 }
 
 /** "Lease.pdf", then "Lease (2).pdf", "Lease (3).pdf": the backend's numbering. */
+/**
+ * The document viewer's stand-in for a document, in the browser build, which
+ * has no files behind it: a page made from what the row knows - its type,
+ * date and parties as the evidence quotes them, and its description - and a
+ * second that says what it is. The words the viewer highlights are on it, so
+ * the preview shows that too.
+ */
+function demoPages(item: QueueItem): DocumentTextPage[] {
+  const name = (item.filedName ?? item.proposedFilename ?? item.originalFilename).replace(/\.[A-Za-z0-9]{1,6}$/, '');
+  const date = item.evidence?.date ?? leadingDate(name);
+  const type = item.evidence?.type ?? name.replace(/^\d{4}-\d{2}-\d{2}\s*/, '');
+  const parties = (item.evidence?.parties ?? '').split(';').map((party) => party.trim()).filter(Boolean);
+  const first = [
+    type.toUpperCase(),
+    '',
+    ...(date ? [`Date: ${date}`] : []),
+    ...parties.map((party, index) => `${index === 0 ? 'From' : 'To'}: ${party}`),
+    '',
+    item.description ?? 'The terms of this document are set out on the pages that follow.',
+  ];
+  return [
+    { number: 1, text: first.join('\n'), ocr: false },
+    { number: 2, text: 'This page stands in for the rest of the document: the browser preview has no files behind it.', ocr: false },
+  ];
+}
+
+/**
+ * The same pages as a PDF, for the viewer's Original tab: Helvetica, a line
+ * at a time, laid out by hand with the byte offsets PDF readers look for.
+ */
+function demoPdf(pages: readonly DocumentTextPage[]): Uint8Array {
+  const plain = (text: string) => text.replace(/[^\x20-\x7e]/g, '?').replace(/[\\()]/g, (character) => `\\${character}`);
+  const wrap = (line: string) => line.match(/.{1,80}(\s|$)/g)?.map((part) => part.trimEnd()) ?? [''];
+  const objects: string[] = ['<< /Type /Catalog /Pages 2 0 R >>', ''];
+  const kids: string[] = [];
+  const font = 3 + pages.length * 2;
+  pages.forEach((page, index) => {
+    const pageObject = 3 + index * 2;
+    kids.push(`${pageObject} 0 R`);
+    const lines = page.text.split('\n').flatMap(wrap);
+    const stream = `BT /F1 12 Tf 16 TL 72 720 Td ${lines.map((line) => `(${plain(line)}) Tj T*`).join(' ')} ET`;
+    objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${pageObject + 1} 0 R /Resources << /Font << /F1 ${font} 0 R >> >> >>`);
+    objects.push(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
+  });
+  objects[1] = `<< /Type /Pages /Kids [${kids.join(' ')}] /Count ${pages.length} >>`;
+  objects.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+  let body = '%PDF-1.4\n';
+  const offsets = objects.map((object, index) => {
+    const offset = body.length;
+    body += `${index + 1} 0 obj\n${object}\nendobj\n`;
+    return offset;
+  });
+  const xref = body.length;
+  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}`;
+  body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return new TextEncoder().encode(body);
+}
+
 function numberedName(name: string, index: number): string {
   if (index === 1) return name;
   const dot = name.lastIndexOf('.');
@@ -730,6 +805,9 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   // folder, as the backend leaves them for the watcher, and "Process them
   // too" finds them there and holds them again.
   const heldCopies = new Map<string, string>();
+  // What Clear queue took out of the queue, by path, with the name it is
+  // there under: still in the input folder, not taken in again until added.
+  const setAside = new Map<string, string>();
   const inputFolder = () => {
     if (!settings.intakeEnabled || !settings.intakeFolder.trim()) throw { code: 'INPUT_FOLDER_NOT_SET', message: 'no Queue folder is set up; choose one in Settings' };
     return settings.intakeFolder.replace(/[\\/]+$/, '');
@@ -807,10 +885,17 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
         inputNames.add(fileNameKey(name));
         queueAt(`${input}\\${name}`, name);
       }
+      // Added on purpose, what Clear queue set aside comes in again.
+      const again = [...setAside].filter(([path]) => within(input, path));
+      for (const [path, name] of again) {
+        setAside.delete(path);
+        queueAt(path, name);
+      }
+      const added = count + again.length;
       const held = [...heldCopies.keys()].filter((path) => within(input, path)).length;
       return held > 0
-        ? { added: count, alreadyQueued: 0, skipped: [], held, heldReason: 'AWAITING_MICROSOFT' }
-        : { added: count, alreadyQueued: 0, skipped: [] };
+        ? { added, alreadyQueued: 0, skipped: [], held, heldReason: 'AWAITING_MICROSOFT' }
+        : { added, alreadyQueued: 0, skipped: [] };
     },
     pauseQueue: async () => { paused = true; items = items.map((item) => item.status === 'processing' ? { ...item, status: 'waiting' as const, stage: undefined, progress: undefined } : item); },
     resumeQueue: async () => { paused = false; fileStagedCopies(); const item = items.find((entry) => entry.status === 'waiting'); if (item) update(item.id, { status: 'processing', stage: 'reading' }); },
@@ -949,6 +1034,20 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     // so after the same checks the desktop makes it says so.
     openItem: async (id) => { find(id); throw new Error('Opening documents is only available in the desktop application'); },
     revealItem: async (id) => { find(id); throw new Error('Showing documents in their folder is only available in the desktop application'); },
+    // The viewer is shown a stand-in made from the row (demoPages), under the
+    // backend's rules: a document mid-rename has no one place to read it from,
+    // and only a PDF is drawn - the preview has no picture to show.
+    documentFile: async (id) => {
+      const item = find(id);
+      if (item.status === 'processing' && item.stage === 'filing') throw { code: 'PATH_UNAVAILABLE', message: 'the document is not where ATLAS last saw it' };
+      if (filenameExtension(item.originalFilename)?.toLowerCase() !== 'pdf') throw { code: 'VIEW_UNSUPPORTED', message: 'the window shows this format as the text ATLAS read' };
+      return demoPdf(demoPages(item));
+    },
+    documentText: async (id) => {
+      const item = find(id);
+      if (item.status === 'processing' && item.stage === 'filing') throw { code: 'PATH_UNAVAILABLE', message: 'the document is not where ATLAS last saw it' };
+      return { pages: demoPages(item), readNow: false, changed: false };
+    },
     getSettings: async () => ({ ...settings }),
     // Mirrors the backend: a hosted model is refused at save time without a
     // stored key or a usable address, never silently kept.
@@ -1034,6 +1133,27 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       const waiting = items.filter((item) => item.status === 'waiting');
       items = items.filter((item) => item.status !== 'waiting');
       return waiting.length;
+    },
+    // Pipeline::clear_queue: everything not filed goes, its file left where
+    // it is (and given its own name back from NEEDS REVIEW), but a parked
+    // document - whose files need checking - and one being renamed now. What
+    // went waits in the input folder until it is added again.
+    clearQueue: async () => {
+      const report = { cleared: 0, unsettled: 0, busy: 0, stillMarked: 0 };
+      const folder = settings.intakeFolder.replace(/[\\/]+$/, '');
+      items = items.filter((item) => {
+        if (item.status === 'completed') return true;
+        if (isParked(item)) { report.unsettled += 1; return true; }
+        if (item.status === 'processing' && item.cancelable === false) { report.busy += 1; return true; }
+        const name = withoutReviewPrefix(item.originalFilename);
+        const path = pathById.get(item.id) ?? `${folder}\\${name}`;
+        idByPath.delete(path);
+        pathById.delete(item.id);
+        setAside.set(path, name);
+        report.cleared += 1;
+        return false;
+      });
+      return report;
     },
     // The browser build has no Tauri runtime and nothing to replace, so it says
     // so rather than pretending to be up to date.

@@ -3,10 +3,10 @@
   "model_id": "intern-local",
   "budget_characters": 12000,
   "pipeline": "evidence",
-  "retrieval": "f7ab2a5355b6f3c7c7d1938067462f0f92e15edda279238a373ed5068fc2942e",
+  "retrieval": "edba85a8a4a021b49a3d6c4c7997b265c9a3594aaec2fd77de315a44af7d3da5",
   "prompt_version": "4425663a8a9e",
-  "recorded_at_unix": 1793753607,
-  "note": "Qwen3.5-9B-Q4_K_M.gguf (manifest sha256 03b74727), upstream llama.cpp b11946 CPU build, 4 threads, 8192 context, Linux x86_64 (4-core Xeon); routing worker with PP-OCR; evidence pipeline, stable ids, compact reply, recorded with --token-confidence; every fixture recorded live on 2026-11-04 from commit e64581ebce4f (round two of the engine adaptation, merged as a7d302136f0b; the prompt is main's). The digest pipeline's recording is fixtures/corpus-recording-digest.json",
+  "recorded_at_unix": 1794947578,
+  "note": "Qwen3.5-9B-Q4_K_M.gguf (manifest sha256 03b74727), upstream llama.cpp from the staged Linux runtime (scripts/fetch-linux-assets.sh pins), the app's server flags, 4 threads, PDFium chromium/7881 and the distribution's Tesseract 5.3.4 with the pinned tessdata, on a 4-core Linux cloud machine, 2026-11-17, at commit 206c9e27255fab17bf0f4d8beb751f9e82708c29: the evidence pipeline after the November 2026 retrieval widening (budgets x1.5, whole up to 3,000 tokens)",
   "fixtures": [
     {
       "file": "employment-agreement.pdf",
@@ -203,8 +203,8 @@
           }
         },
         "token_confidence": {
-          "min": 0.66357625,
-          "mean": 0.98100376,
+          "min": 0.6590307,
+          "mean": 0.98079807,
           "tokens": 18
         }
       }
@@ -338,7 +338,7 @@
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "LEASE AGREEMENT",
+          "document_type": "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024",
           "document_date": "2024-09-01",
           "date_role": "effective",
           "parties": [
@@ -355,7 +355,7 @@
             "parties": []
           },
           "facts": {
-            "document_type": "LEASE AGREEMENT",
+            "document_type": "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024",
             "type_evidence": [
               "p1.b1"
             ],
@@ -390,8 +390,8 @@
           }
         },
         "token_confidence": {
-          "min": 0.7388045,
-          "mean": 0.9867085,
+          "min": 0.836013,
+          "mean": 0.9916109,
           "tokens": 21
         }
       }
@@ -702,8 +702,8 @@
           }
         },
         "token_confidence": {
-          "min": 0.9949332,
-          "mean": 0.99936694,
+          "min": 0.99341875,
+          "mean": 0.9992674,
           "tokens": 19
         }
       }
@@ -886,7 +886,7 @@
           "facts": {
             "document_type": "Mutual Non-Disclosure Agreement",
             "type_evidence": [
-              "p1.b2"
+              "p1.b1"
             ],
             "document_date": "2025-03-03",
             "date_role": "effective",
@@ -919,8 +919,8 @@
           }
         },
         "token_confidence": {
-          "min": 0.9890582,
-          "mean": 0.9992118,
+          "min": 0.98354477,
+          "mean": 0.99901485,
           "tokens": 21
         }
       }
@@ -1104,9 +1104,9 @@
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "INV-2048",
+          "document_type": "INVOICE INV-2048",
           "document_date": "2025-04-30",
-          "date_role": "invoice",
+          "date_role": "effective",
           "parties": [
             "Nimbus Orchard Supply Co.",
             "Atlas Threadworks LLC"
@@ -1121,12 +1121,12 @@
             "parties": []
           },
           "facts": {
-            "document_type": "INV-2048",
+            "document_type": "INVOICE INV-2048",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2025-04-30",
-            "date_role": "invoice",
+            "date_role": "effective",
             "date_evidence": [
               "p1.b2.f1"
             ],
@@ -1156,8 +1156,8 @@
           }
         },
         "token_confidence": {
-          "min": 0.5722148,
-          "mean": 0.9689746,
+          "min": 0.65284264,
+          "mean": 0.97387797,
           "tokens": 20
         }
       }
@@ -1292,8 +1292,8 @@
           }
         },
         "token_confidence": {
-          "min": 0.5856376,
-          "mean": 0.97383887,
+          "min": 0.5786673,
+          "mean": 0.9732795,
           "tokens": 16
         }
       }
@@ -1443,7 +1443,7 @@
         "proposal": {
           "document_type": "DElIvery RECeIPt DR-771",
           "document_date": "2025-06-12",
-          "date_role": "notice",
+          "date_role": "issuance",
           "parties": [
             "Pine Echo Couriers Llc",
             "Violet cartography Studio"
@@ -1463,7 +1463,7 @@
               "p1.b1"
             ],
             "document_date": "2025-06-12",
-            "date_role": "notice",
+            "date_role": "issuance",
             "date_evidence": [
               "p1.b2"
             ],
@@ -1493,8 +1493,8 @@
           }
         },
         "token_confidence": {
-          "min": 0.9095593,
-          "mean": 0.99315,
+          "min": 0.9304815,
+          "mean": 0.99347836,
           "tokens": 22
         }
       }
@@ -12269,8 +12269,8 @@
           }
         },
         "token_confidence": {
-          "min": 0.7609991,
-          "mean": 0.9795948,
+          "min": 0.72335476,
+          "mean": 0.97649807,
           "tokens": 12
         }
       }
@@ -12453,8 +12453,8 @@
           }
         },
         "token_confidence": {
-          "min": 0.63600874,
-          "mean": 0.95825034,
+          "min": 0.5661732,
+          "mean": 0.95215017,
           "tokens": 22
         }
       }
@@ -12595,7 +12595,7 @@
             "document_date": "2025-07-15",
             "date_role": "issuance",
             "date_evidence": [
-              "p1.b2"
+              "p1.b1"
             ],
             "parties": [
               {
@@ -12616,8 +12616,8 @@
           }
         },
         "token_confidence": {
-          "min": 0.87801415,
-          "mean": 0.99261373,
+          "min": 0.902335,
+          "mean": 0.9939248,
           "tokens": 18
         }
       }
@@ -12755,8 +12755,8 @@
           }
         },
         "token_confidence": {
-          "min": 0.82579774,
-          "mean": 0.8874568,
+          "min": 0.7664757,
+          "mean": 0.8803193,
           "tokens": 3
         }
       }
@@ -20152,7 +20152,7 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "bd93a749cb820fc0bdb2d0b45dc3d67539e009fac1efee90fd9476421b5246b5",
+      "prompt_sha256": "0a9345412f9d775381c5a565a160fdecdd24fe6e15864181d3eb2cc90ffd9a28",
       "reply": {
         "outcome": "proposed",
         "proposal": {
@@ -20198,7 +20198,7 @@
                 ]
               }
             ],
-            "subject": "implement CRM platform and migrate records",
+            "subject": "CRM platform implementation and data migration",
             "subject_evidence": [
               "p1.b5"
             ],
@@ -20208,8 +20208,8 @@
           }
         },
         "token_confidence": {
-          "min": 0.94663274,
-          "mean": 0.99387234,
+          "min": 0.9434556,
+          "mean": 0.9938892,
           "tokens": 23
         }
       }
@@ -20704,8 +20704,8 @@
           }
         },
         "token_confidence": {
-          "min": 0.6113455,
-          "mean": 0.9687085,
+          "min": 0.67457414,
+          "mean": 0.9741178,
           "tokens": 16
         }
       }
@@ -21598,8 +21598,8 @@
           }
         },
         "token_confidence": {
-          "min": 0.77865195,
-          "mean": 0.98640203,
+          "min": 0.7880599,
+          "mean": 0.9870036,
           "tokens": 19
         }
       }
@@ -22033,8 +22033,8 @@
           }
         },
         "token_confidence": {
-          "min": 0.8568719,
-          "mean": 0.991839,
+          "min": 0.7690852,
+          "mean": 0.9872234,
           "tokens": 19
         }
       }
@@ -25795,7 +25795,7 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "0c2ae976b2bce425a35919f12762e64b9653ef787c085c6218b6271191a69fe8",
+      "prompt_sha256": "175ffdae73df4ca22fc02755775d2ad1193191572356c43e51acdd3c38eac9e7",
       "reply": {
         "outcome": "proposed",
         "proposal": {
@@ -25851,8 +25851,8 @@
           }
         },
         "token_confidence": {
-          "min": 0.96558195,
-          "mean": 0.99608254,
+          "min": 0.96737045,
+          "mean": 0.9958665,
           "tokens": 26
         }
       }
@@ -26037,8 +26037,8 @@
           }
         },
         "token_confidence": {
-          "min": 0.78875136,
-          "mean": 0.8807125,
+          "min": 0.85770017,
+          "mean": 0.90608484,
           "tokens": 3
         }
       }
@@ -26255,7 +26255,7 @@
         "proposal": {
           "document_type": "QUARTERLY BUSINESS REVIEW",
           "document_date": "2026-05-21",
-          "date_role": "execution",
+          "date_role": "issuance",
           "parties": [
             "Contoso Worldwide, Inc.",
             "Ridgeline Cartography LLC"
@@ -26275,7 +26275,7 @@
               "p1.b1"
             ],
             "document_date": "2026-05-21",
-            "date_role": "execution",
+            "date_role": "issuance",
             "date_evidence": [
               "p1.b4"
             ],
@@ -26305,8 +26305,8 @@
           }
         },
         "token_confidence": {
-          "min": 0.86244875,
-          "mean": 0.9917904,
+          "min": 0.8603517,
+          "mean": 0.99212235,
           "tokens": 23
         }
       }
@@ -26538,8 +26538,8 @@
           }
         },
         "token_confidence": {
-          "min": 0.5955943,
-          "mean": 0.9798973,
+          "min": 0.6560281,
+          "mean": 0.98269194,
           "tokens": 22
         }
       }

@@ -77,8 +77,10 @@ describe('rename history', () => {
     render(<App bridge={bridge} />);
     const dialog = await openHistory();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Clear history' }));
-    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('History cleared.'));
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Clear completed…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear completed' }));
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Cleared 1 completed document.'));
 
     // Clearing removed the completed rows, so reopen from a reseeded queue but
     // the same (now empty) history.
@@ -91,7 +93,7 @@ describe('rename history', () => {
   it('opens a filed document still in the queue from its newest history row', async () => {
     const bridge = createInMemoryBridge();
     const openItem = vi.fn(async () => undefined);
-    const revealItem = vi.fn(async () => { throw { code: 'PATH_UNAVAILABLE', message: 'the document is not where Intern last saw it' }; });
+    const revealItem = vi.fn(async () => { throw { code: 'PATH_UNAVAILABLE', message: 'the document is not where ATLAS last saw it' }; });
     render(<App bridge={{ ...bridge, openItem, revealItem }} />);
     const dialog = await openHistory();
 
@@ -100,7 +102,7 @@ describe('rename history', () => {
     await waitFor(() => expect(openItem).toHaveBeenCalledWith('completed'));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Show 2024-01-22 Lease Agreement.pdf in its folder' }));
 
-    expect(await within(dialog).findByRole('alert', { name: 'Open error' })).toHaveTextContent('The document is not where Intern last saw it.');
+    expect(await within(dialog).findByRole('alert', { name: 'Open error' })).toHaveTextContent('The document is not where ATLAS last saw it.');
     expect(revealItem).toHaveBeenCalledWith('completed');
   });
 

@@ -487,7 +487,7 @@ impl<'a> SharePointSetup<'a> {
             {
                 return Err(SharePointSetupError::new(
                     "SHAREPOINT_ROOT_NESTED",
-                    "OneDrive registered the Files library at overlapping folders. Intern cannot safely map local files until the duplicate or nested sync is removed.",
+                    "OneDrive registered the Files library at overlapping folders. ATLAS cannot safely map local files until the duplicate or nested sync is removed.",
                 ));
             }
         }
@@ -950,7 +950,7 @@ impl AutostartBoundary for ProductionAutostart<'_> {
         self.0.autolaunch().is_enabled().map_err(|_| {
             SharePointSetupError::new(
                 "AUTOSTART_FAILED",
-                "Intern could not read its start-at-login registration.",
+                "ATLAS could not read its start-at-login registration.",
             )
         })
     }
@@ -965,7 +965,7 @@ impl AutostartBoundary for ProductionAutostart<'_> {
         result.map_err(|_| {
             SharePointSetupError::new(
                 "AUTOSTART_FAILED",
-                "Intern could not update its start-at-login registration.",
+                "ATLAS could not update its start-at-login registration.",
             )
         })
     }

@@ -15,7 +15,7 @@ import { openDetails, queueCell } from '../queue/gridTesting';
 async function openSettings() {
   fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
   const dialog = await screen.findByRole('dialog', { name: 'Settings' });
-  fireEvent.click(within(dialog).getByText('Naming and filing', { selector: 'summary' }));
+  fireEvent.click(within(dialog).getByText('How ATLAS names files', { selector: 'summary' }));
   return dialog;
 }
 
@@ -43,17 +43,17 @@ describe('which documents are ready, in Settings', () => {
     expect(balanced(dialog)).not.toBeChecked();
     expect(group).toBeVisible();
     // Strict: only what passes every check.
-    expect(strict(dialog)).toHaveAccessibleName(expect.stringMatching(/^Strict \(default\)\s*A document is ready only when every check passes\. Everything else waits for you\.$/));
+    expect(strict(dialog)).toHaveAccessibleName(expect.stringMatching(/^Strict \(default\)\s*Ready only when every check passes\. Everything else waits for you\.$/));
     // Balanced: what can also be ready, what still waits, and what it costs.
     const words = balanced(dialog).closest('label')!;
-    expect(words).toHaveTextContent('A document can also be ready when the only doubts are about its type or its description, or when the model was unsure of its reading.');
-    expect(words).toHaveTextContent('It still waits for you when Intern could not confirm its date or a party from the document, when its name would have no document type, or when Intern could not read it.');
+    expect(words).toHaveTextContent('Also ready when the only doubts are its type, its description or the model’s own confidence.');
+    expect(words).toHaveTextContent('Still waits when the date or a party cannot be confirmed, the name would have no document type, or ATLAS could not read it.');
     // What it costs is said on a line of its own, not lost at the end of the paragraph.
-    const cost = within(words).getByText('So more documents can be renamed without you looking at them, and more of those names will be wrong.');
+    const cost = within(words).getByText('More documents are renamed without you looking, and more of those names will be wrong.');
     expect(cost).toHaveClass('review-level-cost');
     expect(balanced(dialog)).toHaveAccessibleName(expect.stringMatching(/more of those names will be wrong\.$/));
     // At either level, the quick model's readings wait.
-    expect(group).toHaveTextContent('At either level, a document the quick model read always waits for you.');
+    expect(group).toHaveTextContent('Either way, a document the quick model read always waits for you.');
     // No figure anywhere in it: how many more are wrong depends on the documents.
     expect(group.textContent).not.toMatch(/\d/);
   });
@@ -63,13 +63,13 @@ describe('which documents are ready, in Settings', () => {
     const dialog = await openSettings();
     const group = level(dialog);
     // Read out with the group: what ready means for the button and for automatic renaming, and the quick model.
-    expect(group).toHaveAccessibleDescription('Ready documents are the ones Rename all ready renames. With automatic renaming on, below, Intern renames them by itself. At either level, a document the quick model read always waits for you.');
+    expect(group).toHaveAccessibleDescription('Ready documents are the ones Rename all ready renames, or that ATLAS renames by itself if automatic renaming is on. Either way, a document the quick model read always waits for you.');
     const automatic = within(dialog).getByRole('checkbox', { name: 'Automatically rename ready documents' });
     expect(group.contains(automatic)).toBe(false);
     expect(group.compareDocumentPosition(automatic) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // The checkbox no longer speaks of confidence, which at Balanced is not what ready means.
     expect(dialog).not.toHaveTextContent(/high-confidence|less sure about/);
-    expect(dialog).toHaveTextContent('Anything that is not ready still waits for you in the queue.');
+    expect(dialog).toHaveTextContent('Anything not ready still waits for you.');
     // The level is there whether automatic renaming is on or off.
     expect(automatic).not.toBeChecked();
     expect(strict(dialog)).toBeEnabled();
@@ -203,7 +203,7 @@ describe('the level from the keyboard', () => {
   it('is reached by Tab between the organization\'s names and automatic renaming, each level a stop', async () => {
     render(<App bridge={createInMemoryBridge()} />);
     const dialog = await openSettings();
-    const names = within(dialog).getByLabelText('Your organization\'s names');
+    const names = within(dialog).getByLabelText('Your organizations');
     names.focus();
     fireEvent.keyDown(names, { key: 'Tab' });
     expect(strict(dialog)).toHaveFocus();
@@ -221,7 +221,7 @@ describe('the level from the keyboard', () => {
     render(<App bridge={createInMemoryBridge()} />);
     fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
     const dialog = await screen.findByRole('dialog', { name: 'Settings' });
-    const summary = within(dialog).getByText('Naming and filing', { selector: 'summary' });
+    const summary = within(dialog).getByText('How ATLAS names files', { selector: 'summary' });
     summary.focus();
     fireEvent.keyDown(summary, { key: 'Tab' });
     expect(within(dialog).getByText('Learned spellings', { selector: 'summary' })).toHaveFocus();
@@ -266,7 +266,7 @@ describe('the queue after the level is saved', () => {
 
     await save(balanced);
     await waitFor(() => expect(queueCell(LEASE, 'status')).toHaveTextContent('Ready with a note'));
-    expect(queueCell(LEASE, 'check')).toHaveTextContent('Note: Type uncertain +1 more');
+    expect(queueCell(LEASE, 'check')).toHaveTextContent('Note: Type not confirmed +1 more');
     expect(screen.queryByRole('button', { name: /needs? review/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '4 ready, 1 with a note' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Rename all ready' })).toHaveTextContent('Rename all ready 4');
@@ -295,7 +295,7 @@ describe('the queue after the level is saved', () => {
     expect(within(panel).getByRole('heading', { name: 'What to check' })).toBeInTheDocument();
 
     await save(balanced);
-    await waitFor(() => expect(within(panel).getByRole('region', { name: "Intern's note" })).toBeInTheDocument());
+    await waitFor(() => expect(within(panel).getByRole('region', { name: "ATLAS's note" })).toBeInTheDocument());
     expect(within(panel).queryByRole('heading', { name: 'What to check' })).not.toBeInTheDocument();
     expect(within(panel).getByLabelText('Filename')).toHaveValue('2023-09-15 Lease of 123 Main St');
     expect(within(panel).getByRole('button', { name: /^Apply rename/ })).toBeEnabled();

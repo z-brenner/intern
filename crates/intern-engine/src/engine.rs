@@ -39,7 +39,7 @@ use crate::fingerprint::{self, source_fingerprint};
 use crate::index::EvidenceIndex;
 use crate::naming::compose_filename;
 use crate::profile::PromptProfile;
-use crate::prompt::build_evidence_request;
+use crate::prompt::build_evidence_request_named;
 use crate::retrieve::{EvidenceContext, RetrievalConfig, retrieve};
 use crate::validate::{stated_only_by_volatile_formulas, validate};
 
@@ -103,6 +103,9 @@ pub struct PreparedEvidence {
     pub index: EvidenceIndex,
     pub context: EvidenceContext,
     pub request: ModelRequest,
+    /// The file's name the request shows, if any
+    /// ([`DocumentSource::file_name`]), kept so a refit shows it too.
+    pub file_name: Option<String>,
     /// The retrieval budget the context was chosen at, in percent of the
     /// configured one.
     pub scale_pct: u32,
@@ -452,7 +455,12 @@ impl Engine {
     /// as the digest pipeline's retry counts its first distillation.
     pub fn refit_halved(&self, prepared: &PreparedEvidence) -> EngineResult<PreparedEvidence> {
         let scale = (prepared.scale_pct / 2).max(1);
-        let mut halved = self.fit(prepared.index.clone(), prepared.index_micros, scale)?;
+        let mut halved = self.fit(
+            prepared.index.clone(),
+            prepared.file_name.clone(),
+            prepared.index_micros,
+            scale,
+        )?;
         halved.refits += prepared.refits + 1;
         halved.retrieval_micros = halved
             .retrieval_micros
@@ -464,18 +472,21 @@ impl Engine {
     /// Builds a document's evidence index, chooses the units its prompt
     /// carries, and fits the prompt to the model's context the way the
     /// digest pipeline does: a prompt estimated not to fit is retrieved
-    /// again at a smaller budget, at most twice.
+    /// again at a smaller budget, at most twice. The file's name, when the
+    /// source carries one that says something, rides along as orientation
+    /// ([`crate::prompt::file_name_hint`]) and is counted in the fit.
     pub fn prepare(&self, source: &DocumentSource) -> EngineResult<PreparedEvidence> {
         let index_started = Instant::now();
         let options = self.retrieval.index_options();
         let index = guarded(|| EvidenceIndex::build_with(source, options))?;
         let index_micros = micros_since(index_started);
-        self.fit(index, index_micros, 100)
+        self.fit(index, source.file_name.clone(), index_micros, 100)
     }
 
     fn fit(
         &self,
         index: EvidenceIndex,
+        file_name: Option<String>,
         index_micros: u64,
         start_pct: u32,
     ) -> EngineResult<PreparedEvidence> {
@@ -484,7 +495,7 @@ impl Engine {
         let mut context = guarded(|| retrieve(&index, &self.retrieval, scale_pct))?;
         let mut retrieval_micros = micros_since(retrieval_started);
         let prompt_started = Instant::now();
-        let mut request = self.evidence_request(&index, &context);
+        let mut request = self.evidence_request(&index, &context, file_name.as_deref());
         let mut prompt_micros = micros_since(prompt_started);
         let mut refits = 0_u32;
         if let Some(context_tokens) = self.client.context_tokens() {
@@ -507,7 +518,7 @@ impl Engine {
                 context = guarded(|| retrieve(&index, &self.retrieval, scale_pct))?;
                 retrieval_micros = retrieval_micros.saturating_add(micros_since(started));
                 let started = Instant::now();
-                request = self.evidence_request(&index, &context);
+                request = self.evidence_request(&index, &context, file_name.as_deref());
                 prompt_micros = prompt_micros.saturating_add(micros_since(started));
                 refits += 1;
             }
@@ -516,6 +527,7 @@ impl Engine {
             index,
             context,
             request,
+            file_name,
             scale_pct,
             refits,
             index_micros,
@@ -525,11 +537,16 @@ impl Engine {
     }
 
     /// The evidence request for `context`, asked the way this engine's
-    /// profile says.
-    fn evidence_request(&self, index: &EvidenceIndex, context: &EvidenceContext) -> ModelRequest {
+    /// profile says, for a file named `file_name`.
+    fn evidence_request(
+        &self,
+        index: &EvidenceIndex,
+        context: &EvidenceContext,
+        file_name: Option<&str>,
+    ) -> ModelRequest {
         ModelRequest {
             profile: self.profile,
-            ..build_evidence_request(index, context)
+            ..build_evidence_request_named(index, context, file_name)
         }
     }
 
@@ -769,9 +786,10 @@ fn request_tokens(request: &ModelRequest) -> usize {
 /// The chat template, the fixed instructions with an empty context's
 /// scaffolding, and the whole reply budget are spent before any evidence: a
 /// context no larger fits no request at any retrieval scale, and every
-/// document would end in `MODEL_INPUT_TOO_LARGE`. On top of them is room for
-/// a full-length line for each field, about what retrieval takes at its
-/// smallest.
+/// document would end in `MODEL_INPUT_TOO_LARGE`. So is the line showing
+/// the file's name, at its costliest: the longest name a prompt shows, all
+/// figures but one word. On top of them is room for a full-length line for
+/// each field, about what retrieval takes at its smallest.
 pub fn min_evidence_context_tokens() -> usize {
     min_evidence_context_tokens_with(None)
 }
@@ -781,9 +799,13 @@ pub fn min_evidence_context_tokens() -> usize {
 pub fn min_evidence_context_tokens_with(profile: Option<PromptProfile>) -> usize {
     let index = EvidenceIndex::build(&crate::distill::source_from_text(""));
     let context = retrieve(&index, &RetrievalConfig::default(), 100);
+    let costliest_name = format!(
+        "Lease {}",
+        "1".repeat(crate::prompt::MAX_FILE_NAME_CHARACTERS - "Lease ".len())
+    );
     let fixed = request_tokens(&ModelRequest {
         profile,
-        ..build_evidence_request(&index, &context)
+        ..build_evidence_request_named(&index, &context, Some(&costliest_name))
     });
     let line = estimated_tokens(&format!(
         "[p100.b100.r100] {}\n",
@@ -894,6 +916,7 @@ mod tests {
                 media_type: "image/png".into(),
                 bytes: vec![1, 2, 3],
             }),
+            file_name: None,
         }
     }
 
@@ -2028,6 +2051,122 @@ mod tests {
             prepared.scale_pct
         );
         assert!(prepared.scale_pct < 100, "{}", prepared.scale_pct);
+    }
+
+    /// The widest evidence the default configuration sends - a document
+    /// whole at its threshold, or a long one's excerpts at the dense tier -
+    /// fits the local server's context beside the instructions, the
+    /// costliest file name and the whole reply, so it is sent as retrieved,
+    /// never condensed to fit. (The condensing below stays for what the
+    /// estimate cannot see: a document of digits or CJK whose excerpts cost
+    /// more than their budget says.)
+    #[test]
+    fn the_widest_default_evidence_fits_the_local_context() {
+        let config = RetrievalConfig::default();
+        let widest = (config.whole_document_tokens as usize)
+            .max(config.budgets.total() as usize * config.dense_pct as usize / 100);
+        let index = EvidenceIndex::build(&source_from_text(""));
+        let context = retrieve(&index, &config, 100);
+        let costliest_name = format!(
+            "Lease {}",
+            "1".repeat(crate::prompt::MAX_FILE_NAME_CHARACTERS - "Lease ".len())
+        );
+        let fixed = request_tokens(&build_evidence_request_named(
+            &index,
+            &context,
+            Some(&costliest_name),
+        ));
+        let ceiling = crate::server::CONTEXT_TOKENS as usize - TEMPLATE_TOKENS;
+        assert!(
+            fixed + widest + MAX_REPLY_TOKENS as usize <= ceiling,
+            "{fixed} + {widest} + {MAX_REPLY_TOKENS} of {ceiling}"
+        );
+    }
+
+    /// A document's file name rides on its request, before the evidence,
+    /// and on the request a refit sends; validation never reads it. A type
+    /// or a party only the name states is not accepted, whatever line the
+    /// reply cites for it, and never reaches the filename.
+    #[test]
+    fn a_fact_only_the_file_name_states_is_not_accepted() {
+        fn reply(lines: &[(String, String)]) -> String {
+            format!(
+                r#"{{"type_ids":["{}"],"type":"Host Chair SOW","date_ids":["{}"],"date":"2026-03-03","date_role":"effective","parties":[{{"ids":["{}"],"name":"John Smith","role":"contractor"}}],"subject_ids":["{}"],"subject":"member-map engagement","confidence":0.95,"needs_review":false}}"#,
+                handle_of(lines, "STATEMENT OF WORK"),
+                handle_of(lines, "March 3, 2026"),
+                handle_of(lines, "Ridgeline"),
+                handle_of(lines, "member-map"),
+            )
+        }
+        let source = DocumentSource {
+            file_name: Some("Host Chair SOW John Smith.pdf".into()),
+            ..source_from_text(
+                "STATEMENT OF WORK\n\nThis Statement of Work is effective as of March 3, 2026 \
+                 between Contoso Worldwide, Inc. and Ridgeline Cartography LLC for the \
+                 member-map engagement.",
+            )
+        };
+        let engine = Engine::with_proposer(Box::new(Reader(reply)));
+        let prepared = engine.prepare(&source).unwrap();
+        assert!(
+            prepared
+                .request
+                .prompt
+                .starts_with("The file is currently named \"Host Chair SOW John Smith.pdf\"."),
+            "{}",
+            prepared.request.prompt
+        );
+        let halved = engine.refit_halved(&prepared).unwrap();
+        assert!(
+            halved
+                .request
+                .prompt
+                .contains("Host Chair SOW John Smith.pdf")
+        );
+        let unnamed = engine
+            .prepare(&DocumentSource {
+                file_name: None,
+                ..source.clone()
+            })
+            .unwrap();
+        assert!(!unnamed.request.prompt.contains("currently named"));
+        assert_eq!(unnamed.request.grammar, prepared.request.grammar);
+
+        let analysis = engine.analyze(&source, "pdf", &[]).unwrap();
+        assert!(
+            !analysis.filename.contains("John Smith"),
+            "{}",
+            analysis.filename
+        );
+        assert!(
+            !analysis.filename.contains("Host Chair"),
+            "{}",
+            analysis.filename
+        );
+        assert!(
+            analysis
+                .proposal
+                .parties
+                .iter()
+                .all(|party| party != "John Smith"),
+            "{:?}",
+            analysis.proposal.parties
+        );
+        assert_ne!(
+            analysis.proposal.document_type.as_deref(),
+            Some("Host Chair SOW")
+        );
+        assert_ne!(analysis.status, ProposalStatus::Ready, "{analysis:#?}");
+        for reason in [
+            ReviewReason::TypeUnsupported,
+            ReviewReason::PartyUnsupported,
+        ] {
+            assert!(
+                analysis.review_reasons.contains(&reason),
+                "{reason:?}: {:?}",
+                analysis.review_reasons
+            );
+        }
     }
 
     /// An engine told how its model is asked sends every evidence request

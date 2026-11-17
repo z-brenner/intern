@@ -19,17 +19,18 @@ use std::{
         mpsc,
     },
     thread,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use intern_core::QueueStatus;
 use intern_engine::{
     AnalysisTelemetry, DateRole, DigestBudget, DocumentAnalysis, DocumentSource, Evidence,
     ExtractProgress, ModelProposal, PageOrigin, PartyRelation, ProposalStatus, ReviewLevel,
-    ReviewReason, SourcePage, distill, engine::finish, fingerprint, validate,
+    ReviewReason, SourcePage, compose_filename, distill, engine::finish, fingerprint, validate,
 };
 use intern_queue::{
-    AdmissionEvidence, AdmissionGuard, AdmissionStage,
+    AdmissionEvidence, AdmissionGuard, AdmissionStage, DestinationLayout,
+    fallback_date::{DATE_FROM_FILE_MODIFIED, DATE_FROM_FILENAME},
     pipeline::{
         AnalyzerBoundary, DuplicateOracle, KnownFiling, LEARNED_SPELLING_UNCONFIRMED, ModelFailure,
         NEAR_DUPLICATE, Pipeline, PipelineError, PipelineEventSink, PipelineItem, PipelineProgress,
@@ -78,7 +79,7 @@ const JULY: (&str, &str) = ("2024-07-05", "July 5, 2024");
 
 /// A document whose reading carries only a note about its type.
 fn noted(date: (&'static str, &'static str)) -> Doc {
-    doc(date.0, date.1, &[ReviewReason::TypeInferred])
+    doc(date.0, date.1, &[ReviewReason::TypeUnsupported])
 }
 
 /// A document whose reading validation has nothing to say about.
@@ -86,8 +87,16 @@ fn plain(date: (&'static str, &'static str)) -> Doc {
     doc(date.0, date.1, &[])
 }
 
+/// A document whose reading found no date in it, and carries `notes`
+/// beside that.
+fn undated(date: (&'static str, &'static str), notes: &[ReviewReason]) -> Doc {
+    let mut reasons = vec![ReviewReason::DateMissing];
+    reasons.extend_from_slice(notes);
+    doc(date.0, date.1, &reasons)
+}
+
 fn name_for(iso: &str) -> String {
-    format!("{iso} Employment Agreement between John Smith and Acme Corporation.pdf")
+    format!("{iso} Acme - Employment Agreement with John Smith.pdf")
 }
 
 /// The reader and the model in one: it reads each file as the agreement of
@@ -191,6 +200,14 @@ impl AnalyzerBoundary for Office {
         if !doc.notes.is_empty() {
             analysis.review_reasons.clone_from(&doc.notes);
             analysis.status = ProposalStatus::NeedsReview;
+        }
+        // A reading noted for a missing date has none, and its name none
+        // either, as the engine composes it.
+        if doc.notes.contains(&ReviewReason::DateMissing) {
+            analysis.proposal.document_date = None;
+            analysis.proposal.date_role = None;
+            analysis.filename =
+                compose_filename(&analysis.proposal, extension, existing_names).value;
         }
         Ok(analysis)
     }
@@ -329,6 +346,27 @@ impl Rig {
         self.pipeline.enqueue_files(&[path]).unwrap().remove(0).id
     }
 
+    /// [`Self::add`] for a file last modified at `modified`, and the queue
+    /// reads it.
+    fn read_modified(&self, name: &str, doc: Doc, modified: SystemTime) -> i64 {
+        let path = self.inbox.join(name);
+        fs::write(&path, name.as_bytes()).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        self.office
+            .docs
+            .lock()
+            .unwrap()
+            .insert(name.to_owned(), doc);
+        let id = self.pipeline.enqueue_files(&[path]).unwrap().remove(0).id;
+        self.pipeline.run_until_idle().unwrap();
+        id
+    }
+
     /// [`Self::add`], and the queue reads it.
     fn read(&self, name: &str, doc: Doc) -> i64 {
         let id = self.add(name, doc);
@@ -440,21 +478,21 @@ fn a_reading_with_only_a_type_note_waits_at_strict_and_is_ready_at_balanced() {
     assert_eq!(strict.status(waiting), QueueStatus::NeedsReview);
     let record = strict.record(waiting);
     assert_eq!(record.status, ProposalStatus::NeedsReview);
-    assert_eq!(record.reasons, ["TYPE_INFERRED"]);
+    assert_eq!(record.reasons, ["TYPE_UNSUPPORTED"]);
 
     let balanced = Rig::new(BALANCED, false);
     let ready = balanced.read("noted.pdf", noted(APRIL));
     assert_eq!(balanced.status(ready), QueueStatus::Ready);
     let record = balanced.record(ready);
     assert_eq!(record.status, ProposalStatus::Ready);
-    assert_eq!(record.reasons, ["TYPE_INFERRED"], "a note, still said");
+    assert_eq!(record.reasons, ["TYPE_UNSUPPORTED"], "a note, still said");
     assert_eq!(record.filename, name_for(APRIL.0));
     assert!(!record.approved, "ready is not approved");
     assert_eq!(
         (record.analysis.status, record.analysis.review_reasons),
         (
             ProposalStatus::NeedsReview,
-            vec![ReviewReason::TypeInferred]
+            vec![ReviewReason::TypeUnsupported]
         ),
         "the reading is stored as the engine made it"
     );
@@ -481,8 +519,11 @@ fn at_balanced_automatic_renaming_files_it_and_its_reasons_stay_on_the_record() 
     assert_eq!(balanced.status(filed), QueueStatus::Completed);
     assert_eq!(balanced.filed_names(), [name_for(APRIL.0)]);
     let record = balanced.record(filed);
-    assert_eq!(record.reasons, ["TYPE_INFERRED"]);
-    assert_eq!(record.analysis.review_reasons, [ReviewReason::TypeInferred]);
+    assert_eq!(record.reasons, ["TYPE_UNSUPPORTED"]);
+    assert_eq!(
+        record.analysis.review_reasons,
+        [ReviewReason::TypeUnsupported]
+    );
     assert!(!record.approved, "filed by itself, approved by nobody");
     assert!(!record.reviewed);
 
@@ -507,7 +548,10 @@ fn a_party_the_document_does_not_settle_waits_at_both_levels() {
             doc(
                 MAY.0,
                 MAY.1,
-                &[ReviewReason::TypeInferred, ReviewReason::PartyUnsupported],
+                &[
+                    ReviewReason::TypeUnsupported,
+                    ReviewReason::PartyUnsupported,
+                ],
             ),
         );
         assert_eq!(rig.status(alone), QueueStatus::NeedsReview, "{level:?}");
@@ -515,7 +559,7 @@ fn a_party_the_document_does_not_settle_waits_at_both_levels() {
         assert_eq!(rig.status(beside_a_note), QueueStatus::NeedsReview);
         assert_eq!(
             rig.record(beside_a_note).reasons,
-            ["TYPE_INFERRED", "PARTY_UNSUPPORTED"]
+            ["TYPE_UNSUPPORTED", "PARTY_UNSUPPORTED"]
         );
         assert!(rig.filed_names().is_empty(), "{level:?}");
     }
@@ -533,7 +577,7 @@ fn a_near_duplicate_and_an_unchecked_spelling_still_hold_at_balanced() {
     let rescan = rig.read("scan-2.pdf", noted(APRIL));
     assert_eq!(rig.status(rescan), QueueStatus::NeedsReview);
     let record = rig.record(rescan);
-    assert_eq!(record.reasons, ["TYPE_INFERRED", NEAR_DUPLICATE]);
+    assert_eq!(record.reasons, ["TYPE_UNSUPPORTED", NEAR_DUPLICATE]);
     assert_eq!(
         record.near_duplicate_of.as_deref(),
         Some(name_for(APRIL.0).as_str())
@@ -547,14 +591,14 @@ fn a_near_duplicate_and_an_unchecked_spelling_still_hold_at_balanced() {
     rig.pipeline
         .approve(
             taught,
-            "2024-04-12 Employment Agreement between John Smith and Acme.pdf",
+            "2024-04-12 ACME Corp - Employment Agreement with John Smith.pdf",
             "A sentence about the agreement.",
         )
         .unwrap();
     let rule = rig.pipeline.learned_rules().unwrap().remove(0);
     assert_eq!(
         (rule.from.as_str(), rule.to.as_str()),
-        ("Acme Corporation", "Acme")
+        ("Acme Corporation", "ACME Corp")
     );
     rig.pipeline.use_rule(rule.id).unwrap();
     rig.save(|settings| settings.automatic_rename = true);
@@ -563,11 +607,11 @@ fn a_near_duplicate_and_an_unchecked_spelling_still_hold_at_balanced() {
     let record = rig.record(respelled);
     assert_eq!(
         record.filename,
-        "2024-05-03 Employment Agreement between John Smith and Acme.pdf"
+        "2024-05-03 ACME Corp - Employment Agreement with John Smith.pdf"
     );
     assert_eq!(
         record.reasons,
-        ["TYPE_INFERRED", LEARNED_SPELLING_UNCONFIRMED]
+        ["TYPE_UNSUPPORTED", LEARNED_SPELLING_UNCONFIRMED]
     );
     assert_eq!(rig.filed_names().len(), 1, "only the approved one is filed");
 }
@@ -632,7 +676,7 @@ fn changing_the_level_judges_the_waiting_documents_again_both_ways() {
     );
     let sent_back = rig.record(noted_id);
     assert_eq!(sent_back.status, ProposalStatus::NeedsReview);
-    assert_eq!(sent_back.reasons, ["TYPE_INFERRED"]);
+    assert_eq!(sent_back.reasons, ["TYPE_UNSUPPORTED"]);
     assert_eq!(sent_back.filename, as_read.filename);
 
     assert!(rig.set_level(BALANCED));
@@ -669,7 +713,7 @@ fn a_document_the_level_makes_ready_follows_automatic_renaming_and_the_pause() {
     rig.pipeline.run_until_idle().unwrap();
     assert_eq!(rig.status(id), QueueStatus::Completed);
     assert_eq!(rig.filed_names(), [name_for(APRIL.0)]);
-    assert_eq!(rig.record(id).reasons, ["TYPE_INFERRED"]);
+    assert_eq!(rig.record(id).reasons, ["TYPE_UNSUPPORTED"]);
 
     let paused = Rig::new(STRICT, true);
     let id = paused.read("noted.pdf", noted(APRIL));
@@ -785,7 +829,7 @@ fn a_change_back_to_strict_that_never_reached_the_queue_files_nothing() {
         assert_eq!(item(&pipeline, noted_id).status, QueueStatus::NeedsReview);
         let record = item(&pipeline, noted_id).proposal.unwrap();
         assert_eq!(record.status, ProposalStatus::NeedsReview);
-        assert_eq!(record.reasons, ["TYPE_INFERRED"], "nothing added");
+        assert_eq!(record.reasons, ["TYPE_UNSUPPORTED"], "nothing added");
         pipeline.run_until_idle().unwrap();
         assert_eq!(item(&pipeline, noted_id).status, QueueStatus::NeedsReview);
         assert_eq!(
@@ -832,7 +876,7 @@ fn the_scheduler_pass_alone_sends_back_what_strict_holds() {
     assert_eq!(rig.status(noted_id), QueueStatus::NeedsReview);
     let sent_back = rig.record(noted_id);
     assert_eq!(sent_back.status, ProposalStatus::NeedsReview);
-    assert_eq!(sent_back.reasons, ["TYPE_INFERRED"], "nothing added");
+    assert_eq!(sent_back.reasons, ["TYPE_UNSUPPORTED"], "nothing added");
     assert_eq!(sent_back.filename, as_read.filename);
     assert_eq!(rig.status(plain_id), QueueStatus::Ready);
     assert!(rig.filed_names().is_empty(), "automatic renaming is off");
@@ -847,7 +891,7 @@ fn settings_that_cannot_be_read_mean_strict() {
     fs::write(rig.settings().path(), b"{ this is not json").unwrap();
     let during = rig.read("during.pdf", noted(APRIL));
     assert_eq!(rig.status(during), QueueStatus::NeedsReview);
-    assert_eq!(rig.record(during).reasons, ["TYPE_INFERRED"]);
+    assert_eq!(rig.record(during).reasons, ["TYPE_UNSUPPORTED"]);
 
     let rig = Rig::new(BALANCED, false);
     let before = rig.read("before.pdf", noted(APRIL));
@@ -855,7 +899,7 @@ fn settings_that_cannot_be_read_mean_strict() {
     fs::write(rig.settings().path(), b"{ this is not json").unwrap();
     rig.pipeline.recover().unwrap();
     assert_eq!(rig.status(before), QueueStatus::NeedsReview);
-    assert_eq!(rig.record(before).reasons, ["TYPE_INFERRED"]);
+    assert_eq!(rig.record(before).reasons, ["TYPE_UNSUPPORTED"]);
     assert!(rig.filed_names().is_empty());
 }
 
@@ -879,7 +923,7 @@ fn two_scans_the_level_makes_ready_are_not_both_filed() {
     assert_eq!(rig.status(first), QueueStatus::Completed);
     assert_eq!(rig.status(second), QueueStatus::NeedsReview);
     let held = rig.record(second);
-    assert_eq!(held.reasons, ["TYPE_INFERRED", NEAR_DUPLICATE]);
+    assert_eq!(held.reasons, ["TYPE_UNSUPPORTED", NEAR_DUPLICATE]);
     assert_eq!(
         held.near_duplicate_of.as_deref(),
         Some(name_for(APRIL.0).as_str())
@@ -915,7 +959,7 @@ fn a_scan_whose_twin_was_filed_since_it_was_read_is_not_made_ready() {
     assert_eq!(rig.status(second), QueueStatus::NeedsReview);
     let held = rig.record(second);
     assert_eq!(held.status, ProposalStatus::NeedsReview);
-    assert_eq!(held.reasons, ["TYPE_INFERRED", NEAR_DUPLICATE]);
+    assert_eq!(held.reasons, ["TYPE_UNSUPPORTED", NEAR_DUPLICATE]);
     assert_eq!(held.near_duplicate_of.as_deref(), Some(name.as_str()));
     assert_eq!(held.revision, as_read.revision, "it never left review");
     assert_eq!(rig.filed_names(), [name]);
@@ -929,7 +973,7 @@ fn assert_only_the_first_scan_is_filed(rig: &Rig, first: i64, second: i64) {
     assert_eq!(rig.status(second), QueueStatus::NeedsReview);
     let held = rig.record(second);
     assert_eq!(held.status, ProposalStatus::NeedsReview);
-    assert_eq!(held.reasons, ["TYPE_INFERRED", NEAR_DUPLICATE]);
+    assert_eq!(held.reasons, ["TYPE_UNSUPPORTED", NEAR_DUPLICATE]);
     assert_eq!(
         held.near_duplicate_of.as_deref(),
         Some(name_for(APRIL.0).as_str())
@@ -1145,7 +1189,7 @@ impl MixedPair {
     /// The reasons the reading of scan `id` carries.
     fn notes(&self, id: i64) -> &'static [&'static str] {
         if id == self.weak {
-            &["TYPE_INFERRED"]
+            &["TYPE_UNSUPPORTED"]
         } else {
             &[]
         }
@@ -1343,7 +1387,7 @@ fn a_level_change_that_leaves_nothing_ready_says_so() {
     assert_eq!(rig.status(id), QueueStatus::NeedsReview);
     assert_eq!(
         rig.record(id).reasons,
-        ["TYPE_INFERRED", unreadable.as_str()]
+        ["TYPE_UNSUPPORTED", unreadable.as_str()]
     );
     assert!(rig.filed_names().is_empty());
 
@@ -1355,7 +1399,7 @@ fn a_level_change_that_leaves_nothing_ready_says_so() {
     let made_ready = rig.pipeline.review_level_changed(STRICT, BALANCED).unwrap();
     assert!(!made_ready);
     assert_eq!(rig.status(id), QueueStatus::NeedsReview);
-    assert_eq!(rig.record(id).reasons, ["TYPE_INFERRED"]);
+    assert_eq!(rig.record(id).reasons, ["TYPE_UNSUPPORTED"]);
     rig.pipeline.run_until_idle().unwrap();
     assert!(rig.filed_names().is_empty());
 }
@@ -1418,7 +1462,7 @@ fn a_pass_and_a_judging_at_once_file_a_pair_once(weak_first: bool) {
 
     // The scheduler's next pass, which the save's wake starts.
     rig.pipeline.run_until_idle().unwrap();
-    assert_one_scan_is_filed_and_the_other_held(&rig, pair.good, pair.weak, &["TYPE_INFERRED"]);
+    assert_one_scan_is_filed_and_the_other_held(&rig, pair.good, pair.weak, &["TYPE_UNSUPPORTED"]);
 }
 
 #[test]
@@ -1485,7 +1529,7 @@ fn a_document_held_as_a_near_duplicate_is_no_levels_to_make_ready() {
     let rescan = rig.read("scan-2.pdf", noted(APRIL));
     let held = rig.record(rescan);
     assert_eq!(rig.status(rescan), QueueStatus::NeedsReview);
-    assert_eq!(held.reasons, ["TYPE_INFERRED", NEAR_DUPLICATE]);
+    assert_eq!(held.reasons, ["TYPE_UNSUPPORTED", NEAR_DUPLICATE]);
 
     rig.pipeline.undo(original).unwrap();
     assert_eq!(rig.status(original), QueueStatus::NeedsReview);
@@ -1509,7 +1553,7 @@ fn a_document_both_levels_judge_alike_is_left_where_it_is() {
     rig.pipeline
         .approve(
             taught,
-            "2024-04-12 Employment Agreement between John Smith and Acme.pdf",
+            "2024-04-12 ACME Corp - Employment Agreement with John Smith.pdf",
             "A sentence about the agreement.",
         )
         .unwrap();
@@ -1552,10 +1596,209 @@ fn a_level_saved_while_a_document_is_read_judges_it_once_it_waits() {
         }));
         let id = rig.read("noted.pdf", noted(APRIL));
         assert_eq!(rig.status(id), settles, "read at {read_at:?}");
-        assert_eq!(rig.record(id).reasons, ["TYPE_INFERRED"]);
+        assert_eq!(rig.record(id).reasons, ["TYPE_UNSUPPORTED"]);
         assert_eq!(
             rig.filed_names().len(),
             usize::from(settles == QueueStatus::Completed)
         );
     }
+}
+
+/// What is minor holds a reading at no level: one whose only reasons are
+/// that its type is the document's own title or that its description is
+/// not a usable sentence is ready at strict, and filed by itself there
+/// with automatic renaming on. The note stays on the record, and the
+/// reading keeps the engine's own word.
+#[test]
+fn a_reading_with_only_minor_reasons_is_filed_at_strict() {
+    for minor in [ReviewReason::TypeInferred, ReviewReason::DescriptionInvalid] {
+        let rig = Rig::new(STRICT, true);
+        let id = rig.read("minor.pdf", doc(APRIL.0, APRIL.1, &[minor]));
+        assert_eq!(rig.status(id), QueueStatus::Completed, "{minor:?}");
+        assert_eq!(rig.filed_names(), [name_for(APRIL.0)], "{minor:?}");
+        let record = rig.record(id);
+        assert_eq!(record.reasons, [minor.as_str()]);
+        assert_eq!(record.analysis.review_reasons, [minor]);
+        assert_eq!(record.analysis.status, ProposalStatus::NeedsReview);
+        assert!(!record.approved, "filed by itself, approved by nobody");
+        // A description that is only no sentence says nothing untrue, and
+        // is kept.
+        assert_eq!(record.description, record.analysis.description);
+    }
+    // Beside a reason that is not minor it holds nothing, and the other
+    // reason holds the reading.
+    let rig = Rig::new(STRICT, true);
+    let id = rig.read(
+        "both.pdf",
+        doc(
+            APRIL.0,
+            APRIL.1,
+            &[ReviewReason::TypeInferred, ReviewReason::PartyUnsupported],
+        ),
+    );
+    assert_eq!(rig.status(id), QueueStatus::NeedsReview);
+    assert!(rig.filed_names().is_empty());
+}
+
+/// A sentence the model wrote that says something the document does not
+/// is not filed. Its reading is ready, the name owing nothing to the
+/// sentence, and the record keeps no description; the reading keeps the
+/// model's sentence for whoever looks.
+#[test]
+fn a_sentence_of_the_models_the_document_does_not_support_is_not_filed() {
+    for level in ReviewLevel::ALL {
+        let rig = Rig::new(level, true);
+        let id = rig.read(
+            "described.pdf",
+            doc(APRIL.0, APRIL.1, &[ReviewReason::DescriptionUnsupported]),
+        );
+        assert_eq!(rig.status(id), QueueStatus::Completed, "{level:?}");
+        let record = rig.record(id);
+        assert_eq!(record.description, "", "{level:?}");
+        assert!(
+            record
+                .analysis
+                .description
+                .starts_with("Employment agreement between John Smith"),
+            "{level:?}"
+        );
+        assert_eq!(record.reasons, ["DESCRIPTION_UNSUPPORTED"]);
+    }
+}
+
+/// A reading whose one doubt is that the document gave no date takes the
+/// date its original filename states. It is ready at strict, filed under
+/// that date and in that year's folder; the record says where the date
+/// came from in the place of "no date", and the reading keeps the engine's
+/// own reason beside the date.
+#[test]
+fn a_missing_date_is_taken_from_the_original_filename() {
+    let rig = Rig::new(STRICT, true);
+    rig.save(|settings| settings.destination_layout = DestinationLayout::Year);
+    let id = rig.read("Scan 2023-11-02.pdf", undated(APRIL, &[]));
+    assert_eq!(rig.status(id), QueueStatus::Completed);
+    let record = rig.record(id);
+    assert_eq!(record.filename, name_for("2023-11-02"));
+    assert_eq!(record.reasons, [DATE_FROM_FILENAME]);
+    assert_eq!(record.status, ProposalStatus::Ready);
+    assert!(!record.approved);
+    assert_eq!(
+        record.analysis.proposal.document_date.as_deref(),
+        Some("2023-11-02")
+    );
+    assert_eq!(record.analysis.review_reasons, [ReviewReason::DateMissing]);
+    assert!(
+        rig.filed
+            .join("2023")
+            .join(name_for("2023-11-02"))
+            .is_file(),
+        "filed in the year of the date it was given"
+    );
+    // A ready reading with a note shows a little less than the model's own
+    // figure; nothing is shown surer than the reading was.
+    let shown = record.name_confidence(false).unwrap();
+    assert!((shown - 0.94 * 0.9).abs() < 1e-6, "{shown}");
+}
+
+/// With no date in its name either, the reading takes the day its file was
+/// last modified, in this machine's calendar, and says so.
+#[test]
+fn with_no_date_in_its_name_a_reading_takes_the_day_its_file_was_modified() {
+    let rig = Rig::new(STRICT, true);
+    // 2 November 2023, at noon in Greenwich.
+    let modified = SystemTime::UNIX_EPOCH + Duration::from_secs(1_698_926_400);
+    let day = chrono::DateTime::<chrono::Local>::from(modified)
+        .format("%Y-%m-%d")
+        .to_string();
+    let id = rig.read_modified("Scan.pdf", undated(APRIL, &[]), modified);
+    assert_eq!(rig.status(id), QueueStatus::Completed);
+    assert_eq!(rig.filed_names(), [name_for(&day)]);
+    let record = rig.record(id);
+    assert_eq!(record.reasons, [DATE_FROM_FILE_MODIFIED]);
+    assert_eq!(record.analysis.proposal.document_date, Some(day));
+}
+
+/// A date from the file answers a missing date only. Beside another doubt
+/// about the date the reading waits undated, as it always did; with no
+/// date in the name and a modified day no document has (one not yet come)
+/// it waits the same; and a reading held for something else takes the
+/// date and still waits, its name dated for whoever approves it.
+#[test]
+fn a_date_from_the_file_answers_nothing_but_a_missing_date() {
+    let rig = Rig::new(STRICT, true);
+    let doubted = rig.read(
+        "Scan 2023-11-02.pdf",
+        undated(APRIL, &[ReviewReason::DateAmbiguous]),
+    );
+    assert_eq!(rig.status(doubted), QueueStatus::NeedsReview);
+    let record = rig.record(doubted);
+    assert_eq!(record.reasons, ["DATE_MISSING", "DATE_AMBIGUOUS"]);
+    assert_eq!(record.analysis.proposal.document_date, None);
+    assert!(!record.filename.starts_with("2023"), "{}", record.filename);
+
+    let later = SystemTime::now() + Duration::from_secs(40 * 24 * 60 * 60);
+    let nothing = rig.read_modified("Scan.pdf", undated(MAY, &[]), later);
+    assert_eq!(rig.status(nothing), QueueStatus::NeedsReview);
+    let record = rig.record(nothing);
+    assert_eq!(record.reasons, ["DATE_MISSING"]);
+    assert_eq!(record.analysis.proposal.document_date, None);
+
+    let party = rig.read(
+        "Letter 2023-11-03.pdf",
+        undated(JUNE, &[ReviewReason::PartyUnsupported]),
+    );
+    assert_eq!(rig.status(party), QueueStatus::NeedsReview);
+    let record = rig.record(party);
+    assert_eq!(record.filename, name_for("2023-11-03"));
+    assert_eq!(record.reasons, [DATE_FROM_FILENAME, "PARTY_UNSUPPORTED"]);
+    // In review, never shown surer than one in two, less for each reason.
+    let shown = record.name_confidence(true).unwrap();
+    assert!((shown - 0.5 * 0.9 * 0.9).abs() < 1e-6, "{shown}");
+
+    assert!(rig.filed_names().is_empty());
+}
+
+/// A date the file gave is no date of the document's. Two scans of one
+/// undated document, made on different days, are one document all the
+/// same: the second waits as a near duplicate of the first, filed under
+/// the first one's day.
+#[test]
+fn two_scans_dated_from_their_files_are_still_one_document() {
+    let rig = Rig::new(STRICT, true);
+    let first_day = SystemTime::UNIX_EPOCH + Duration::from_secs(1_698_926_400);
+    let next_week = first_day + Duration::from_secs(7 * 24 * 60 * 60);
+    let first = rig.read_modified("Scan 1.pdf", undated(APRIL, &[]), first_day);
+    assert_eq!(rig.status(first), QueueStatus::Completed);
+    let filed = rig.filed_names();
+    assert_eq!(filed.len(), 1);
+
+    let second = rig.read_modified("Scan 2.pdf", undated(APRIL, &[]), next_week);
+    assert_eq!(rig.status(second), QueueStatus::NeedsReview);
+    let record = rig.record(second);
+    assert_eq!(record.reasons, [DATE_FROM_FILE_MODIFIED, NEAR_DUPLICATE]);
+    assert_eq!(record.near_duplicate_of.as_deref(), Some(filed[0].as_str()));
+    assert_eq!(rig.filed_names(), filed);
+}
+
+/// A date from the file is the reading's own "no date", answered: a
+/// reading so dated that waits at strict for a note balanced takes is
+/// judged again when the level changes like any other, made ready there,
+/// and filed under the date the file gave.
+#[test]
+fn a_reading_dated_from_its_file_is_judged_again_when_the_level_changes() {
+    let rig = Rig::new(STRICT, true);
+    let id = rig.read(
+        "Scan 2023-11-02.pdf",
+        undated(APRIL, &[ReviewReason::TypeUnsupported]),
+    );
+    assert_eq!(rig.status(id), QueueStatus::NeedsReview);
+    assert_eq!(
+        rig.record(id).reasons,
+        [DATE_FROM_FILENAME, "TYPE_UNSUPPORTED"]
+    );
+
+    assert!(rig.set_level(BALANCED), "made ready");
+    rig.pipeline.run_until_idle().unwrap();
+    assert_eq!(rig.status(id), QueueStatus::Completed);
+    assert_eq!(rig.filed_names(), [name_for("2023-11-02")]);
 }

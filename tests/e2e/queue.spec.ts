@@ -1,9 +1,9 @@
 import { expect, test } from '@playwright/test';
-import { openDetails, queueCell } from './grid';
+import { moreAction, openDetails, queueCell } from './grid';
 
 test('mixed batch can be reviewed, approved, and undone entirely in memory', async ({ page }) => {
   await page.goto('/?fixtureBatch=1');
-  await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+  await expect(page.getByRole('main', { name: 'ATLAS' })).toBeVisible();
 
   await page.getByRole('region', { name: 'Drag files or folders here to copy them into Input' }).evaluate((dropZone) => {
     const transfer = new DataTransfer();
@@ -53,30 +53,69 @@ test('mixed batch can be reviewed, approved, and undone entirely in memory', asy
   await expect(page.getByRole('row', { name: /duplicate-invoice-a\.pdf/i })).toContainText('Needs review');
 });
 
-test('naming your organization in Settings files a waiting proposal by the other side', async ({ page }) => {
+test('naming your organization in Settings leads a waiting proposal with it', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+  await expect(page.getByRole('main', { name: 'ATLAS' })).toBeVisible();
   const lease = page.getByRole('row', { name: /Lease Agreement - 123 Main St\.pdf/i });
   await expect(lease).toContainText('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf');
 
   await page.getByRole('button', { name: /Settings/i }).click();
   const dialog = page.getByRole('dialog', { name: /Settings/i });
-  await dialog.locator('summary', { hasText: 'Naming and filing' }).click();
+  await dialog.locator('summary', { hasText: 'How ATLAS names files' }).click();
   // One name per line; the blank line a list picks up is not a name.
-  await dialog.getByLabel('Your organization\'s names').fill('TenantCo Inc.\n\n');
+  await dialog.getByLabel('Your organizations').fill('TenantCo Inc.\n\n');
   await dialog.getByRole('button', { name: 'Save settings' }).click();
   await expect(dialog).toBeHidden();
 
-  // The queue shows the new name at once, by the counterparty alone, and the
-  // inspector says why the evidence names a party the name does not.
-  await expect(lease).toContainText('2023-09-15 Lease Agreement with ABC Properties LLC.pdf');
+  // The queue shows the new name at once: the organization, without its
+  // legal form, leads, and the other side follows the type.
+  await expect(lease).toContainText('2023-09-15 TenantCo - Lease Agreement with ABC Properties LLC.pdf');
   const inspector = await openDetails(page, 'Lease Agreement - 123 Main St.pdf');
   // The extension is locked beside the field; the field holds the name before it.
-  await expect(inspector.getByLabel('Filename')).toHaveValue('2023-09-15 Lease Agreement with ABC Properties LLC');
-  await expect(inspector.getByRole('note', { name: 'Filed by the other side' })).toHaveText('Filed by the other side: TenantCo Inc. is your organization, so it is left out of the name. Change this under Settings.');
-  await expect(inspector.getByText('TenantCo Inc.', { exact: true }).first()).toBeVisible();
+  await expect(inspector.getByLabel('Filename')).toHaveValue('2023-09-15 TenantCo - Lease Agreement with ABC Properties LLC');
+  await expect(inspector.getByRole('note', { name: 'Filed by the other side' })).toHaveCount(0);
 
   // Saved as the backend stores it.
   await page.getByRole('button', { name: /Settings/i }).click();
-  await expect(page.getByRole('dialog', { name: /Settings/i }).getByLabel('Your organization\'s names')).toHaveValue('TenantCo Inc.');
+  await expect(page.getByRole('dialog', { name: /Settings/i }).getByLabel('Your organizations')).toHaveValue('TenantCo Inc.');
 });
+
+/*
+  "Start from scratch": Clear queue takes every document that is not filed
+  out of the queue after a question that says how many and that the files
+  stay where they are, leaves Completed as it was, and keeps them out; Clear
+  completed asks the same way from the same place in its view.
+*/
+test('Clear queue and Clear completed ask first, say what stays, and empty their views', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('/');
+  await expect(queueCell(page, 'NDA - Acme Corp.docx')).toBeVisible();
+
+  await (await moreAction(page, 'Clear queue…')).click();
+  const question = page.getByRole('alertdialog', { name: 'Clear the queue?' });
+  await expect(question).toContainText("This takes all 8 documents out of ATLAS's queue");
+  await expect(question).toContainText('Your files stay where they are, in Input.');
+  await expect(question).toContainText("This can't be undone.");
+  await expect(question.getByRole('button', { name: 'Cancel' })).toBeFocused();
+  // Enter on the way in is Cancel's, and clears nothing.
+  await page.keyboard.press('Enter');
+  await expect(question).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'More actions' })).toBeFocused();
+  await expect(page.getByRole('row')).toHaveCount(9);
+
+  await (await moreAction(page, 'Clear queue…')).click();
+  await page.getByRole('alertdialog', { name: 'Clear the queue?' }).getByRole('button', { name: 'Clear queue' }).click();
+  await expect(page.getByRole('status', { name: 'Action status' })).toHaveText('Cleared 8 documents from the queue. The files are where they were.');
+  await expect(page.getByRole('button', { name: /^Queue, 0/ })).toBeFocused();
+  await expect(page.getByRole('button', { name: /^Completed, 1/ })).toBeVisible();
+
+  await page.getByRole('button', { name: /^Completed/ }).click();
+  await (await moreAction(page, 'Clear completed…')).click();
+  const completed = page.getByRole('alertdialog', { name: 'Clear completed?' });
+  await expect(completed).toContainText('This takes the 1 document off the Completed list, with its rename history.');
+  await completed.getByRole('button', { name: 'Clear completed' }).click();
+  await expect(page.getByRole('status', { name: 'Action status' })).toHaveText('Cleared 1 completed document. The files are where they were.');
+  // Nothing is left: the empty window says how to add documents.
+  await expect(page.getByRole('heading', { name: 'Drop documents here' })).toBeVisible();
+});
+

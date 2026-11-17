@@ -7,7 +7,10 @@ const FIELD_NAMES: Record<ReasonField, string> = { date: 'date', type: 'document
  * A proposed filename with the parts its review is about marked where they
  * are - the date of a date that reads either way round, the parties of a
  * party the document never names - so the eye goes to what needs checking
- * instead of re-reading the whole name. Unflagged, it is the plain name.
+ * instead of re-reading the whole name. The organization a name leads with
+ * ("Vistage Malaysia - Employment Termination Letter for Johnny Appleseed")
+ * is one of its parties, and is marked with them. Unflagged, it is the
+ * plain name.
  *
  * The mark is not the only signal: the Check column and the review panel
  * say the same in words.

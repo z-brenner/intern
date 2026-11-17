@@ -1,4 +1,4 @@
-import { describeNotes, flaggedFields, humanizeReason, noteCodes, outcomeFirst, reasonCodes, shortNote, shortOutcome, shortReason } from '../../lib/reasons';
+import { describeNotes, flaggedFields, humanizeReason, noteCodes, outcomeFirst, reasonCodes, reasonLines, shortNote, shortOutcome, shortReason } from '../../lib/reasons';
 import type { ReasonField } from '../../lib/reasons';
 import type { QueueItem } from '../../types';
 import { keptOriginal } from '../review/actions';
@@ -18,10 +18,15 @@ export function itemFlaggedFields(item: QueueItem): ReasonField[] {
   return item.status === 'review' ? flaggedFields(itemReasonCodes(item)) : [];
 }
 
-/** What Intern noted about a document that is not waiting: the codes, and the sentences for them. */
+/** What Intern noted about a document that is not waiting: the codes, and what they say. */
 export interface ItemNote {
   /** The codes noted; none when the reason came as words this build has no codes for. */
   codes: string[];
+  /**
+   * Each code's few words and its note, a line each (`reasonLines`), for a
+   * tooltip - the Check cell's, the status's, the history's; or the words
+   * that came, for a reason with no codes.
+   */
   text: string;
 }
 
@@ -47,12 +52,12 @@ export function itemNote(item: QueueItem): ItemNote | undefined {
   if (item.status === 'ready' && !item.approved) {
     const codes = itemReasonCodes(item);
     const noted = noteCodes(codes);
-    if (noted.length) return { codes: noted, text: describeNotes(noted) };
+    if (noted.length) return { codes: noted, text: reasonLines(noted, { note: true }) };
     return item.reason && !codes.length ? { codes: [], text: item.reason } : undefined;
   }
   if (item.status === 'completed' && !keptOriginal(item)) {
     const noted = noteCodes(itemReasonCodes(item));
-    return noted.length ? { codes: noted, text: describeNotes(noted) } : undefined;
+    return noted.length ? { codes: noted, text: reasonLines(noted, { note: true }) } : undefined;
   }
   return undefined;
 }
@@ -89,12 +94,12 @@ export function carriedNotes(item: QueueItem): string | undefined {
 export type CheckTone = 'review' | 'failed' | 'ready' | 'noted' | 'quiet';
 
 export interface CheckCell {
-  /** A few words: "Date could be day- or month-first". */
+  /** A few words: "Date order unclear". */
   text: string;
   /** Further reasons, counted rather than listed. */
   more: number;
   tone: CheckTone;
-  /** The full sentence, for the tooltip. */
+  /** For the tooltip: each reason's few words and why, a line each, or the words that came. */
   title?: string;
 }
 
@@ -108,7 +113,10 @@ export interface CheckCell {
  * Undefined for a row with nothing to say yet (waiting, or being read).
  */
 export function checkCell(item: QueueItem): CheckCell | undefined {
-  const title = item.reason ? humanizeReason(item.reason) : undefined;
+  // Every reason by name, the ones counted as "+1 more" too, when the
+  // reason is the codes'; free text as it came.
+  const codes = itemReasonCodes(item);
+  const title = item.reason ? (codes.length && humanizeReason(item.reason) === humanizeReason(codes.join(', ')) ? reasonLines(codes) : humanizeReason(item.reason)) : undefined;
   if (item.status === 'ready') {
     if (item.approved) return { text: 'Approved', more: 0, tone: 'ready', title };
     if (item.copyOf !== undefined) return { text: 'Exact copy', more: 0, tone: 'quiet', title };
@@ -119,7 +127,7 @@ export function checkCell(item: QueueItem): CheckCell | undefined {
   }
   if (item.status === 'review' || item.status === 'failed') {
     const tone: CheckTone = item.status === 'failed' ? 'failed' : 'review';
-    const short = shortReason(itemReasonCodes(item));
+    const short = shortReason(codes);
     if (short) return { ...short, tone, title };
     // Free text - "Duplicate of ...", "Canceled." - is its own short form.
     if (title) return { text: title, more: 0, tone, title };
@@ -131,8 +139,10 @@ export function checkCell(item: QueueItem): CheckCell | undefined {
     const note = itemNote(item);
     if (note) return noteCell(note);
     // Not renamed with a note: what became of the file leads, and anything it carried is said as a note.
-    const short = shortOutcome(itemReasonCodes(item));
-    return short ? { ...short, tone: 'quiet', title: carriedNotes(item) ?? title } : undefined;
+    const short = shortOutcome(codes);
+    // What it carried, as notes, with what became of the file first (carriedNotes).
+    const carried = carriedNotes(item) !== undefined ? reasonLines(outcomeFirst(item.reasonCodes ?? []), { note: true }) : undefined;
+    return short ? { ...short, tone: 'quiet', title: carried ?? title } : undefined;
   }
   return undefined;
 }
@@ -163,12 +173,49 @@ export interface NamePart { text: string; field?: ReasonField; flagged: boolean 
 const LEADING_DATE = /^\d{4}-\d{2}-\d{2}/;
 /** The words Intern composes between a name's type and its parties (PartyRelation). */
 const RELATION = / (between|with|from|for|to) /;
+/** A connecting word, or the " - " Intern writes before a party it gives no relation to. */
+const SUBJECT_RELATION = / (between|with|from|for|to|-) /;
+/** What stands between the organization a name leads with and its subject (own_names.rs). */
+const ENTITY_SEPARATOR = ' - ';
+/**
+ * Words that name a kind of document (DOCUMENT_KINDS in own_names.rs, and
+ * "Document", which a name says where the type should be when there is none).
+ */
+const DOCUMENT_KIND = /\b(agreement|contract|addendum|amendment|invoice|bill|receipt|statement|letter|notice|notification|memo|memorandum|minutes|report|proposal|quote|quotation|order|certificate|policy|lease|deed|resolution|application|form|return|email|correspondence|communications|offer|claim|complaint|judgment|motion|plan|schedule|sow|nda|msa|license|licence|permit|waiver|release|consent|confirmation|summons|subpoena|petition|bylaws|charter|budget|presentation|payslip|timesheet|document)\b/i;
+
+/**
+ * The organization a name's words after its date lead with, as Intern
+ * composes `<entity> - <subject>` (NameView in own_names.rs), or nothing
+ * for a name that does not lead with one.
+ *
+ * The words before the first " - " are the entity where what follows holds
+ * the subject's connecting word ("Vistage International - Host Chair SOW
+ * for John Smith") or a " - " of its own ("Acme - Notice - John Smith"),
+ * but not where they hold a connecting word themselves ("Letter to Smith -
+ * signed" is a note). Two parts and no connecting word read either way:
+ * "Nimbus Orchard Supply - Invoice" leads with an organization, and
+ * "Notice of Termination - John Smith", a document naming only people, is
+ * the type and its party. The side that names a kind of document is the
+ * type; where neither or both do, the entity, which names lead with far
+ * more often.
+ */
+function entityOf(words: string): string | undefined {
+  const at = words.indexOf(ENTITY_SEPARATOR);
+  if (at <= 0) return undefined;
+  const before = words.slice(0, at);
+  const after = words.slice(at + ENTITY_SEPARATOR.length);
+  if (!after.trim() || RELATION.test(` ${before} `)) return undefined;
+  if (after.includes(ENTITY_SEPARATOR) || RELATION.test(` ${after} `)) return before;
+  return DOCUMENT_KIND.test(before) && !DOCUMENT_KIND.test(after) ? undefined : before;
+}
 
 /**
  * A composed name split into the parts Intern built it from - "2024-02-09",
- * " Invoice INV-3301", " from ", "Fabrikam Inc", ".pdf" - with the parts in
- * doubt flagged. A name that does not read that way (one typed by hand) is
- * one unflagged run, except for a leading date, which every name has.
+ * " ", "Fabrikam", " - ", "Invoice INV-3301", " for ", "Contoso Ltd", ".pdf"
+ * - with the parts in doubt flagged. The organization a name leads with is
+ * one of the document's parties, and is flagged with them. A name that does
+ * not read that way (one typed by hand) is one unflagged run, except for a
+ * leading date, which every name has.
  */
 export function nameParts(name: string, flagged: readonly ReasonField[]): NamePart[] {
   const extension = /\.[A-Za-z0-9]{1,6}$/.exec(name)?.[0] ?? '';
@@ -180,19 +227,29 @@ export function nameParts(name: string, flagged: readonly ReasonField[]): NamePa
   const date = LEADING_DATE.exec(stem)?.[0] ?? '';
   const rest = stem.slice(date.length);
   push(date, 'date');
-  const relation = RELATION.exec(rest);
-  if (date && relation) {
-    const space = rest.startsWith(' ') ? ' ' : '';
-    push(space);
-    push(rest.slice(space.length, relation.index), 'type');
-    push(relation[0]);
-    push(rest.slice(relation.index + relation[0].length), 'parties');
-  } else if (date) {
-    const space = rest.startsWith(' ') ? ' ' : '';
-    push(space);
-    push(rest.slice(space.length), 'type');
-  } else {
+  if (!date) {
     push(rest);
+    push(extension);
+    return parts;
+  }
+  const space = rest.startsWith(' ') ? ' ' : '';
+  push(space);
+  let subject = rest.slice(space.length);
+  const entity = entityOf(subject);
+  if (entity !== undefined) {
+    push(entity, 'parties');
+    push(ENTITY_SEPARATOR);
+    subject = subject.slice(entity.length + ENTITY_SEPARATOR.length);
+  }
+  // The first connecting word, or the " - " before a party given no
+  // relation: "Notice of Termination - John Smith".
+  const relation = SUBJECT_RELATION.exec(subject);
+  if (relation) {
+    push(subject.slice(0, relation.index), 'type');
+    push(relation[0]);
+    push(subject.slice(relation.index + relation[0].length), 'parties');
+  } else {
+    push(subject, 'type');
   }
   push(extension);
   return parts;
@@ -222,6 +279,14 @@ const RELATION_BEFORE_PARTY = / (with|from|for|to|-) $/;
 /**
  * A name's stem with `party` in place of the party it gives: the reviewer's
  * one-click fix for a name that gives the wrong party.
+ *
+ * The party is the other side's, after the organization the name leads
+ * with ("Vistage International - Host Chair SOW for John Smith"): the
+ * backend gives only the subject's parties as the name's (`nameParties`),
+ * so the entity is read as part of the words before the type's, and stays.
+ * A name that leads with an organization and gives no other party has the
+ * party added after its type with " - ", as Intern composes one given no
+ * relation: "Nimbus Orchard Supply - Invoice - Contoso Ltd".
  *
  * The party replaced is the longest of the known ones the stem ends with:
  * the proposed name's own, or a choice an earlier click put there - so of

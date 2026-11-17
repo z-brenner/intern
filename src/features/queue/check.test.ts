@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { carriedNotes, checkCell, checkText, itemFlaggedFields, itemNote, itemReasonCodes, nameParts, partyGiven, withParty } from './check';
-import { describeNotes, humanizeReason, reasonCodes, shortReason } from '../../lib/reasons';
+import { describeNotes, humanizeReason, reasonCodes, reasonLines, shortReason } from '../../lib/reasons';
 import type { QueueItem } from '../../types';
 
 const review = (extra: Partial<QueueItem>): QueueItem => ({ id: 'r', originalFilename: 'Scan.pdf', status: 'review', proposedFilename: '2024-02-09 Invoice INV-3301 from Fabrikam Inc.pdf', ...extra });
@@ -14,8 +14,8 @@ describe('the Check column', () => {
   });
 
   it('leads with the reason about a part of the name, and counts the rest', () => {
-    expect(shortReason(['LOW_CONFIDENCE', 'PARTY_UNSUPPORTED'])).toEqual({ text: 'Party uncertain', more: 1 });
-    expect(shortReason(['LOW_CONFIDENCE'])).toEqual({ text: 'Model unsure of its reading', more: 0 });
+    expect(shortReason(['LOW_CONFIDENCE', 'PARTY_UNSUPPORTED'])).toEqual({ text: 'Party unclear', more: 1 });
+    expect(shortReason(['LOW_CONFIDENCE'])).toEqual({ text: 'Model unsure', more: 0 });
     expect(shortReason(['NOT_A_CODE'])).toBeUndefined();
   });
 
@@ -30,16 +30,19 @@ describe('the Check column', () => {
     expect(shortReason(['PARTY_MISSING'])).toEqual({ text: 'Party missing', more: 0 });
     expect(itemFlaggedFields(review({ reasonCodes: ['PARTY_MISSING'] }))).toEqual(['parties']);
     // A date that is only one end of a period leads over the model's doubt, and marks the date.
-    expect(shortReason(['LOW_CONFIDENCE', 'DATE_IS_PERIOD'])).toEqual({ text: 'Date is a period\'s start or end', more: 1 });
+    expect(shortReason(['LOW_CONFIDENCE', 'DATE_IS_PERIOD'])).toEqual({ text: 'Date is a period end', more: 1 });
     expect(itemFlaggedFields(review({ reasonCodes: ['DATE_IS_PERIOD'] }))).toEqual(['date']);
     // So does a date that only a TODAY or NOW formula shows.
-    expect(shortReason(['LOW_CONFIDENCE', 'DATE_IS_FORMULA'])).toEqual({ text: 'Date comes from a formula', more: 1 });
+    expect(shortReason(['LOW_CONFIDENCE', 'DATE_IS_FORMULA'])).toEqual({ text: 'Date from a formula', more: 1 });
     expect(itemFlaggedFields(review({ reasonCodes: ['DATE_IS_FORMULA'] }))).toEqual(['date']);
   });
 
   it('says what to check for a review, and that the checks passed for a ready row', () => {
     const ambiguous = review({ reasonCodes: ['DATE_AMBIGUOUS'], reason: 'The date is written only as numbers that could be read day-first or month-first. Check which one the document means.' });
-    expect(checkCell(ambiguous)).toEqual({ text: 'Date could be day- or month-first', more: 0, tone: 'review', title: ambiguous.reason });
+    // The tooltip names the reason in its few words, then says why.
+    expect(checkCell(ambiguous)).toEqual({ text: 'Date order unclear', more: 0, tone: 'review', title: `Date order unclear: ${ambiguous.reason}` });
+    // Every reason by name, those counted as "+1 more" too.
+    expect(checkCell(review({ reasonCodes: ['LOW_CONFIDENCE', 'PARTY_UNSUPPORTED'], reason: humanizeReason('LOW_CONFIDENCE, PARTY_UNSUPPORTED') }))?.title).toBe(`Model unsure: ${humanizeReason('LOW_CONFIDENCE')}\nParty unclear: ${humanizeReason('PARTY_UNSUPPORTED')}`);
     expect(checkCell({ ...ambiguous, status: 'ready', reasonCodes: undefined, reason: undefined })).toMatchObject({ text: 'All checks passed', tone: 'ready' });
     // A code sent only as the error code still counts.
     expect(itemReasonCodes(review({ errorCode: 'PASSWORD_PROTECTED' }))).toEqual(['PASSWORD_PROTECTED']);
@@ -71,10 +74,11 @@ describe('a note on a row that is not waiting', () => {
 
   it('is what a ready row with codes says in place of "All checks passed"', () => {
     const item = ready(sent);
-    expect(itemNote(item)).toEqual({ codes, text: describeNotes(codes) });
-    expect(checkCell(item)).toEqual({ text: 'Note: Type supplied by Intern', more: 1, tone: 'noted', title: describeNotes(codes) });
+    expect(itemNote(item)).toEqual({ codes, text: reasonLines(codes, { note: true }) });
+    expect(itemNote(item)?.text).toBe(`Type guessed: ${describeNotes(['TYPE_INFERRED'])}\nModel unsure: ${describeNotes(['LOW_CONFIDENCE'])}`);
+    expect(checkCell(item)).toEqual({ text: 'Note: Type guessed', more: 1, tone: 'noted', title: reasonLines(codes, { note: true }) });
     // Copied, the cell still says the row was not waiting.
-    expect(checkText(item)).toBe('Note: Type supplied by Intern (+1 more)');
+    expect(checkText(item)).toBe('Note: Type guessed (+1 more)');
     // The tooltip is the note, not the review's instructions, and not the claim that every check passed.
     expect(checkCell(item)?.title).not.toMatch(/Check |each found in the document/);
     // Nothing of its name is marked for checking: that is a review's.
@@ -97,7 +101,7 @@ describe('a note on a row that is not waiting', () => {
     expect(checkCell({ ...copy, approved: false })).toMatchObject({ text: 'Exact copy', tone: 'quiet' });
     // In review, the same codes are what to check.
     expect(itemNote(review(sent))).toBeUndefined();
-    expect(checkCell(review(sent))).toMatchObject({ text: 'Type supplied by Intern', more: 1, tone: 'review' });
+    expect(checkCell(review(sent))).toMatchObject({ text: 'Type guessed', more: 1, tone: 'review' });
     for (const status of ['waiting', 'processing', 'failed'] as const) expect(itemNote({ ...review(sent), status }), status).toBeUndefined();
   });
 
@@ -109,15 +113,16 @@ describe('a note on a row that is not waiting', () => {
 
   it('marks a document renamed while it carried codes, and not one that kept its name or was a copy', () => {
     const item = renamed(sent);
-    expect(itemNote(item)).toEqual({ codes, text: describeNotes(codes) });
-    expect(checkCell(item)).toEqual({ text: 'Note: Type supplied by Intern', more: 1, tone: 'noted', title: describeNotes(codes) });
+    expect(itemNote(item)).toEqual({ codes, text: reasonLines(codes, { note: true }) });
+    expect(itemNote(item)?.text).toBe(`Type guessed: ${describeNotes(['TYPE_INFERRED'])}\nModel unsure: ${describeNotes(['LOW_CONFIDENCE'])}`);
+    expect(checkCell(item)).toEqual({ text: 'Note: Type guessed', more: 1, tone: 'noted', title: reasonLines(codes, { note: true }) });
     // Renamed with no codes: nothing to say, as before.
     expect(itemNote(renamed({}))).toBeUndefined();
     expect(checkCell(renamed({}))).toBeUndefined();
     // Kept its original name with a review's codes still on it: not renamed by them, and shown as it always was.
     const kept = renamed({ ...sent, keptOriginal: true, filedName: undefined, undoable: false });
     expect(itemNote(kept)).toBeUndefined();
-    expect(checkCell(kept)).toEqual({ text: 'Type supplied by Intern', more: 1, tone: 'quiet', title: sent.reason });
+    expect(checkCell(kept)).toEqual({ text: 'Type guessed', more: 1, tone: 'quiet', title: reasonLines(codes) });
     // What became of the file is no note about its reading.
     const named = renamed({ keptOriginal: true, filedName: undefined, undoable: false, reasonCodes: ['ALREADY_NAMED'], reason: humanizeReason('ALREADY_NAMED') });
     expect(itemNote(named)).toBeUndefined();
@@ -140,22 +145,22 @@ describe('a note on a row that is not waiting', () => {
     const name = '2024-03-08 Letter to Fabrikam Inc.pdf';
     const general = { proposedFilename: name, reasonCodes: ['TYPE_MISSING'], reason: humanizeReason('TYPE_MISSING') };
     for (const item of [ready(general), renamed({ ...general, filedName: name })]) {
-      expect(itemNote(item), item.status).toEqual({ codes: ['TYPE_MISSING'], text: 'No specific document type was identified.' });
-      expect(checkCell(item), item.status).toEqual({ text: 'Note: No specific type', more: 0, tone: 'noted', title: 'No specific document type was identified.' });
+      expect(itemNote(item), item.status).toEqual({ codes: ['TYPE_MISSING'], text: 'No specific type: No specific document type was identified.' });
+      expect(checkCell(item), item.status).toEqual({ text: 'Note: No specific type', more: 0, tone: 'noted', title: 'No specific type: No specific document type was identified.' });
       // As it is copied, and as Rename history marks it.
       expect(checkText(item), item.status).toBe('Note: No specific type');
     }
     // Leading a list, and counted behind another note about the type.
     expect(checkText(ready({ ...general, reasonCodes: ['TYPE_MISSING', 'LOW_CONFIDENCE'] }))).toBe('Note: No specific type (+1 more)');
-    expect(checkText(ready({ ...general, reasonCodes: ['TYPE_INFERRED', 'TYPE_MISSING'] }))).toBe('Note: Type supplied by Intern (+1 more)');
+    expect(checkText(ready({ ...general, reasonCodes: ['TYPE_INFERRED', 'TYPE_MISSING'] }))).toBe('Note: Type guessed (+1 more)');
     // No note says the name has no type, whatever it carries.
     for (const carried of [['TYPE_MISSING'], ['TYPE_MISSING', 'TYPE_INFERRED'], ['LOW_CONFIDENCE', 'TYPE_MISSING'], ['DESCRIPTION_UNSUPPORTED', 'TYPE_MISSING']]) {
       expect(checkText(ready({ ...general, reasonCodes: carried })), carried.join()).not.toMatch(/No document type/);
     }
     // In review the few words are as they were: there the name may well have none.
-    expect(checkCell(review(general))).toEqual({ text: 'No document type', more: 0, tone: 'review', title: general.reason });
+    expect(checkCell(review(general))).toEqual({ text: 'No document type', more: 0, tone: 'review', title: `No document type: ${general.reason}` });
     // And on a document a person kept under its own name.
-    expect(checkCell(renamed({ ...general, keptOriginal: true, filedName: undefined, undoable: false }))).toEqual({ text: 'No document type', more: 0, tone: 'quiet', title: general.reason });
+    expect(checkCell(renamed({ ...general, keptOriginal: true, filedName: undefined, undoable: false }))).toEqual({ text: 'No document type', more: 0, tone: 'quiet', title: `No document type: ${general.reason}` });
   });
 });
 
@@ -189,7 +194,7 @@ describe('the notes a document carries while it is renamed, or completed under t
     expect(itemNote(filing)).toBeUndefined();
     // Not renamed, so not among those renamed with a note; the notes are counted behind the outcome.
     expect(itemNote(named)).toBeUndefined();
-    expect(checkCell(named)).toEqual({ text: 'Already had this name', more: 2, tone: 'quiet', title: `${alreadyNamed} ${describeNotes(codes)}` });
+    expect(checkCell(named)).toEqual({ text: 'Already had this name', more: 2, tone: 'quiet', title: `Already had this name: ${alreadyNamed}\n${reasonLines(codes, { note: true })}` });
     expect(checkText(named)).toBe('Already had this name (+2 more)');
   });
 
@@ -197,11 +202,11 @@ describe('the notes a document carries while it is renamed, or completed under t
     // Already named with nothing else, as an approval or the Strict level leaves it.
     const plain: QueueItem = { ...named, reasonCodes: ['ALREADY_NAMED'], reason: alreadyNamed };
     expect(carriedNotes(plain)).toBe(alreadyNamed);
-    expect(checkCell(plain)).toEqual({ text: 'Already had this name', more: 0, tone: 'quiet', title: alreadyNamed });
+    expect(checkCell(plain)).toEqual({ text: 'Already had this name', more: 0, tone: 'quiet', title: `Already had this name: ${alreadyNamed}` });
     // Kept under its own name by a person: the review's codes and words, as before.
     const kept: QueueItem = { ...named, reasonCodes: codes, reason: humanizeReason(codes.join(', ')) };
     expect(carriedNotes(kept)).toBeUndefined();
-    expect(checkCell(kept)).toEqual({ text: 'Type supplied by Intern', more: 1, tone: 'quiet', title: kept.reason });
+    expect(checkCell(kept)).toEqual({ text: 'Type guessed', more: 1, tone: 'quiet', title: reasonLines(codes) });
     // In review, ready, renamed, waiting, or being read again: said elsewhere, or as it came.
     for (const status of ['review', 'failed', 'ready', 'waiting'] as const) expect(carriedNotes({ ...filing, status, stage: undefined }), status).toBeUndefined();
     for (const stage of ['reading', 'naming'] as const) expect(carriedNotes({ ...filing, stage }), stage).toBeUndefined();
@@ -227,6 +232,68 @@ describe('a proposed name in parts', () => {
     expect(typed.some((part) => part.flagged)).toBe(false);
     expect(typed.map((part) => part.text).join('')).toBe('Lease for 12 Main St.pdf');
   });
+
+  /** The parts of `name` flagged when every field is, by field, in the order the name reads. */
+  const fields = (name: string) => nameParts(name, ['date', 'type', 'parties'])
+    .filter((part) => part.field)
+    .map((part) => [part.field, part.text]);
+
+  it('reads the organization a name leads with as one of its parties', () => {
+    const name = '2026-10-16 Vistage International - Host Chair SOW for John Smith.pdf';
+    expect(nameParts(name, []).map((part) => part.text).join('')).toBe(name);
+    expect(fields(name)).toEqual([
+      ['date', '2026-10-16'],
+      ['parties', 'Vistage International'],
+      ['type', 'Host Chair SOW'],
+      ['parties', 'John Smith'],
+    ]);
+    expect(nameParts(name, ['parties']).filter((part) => part.flagged).map((part) => part.text))
+      .toEqual(['Vistage International', 'John Smith']);
+    expect(nameParts(name, ['type']).filter((part) => part.flagged).map((part) => part.text)).toEqual(['Host Chair SOW']);
+    // No other side.
+    expect(fields('2024-11-09 EGN Denmark - Incorporation Email Communications.pdf')).toEqual([
+      ['date', '2024-11-09'],
+      ['parties', 'EGN Denmark'],
+      ['type', 'Incorporation Email Communications'],
+    ]);
+    expect(fields('2025-04-30 Nimbus Orchard Supply - Invoice.pdf')).toEqual([
+      ['date', '2025-04-30'],
+      ['parties', 'Nimbus Orchard Supply'],
+      ['type', 'Invoice'],
+    ]);
+    // A party given no relation after it, and two sides of a "between".
+    expect(fields('2024-04-12 Acme - Notice of Termination - John Smith.pdf')).toEqual([
+      ['date', '2024-04-12'],
+      ['parties', 'Acme'],
+      ['type', 'Notice of Termination'],
+      ['parties', 'John Smith'],
+    ]);
+    expect(fields('2024-04-12 Wingtip - Agreement between John Smith and Acme Corporation (2).pdf')).toEqual([
+      ['date', '2024-04-12'],
+      ['parties', 'Wingtip'],
+      ['type', 'Agreement'],
+      ['parties', 'John Smith and Acme Corporation (2)'],
+    ]);
+  });
+
+  it('reads a name with no organization as the type and the party after it', () => {
+    // A document naming only people: the side that names a kind of document is the type.
+    expect(fields('2026-12-29 Notice of Termination - John Smith.pdf')).toEqual([
+      ['date', '2026-12-29'],
+      ['type', 'Notice of Termination'],
+      ['parties', 'John Smith'],
+    ]);
+    expect(fields('2024-02-09 Letter to Smith - signed.pdf')).toEqual([
+      ['date', '2024-02-09'],
+      ['type', 'Letter'],
+      ['parties', 'Smith - signed'],
+    ]);
+    expect(fields('2025-01-05 Settlement Agreement between John Smith and Jane Doe.pdf')).toEqual([
+      ['date', '2025-01-05'],
+      ['type', 'Settlement Agreement'],
+      ['parties', 'John Smith and Jane Doe'],
+    ]);
+  });
 });
 
 describe('another party put in a name', () => {
@@ -243,6 +310,23 @@ describe('another party put in a name', () => {
     // A name with no date yet is still a name with a party.
     const undated = offer('Letter to Carl Malamud', ['Carl Malamud']);
     expect(withParty(undated.proposed, 'Department of the Air Force', undated)).toBe('Letter to Department of the Air Force');
+  });
+
+  it('takes the place of the other side after the organization the name leads with, which stays', () => {
+    const sow = offer('2026-10-16 Vistage International - Host Chair SOW for John Smith', ['John Smith'], ['Jane Doe']);
+    expect(withParty(sow.proposed, 'Jane Doe', sow)).toBe('2026-10-16 Vistage International - Host Chair SOW for Jane Doe');
+    expect(partyGiven(sow.proposed, sow)).toBe('John Smith');
+    // A note typed after the party stays, and so does the organization respelled by hand.
+    expect(withParty('2026-10-16 Vistage International - Host Chair SOW for John Smith re Renewal', 'Jane Doe', sow))
+      .toBe('2026-10-16 Vistage International - Host Chair SOW for Jane Doe re Renewal');
+    expect(withParty('2026-10-16 Vistage Intl - Host Chair SOW for John Smith', 'Jane Doe', sow))
+      .toBe('2026-10-16 Vistage Intl - Host Chair SOW for Jane Doe');
+    // One that gives no other side is given one after its type, as a party with no relation.
+    const invoice = offer('2025-04-30 Nimbus Orchard Supply - Invoice', [], ['Contoso Ltd']);
+    const added = withParty(invoice.proposed, 'Contoso Ltd', invoice);
+    expect(added).toBe('2025-04-30 Nimbus Orchard Supply - Invoice - Contoso Ltd');
+    expect(partyGiven(added, invoice)).toBe('Contoso Ltd');
+    expect(partyGiven(invoice.proposed, invoice)).toBeUndefined();
   });
 
   it('replaces the second side of a "between", and an earlier choice', () => {

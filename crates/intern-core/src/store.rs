@@ -352,11 +352,15 @@ impl QueueStore {
                  -- path it names. Kept when the item goes, with no item, so
                  -- a removed document reads as removed rather than as the
                  -- next document to arrive under its name.
+                 -- `set_aside`: its item was taken out of the queue by
+                 -- Clear queue, a person's word that the document stays
+                 -- where it is and is not taken in again as it is.
                  CREATE TABLE IF NOT EXISTS intake_claims (
                    claim_key TEXT PRIMARY KEY,
                    queue_item_id INTEGER REFERENCES queue_items(id) ON DELETE SET NULL,
                    created_at INTEGER NOT NULL,
-                   seen_gone INTEGER NOT NULL DEFAULT 0
+                   seen_gone INTEGER NOT NULL DEFAULT 0,
+                   set_aside INTEGER NOT NULL DEFAULT 0
                  );
                  -- Documents whose failure may be the machine's rather than
                  -- theirs (`kind`: an unusable reply, a time-out, a reader
@@ -399,6 +403,14 @@ impl QueueStore {
             connection
                 .execute(
                     "ALTER TABLE intake_claims ADD COLUMN seen_gone INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )
+                .map_err(InternError::from)?;
+        }
+        if !column_exists(&connection, "intake_claims", "set_aside")? {
+            connection
+                .execute(
+                    "ALTER TABLE intake_claims ADD COLUMN set_aside INTEGER NOT NULL DEFAULT 0",
                     [],
                 )
                 .map_err(InternError::from)?;
@@ -1830,6 +1842,68 @@ impl QueueStore {
                 .map_err(InternError::from)?
                 .flatten(),
         ))
+    }
+
+    /// Whether the item a claim handed over was taken out of the queue by
+    /// Clear queue ([`Self::clear_items`]): a person's decision that the
+    /// document stays where it is, which the intake watcher keeps as it
+    /// keeps Keep original's, rather than handing the document over again.
+    /// False for a claim never recorded, one whose item is still there, and
+    /// one whose item went any other way.
+    pub fn intake_claim_set_aside(&self, claim_key: &str) -> InternResult<bool> {
+        let connection = self.lock()?;
+        Ok(connection
+            .query_row(
+                "SELECT set_aside FROM intake_claims
+                 WHERE claim_key = ?1 AND queue_item_id IS NULL",
+                params![claim_key],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(InternError::from)?
+            .is_some_and(|set_aside| set_aside != 0))
+    }
+
+    /// Takes the items `ids` out of the queue for Clear queue, and marks the
+    /// intake claims that handed them over as set aside (see
+    /// [`Self::intake_claim_set_aside`]), in one step. Returns how many went.
+    ///
+    /// The caller has decided which items may go; this only refuses one that
+    /// has started on something since that cannot be stopped part-way - a
+    /// reading or a rename - and leaves its claim as it was.
+    pub fn clear_items(&self, ids: &[i64]) -> InternResult<usize> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(InternError::from)?;
+        let mut cleared = 0;
+        for &id in ids {
+            // Marked first: once the row is gone the claim no longer names it.
+            transaction
+                .execute(
+                    "UPDATE intake_claims SET set_aside = 1 WHERE queue_item_id = ?1",
+                    params![id],
+                )
+                .map_err(InternError::from)?;
+            let deleted = transaction
+                .execute(
+                    "DELETE FROM queue_items
+                     WHERE id = ?1 AND status NOT IN ('extracting', 'analyzing', 'applying')",
+                    params![id],
+                )
+                .map_err(InternError::from)?;
+            if deleted == 0 {
+                transaction
+                    .execute(
+                        "UPDATE intake_claims SET set_aside = 0 WHERE queue_item_id = ?1",
+                        params![id],
+                    )
+                    .map_err(InternError::from)?;
+            }
+            cleared += deleted;
+        }
+        transaction.commit().map_err(InternError::from)?;
+        Ok(cleared)
     }
 
     /// Puts owned processing work back to wait as doubted: it failed in a

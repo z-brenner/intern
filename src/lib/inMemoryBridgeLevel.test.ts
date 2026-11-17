@@ -114,11 +114,11 @@ describe('the demo queue at Balanced', () => {
 
   it('lets through only the codes the level names, each with the rest of its rule', async () => {
     const through: Array<[string, QueueItem]> = [
-      ['a type Intern supplied', waiting('a', ['TYPE_INFERRED'])],
+      ['a type ATLAS supplied', waiting('a', ['TYPE_INFERRED'])],
       ['a type the document does not confirm', waiting('b', ['TYPE_UNSUPPORTED'])],
       ['a general type', waiting('c', ['TYPE_MISSING'])],
       ['a description the document does not bear out', waiting('d', ['DESCRIPTION_UNSUPPORTED'])],
-      ['a model unsure by what Intern measured', waiting('e', ['LOW_CONFIDENCE'], { confidence: 0.6 })],
+      ['a model unsure by what ATLAS measured', waiting('e', ['LOW_CONFIDENCE'], { confidence: 0.6 })],
       ['a stand-in kind with no type of the model\'s', waiting('f', ['TYPE_UNSUPPORTED', 'TYPE_INFERRED', 'TYPE_MISSING'])],
       ['all of them at once', waiting('g', ['TYPE_MISSING', 'TYPE_INFERRED', 'DESCRIPTION_UNSUPPORTED', 'LOW_CONFIDENCE'])],
       ['a code sent only as the error code', waiting('h', [], { errorCode: 'LOW_CONFIDENCE', reasonCodes: undefined, reason: humanizeReason('LOW_CONFIDENCE') })],
@@ -143,7 +143,7 @@ describe('the demo queue at Balanced', () => {
       ['a rename the person undid', waiting('ac', ['TYPE_INFERRED', 'UNDONE'])],
       ['a file that changed', waiting('ad', ['TYPE_INFERRED'], { errorCode: 'FILE_CHANGED', reasonCodes: undefined, reason: humanizeReason('FILE_CHANGED') })],
       ['a reason given only in words', waiting('ae', [], { reasonCodes: undefined, reason: 'Needs review because the invoice and due dates are both present.' })],
-      ['a document Intern could not read', { id: 'af', originalFilename: 'NEEDS REVIEW - locked.pdf', status: 'review', errorCode: 'PASSWORD_PROTECTED', reason: humanizeReason('PASSWORD_PROTECTED') }],
+      ['a document ATLAS could not read', { id: 'af', originalFilename: 'NEEDS REVIEW - locked.pdf', status: 'review', errorCode: 'PASSWORD_PROTECTED', reason: humanizeReason('PASSWORD_PROTECTED') }],
       ['a duplicate', { id: 'ag', originalFilename: 'again.pdf', status: 'review', errorCode: 'DUPLICATE', reason: 'Duplicate of 2024-03-08 Letter.pdf' }],
       ['files left part-way through a rename', waiting('ah', ['TYPE_INFERRED'], { parked: true })],
     ];

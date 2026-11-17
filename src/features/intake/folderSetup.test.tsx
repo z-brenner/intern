@@ -89,7 +89,7 @@ describe('folder setup', () => {
     render(<App bridge={bridge} selection={selectionPicking(`${library}\\Inbox`)} />);
 
     expect(await screen.findByRole('heading', { name: 'Your documents, renamed and filed' })).toBeVisible();
-    expect(screen.getByText('Put files here that you want Intern to process.')).toBeVisible();
+    expect(screen.getByText('Put files here that you want ATLAS to process.')).toBeVisible();
     expect(screen.getByText('Processed files end up here, renamed.')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Not now' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Choose folders' }));
@@ -106,7 +106,7 @@ describe('folder setup', () => {
     expect(screen.queryAllByRole('textbox')).toHaveLength(0);
     fireEvent.click(screen.getByRole('button', { name: 'Create an “Output” folder next to it' }));
 
-    expect(await screen.findByText('Your Queue folder already has 4 files in it. Should Intern process them too, or only files you add from now on?')).toBeVisible();
+    expect(await screen.findByText('Your Queue folder already has 4 files in it. Should ATLAS process them too, or only files you add from now on?')).toBeVisible();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Only new files' })).toHaveFocus());
     fireEvent.click(screen.getByRole('button', { name: 'Process them too' }));
 
@@ -121,7 +121,7 @@ describe('folder setup', () => {
     expect(await bridge.getSettings()).toMatchObject({ intakeFolder: `${library}\\Inbox`, destination: `${library}\\Output`, intakeEnabled: true, intakeMyFolder: true, intakeLocalOnly: false, processOthersUploads: false, recordDescriptions: true });
 
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
-    expect(await screen.findByRole('main', { name: 'Intern' })).toBeInTheDocument();
+    expect(await screen.findByRole('main', { name: 'ATLAS' })).toBeInTheDocument();
     expect((await bridge.getOnboarding()).completedVersion).toBe(1);
   });
 
@@ -248,22 +248,22 @@ describe('folder setup', () => {
   it('is asked again on every launch until both folders are chosen', async () => {
     const bridge = firstRun();
     const first = render(<App bridge={bridge} />);
-    expect(await screen.findByRole('main', { name: 'Intern setup' })).toBeInTheDocument();
+    expect(await screen.findByRole('main', { name: 'ATLAS setup' })).toBeInTheDocument();
     first.unmount();
     // Even with onboarding recorded as done, as an earlier release's "Not
     // now" left it: no Queue folder, no app.
     await bridge.completeOnboarding();
     render(<App bridge={bridge} />);
-    expect(await screen.findByRole('main', { name: 'Intern setup' })).toBeInTheDocument();
-    expect(screen.queryByRole('main', { name: 'Intern' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('main', { name: 'ATLAS setup' })).toBeInTheDocument();
+    expect(screen.queryByRole('main', { name: 'ATLAS' })).not.toBeInTheDocument();
   });
 
   // Windows can refuse the sign-in entry. That used to fail the save of the
   // folders with it - and setup cannot be skipped, so nobody could get in.
-  it('saves the folders even when Windows refuses to start Intern at sign-in', async () => {
+  it('saves the folders even when Windows refuses to start ATLAS at sign-in', async () => {
     const base = firstRun();
     const saveSettings = vi.fn(async (next: AppSettings) => {
-      if (next.startAtLogin) throw { code: 'AUTOSTART_FAILED', message: 'starting Intern at sign-in could not be enabled' };
+      if (next.startAtLogin) throw { code: 'AUTOSTART_FAILED', message: 'starting ATLAS at sign-in could not be enabled' };
       await base.saveSettings(next);
     });
     const bridge = { ...base, saveSettings };
@@ -274,10 +274,10 @@ describe('folder setup', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Create an “Output” folder next to it' }));
 
     expect(await screen.findByRole('heading', { name: 'You’re all set' })).toBeVisible();
-    expect(screen.getByRole('note', { name: 'Start at sign-in' })).toHaveTextContent('Your folders are saved, but Windows would not let Intern start when you sign in');
+    expect(screen.getByRole('note', { name: 'Start at sign-in' })).toHaveTextContent('Your folders are saved, but Windows would not let ATLAS start when you sign in');
     expect(await base.getSettings()).toMatchObject({ intakeFolder: 'D:\\Scans\\Inbox', destination: 'D:\\Scans\\Output', intakeEnabled: true, startAtLogin: false });
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
-    expect(await screen.findByRole('main', { name: 'Intern' })).toBeInTheDocument();
+    expect(await screen.findByRole('main', { name: 'ATLAS' })).toBeInTheDocument();
   });
 
   it('opens the app even when completing onboarding cannot be recorded', async () => {
@@ -290,7 +290,7 @@ describe('folder setup', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Create an “Output” folder next to it' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Done' }));
 
-    expect(await screen.findByRole('main', { name: 'Intern' })).toBeInTheDocument();
+    expect(await screen.findByRole('main', { name: 'ATLAS' })).toBeInTheDocument();
     expect(bridge.completeOnboarding).toHaveBeenCalled();
   });
 
@@ -326,7 +326,7 @@ describe('folder setup', () => {
 
   it('is not offered to an install that already has both folders', async () => {
     render(<App bridge={firstRun({ settings: { intakeEnabled: true, intakeFolder: 'D:\\Scans', destination: 'D:\\Filed' } })} />);
-    expect(await screen.findByRole('main', { name: 'Intern' })).toBeInTheDocument();
+    expect(await screen.findByRole('main', { name: 'ATLAS' })).toBeInTheDocument();
   });
 
   it('opens from Settings and returns to the app', async () => {
@@ -337,7 +337,7 @@ describe('folder setup', () => {
 
     expect(await screen.findByRole('heading', { name: 'Choose your Queue folder' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(await screen.findByRole('main', { name: 'Intern' })).toBeInTheDocument();
+    expect(await screen.findByRole('main', { name: 'ATLAS' })).toBeInTheDocument();
   });
 });
 
@@ -355,7 +355,7 @@ describe('folders in Settings', () => {
 
     const folders = await screen.findByRole('group', { name: 'Folders' });
     expect(within(folders).getByText('C:\\Intern\\Input')).toBeVisible();
-    expect(within(folders).getByText('Put files here that you want Intern to process.')).toBeVisible();
+    expect(within(folders).getByText('Put files here that you want ATLAS to process.')).toBeVisible();
     expect(within(folders).getByText('C:\\Intern\\Output')).toBeVisible();
     expect(within(folders).getByText('Processed files end up here, renamed.')).toBeVisible();
     expect(screen.queryByRole('checkbox', { name: 'Watch a folder for new documents' })).not.toBeInTheDocument();
@@ -402,7 +402,7 @@ describe('folders in Settings', () => {
   // A lookup that failed says nothing about whether the folder is synced,
   // so the folder is not vouched for as a private local one: it is not
   // changed at all, and the person is told.
-  it('leaves the Queue folder as it was when Intern cannot tell whether a new one is synced', async () => {
+  it('leaves the Queue folder as it was when ATLAS cannot tell whether a new one is synced', async () => {
     const base = createInMemoryBridge();
     const bridge = { ...base, classifyFolder: vi.fn(async () => { throw new Error('registry unavailable'); }) };
     const settings = await base.getSettings();

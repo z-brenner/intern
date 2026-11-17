@@ -59,6 +59,9 @@ use crate::intake::{
 use crate::model::{HostedModel, HostedModelStatusDto, HostedModelTestDto, suggested_date};
 use crate::secrets::{KeyringStore, SecretStore};
 
+/// The document viewer: the file and the text Intern read, for the window.
+pub mod viewer;
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExistingModelFilesDto {
@@ -100,6 +103,12 @@ pub struct QueueItemDto {
     original_filename: String,
     status: QueueStatus,
     proposed_filename: Option<String>,
+    /// How sure Intern is of the proposed name, from 0 to 1: the lower of
+    /// the model's own rating and its token probabilities, no more than one
+    /// in two for a row in review, and less for every reason on the record
+    /// (`intern_engine::review_level::name_confidence`). Not the model's
+    /// self-rating, which the local model does not give and the engine
+    /// writes as 1.
     confidence: Option<f32>,
     description: Option<String>,
     evidence: Option<EvidenceDto>,
@@ -345,9 +354,9 @@ impl TauriPipelineEvents {
 fn waiting_in_doubt(item: &PipelineItem) -> Option<&'static str> {
     let doubt = item.doubt.as_deref()?;
     Some(if doubt.starts_with("crash:") {
-        "Waiting to be read again once Intern has read another document of this kind."
+        "Waiting to be read again once ATLAS has read another document of this kind."
     } else {
-        "Waiting to be read again once Intern has shown it can read another document."
+        "Waiting to be read again once ATLAS has shown it can read another document."
     })
 }
 
@@ -3989,6 +3998,8 @@ pub struct AppState {
     launch_reports: LaunchReports,
     /// Documents launches named before there was an input folder.
     pending_launch: PendingLaunch,
+    /// Reads a document's text for the viewer when the queue kept none.
+    viewer: Arc<viewer::ViewerReader>,
 }
 
 /// The watcher's configuration for the canonical intake `folder`.
@@ -4140,6 +4151,10 @@ impl AppState {
             code: "APP_DATA_UNAVAILABLE".into(),
             message: "private worker temporary directory is unavailable".into(),
         })?;
+        let viewer = Arc::new(viewer::ViewerReader::new(
+            executable_directory.join(worker_name),
+            worker_temp_root.clone(),
+        ));
         let microsoft = Arc::new(crate::microsoft_intake::MicrosoftIntake::new(
             settings.clone(),
             data.clone(),
@@ -4232,6 +4247,7 @@ impl AppState {
             sharepoint_activation: AtomicBool::new(false),
             launch_reports: LaunchReports::default(),
             pending_launch,
+            viewer,
         };
         state.refresh_hosted_active(&startup_settings);
         if state.setup.model_ready.load(Ordering::SeqCst) {
@@ -5003,7 +5019,7 @@ fn background_task_failed(task: &str) -> CommandError {
 pub(crate) fn app_not_ready() -> CommandError {
     CommandError {
         code: "APP_NOT_READY".into(),
-        message: "Intern could not start. Restart it; if this happens again, startup-error.log in its data folder says why".into(),
+        message: "ATLAS could not start. Restart it; if this happens again, startup-error.log in its data folder says why".into(),
     }
 }
 
@@ -5035,7 +5051,7 @@ fn unreadable_settings(loaded: &Result<LoadedSettings, PipelineError>) -> Option
             }
         )),
         Err(error) => Some(format!(
-            "{}: your settings file could not be read, so Intern started with defaults - no destination folder, no watched folder, and automatic renaming off. The file has not been written over: repair it, or save from this window to replace it.",
+            "{}: your settings file could not be read, so ATLAS started with defaults - no destination folder, no watched folder, and automatic renaming off. The file has not been written over: repair it, or save from this window to replace it.",
             error.code
         )),
     }
@@ -5688,7 +5704,7 @@ fn locate_document(item: Option<&PipelineItem>) -> Result<PathBuf, CommandError>
         .filter(|path| path.is_file())
         .ok_or_else(|| CommandError {
             code: "PATH_UNAVAILABLE".into(),
-            message: "the document is not where Intern last saw it".into(),
+            message: "the document is not where ATLAS last saw it".into(),
         })
 }
 
@@ -5715,9 +5731,8 @@ fn document_to_open(item: Option<&PipelineItem>) -> Result<PathBuf, CommandError
     }) {
         return Err(CommandError {
             code: "UPLOADER_UNVERIFIED".into(),
-            message:
-                "a document from an uploader Intern could not verify is not opened from Intern"
-                    .into(),
+            message: "a document from an uploader ATLAS could not verify is not opened from ATLAS"
+                .into(),
         });
     }
     openable_document(locate_document(item)?)
@@ -5743,7 +5758,7 @@ fn openable_document(path: PathBuf) -> Result<PathBuf, CommandError> {
     } else {
         Err(CommandError {
             code: "UNSUPPORTED_FORMAT".into(),
-            message: "Intern opens only the document formats it reads".into(),
+            message: "ATLAS opens only the document formats it reads".into(),
         })
     }
 }
@@ -6344,9 +6359,9 @@ fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<(), CommandError> {
     result.map_err(|_| CommandError {
         code: "AUTOSTART_FAILED".into(),
         message: if enabled {
-            "starting Intern at sign-in could not be enabled".into()
+            "starting ATLAS at sign-in could not be enabled".into()
         } else {
-            "starting Intern at sign-in could not be disabled".into()
+            "starting ATLAS at sign-in could not be disabled".into()
         },
     })
 }
@@ -6973,6 +6988,23 @@ pub fn queue_discard_waiting(state: State<'_, AppState>) -> Result<usize, Comman
     Ok(state.pipeline.discard_waiting()?)
 }
 
+/// Clear queue: every document not filed out of the queue, its file left
+/// where it is, and not taken in again until it changes or is added again
+/// (see `Pipeline::clear_queue`). Resolves with how many went and how many
+/// were kept, by why. Off the command thread: it can cancel the reading
+/// under way and give files their own names back.
+#[tauri::command]
+pub async fn queue_clear(
+    state: State<'_, AppState>,
+) -> Result<intern_queue::ClearedQueue, CommandError> {
+    let pipeline = Arc::clone(&state.pipeline);
+    Ok(
+        tauri::async_runtime::spawn_blocking(move || pipeline.clear_queue())
+            .await
+            .map_err(|_| background_task_failed("clearing the queue"))??,
+    )
+}
+
 fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
     let waiting = waiting_in_doubt(&item);
     let proposal = item.proposal.as_ref();
@@ -7024,11 +7056,12 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
             .to_owned(),
         status: item.status,
         proposed_filename: proposal.map(|record| record.filename.clone()),
-        // A name typed by hand, or a copy's, has no reading behind it to be
+        // How sure Intern is of the name, never surer for a row in review
+        // than for a ready one (`ProposalRecord::name_confidence`). A name
+        // typed by hand, or a copy's, has no reading behind it to be
         // confident in.
         confidence: proposal
-            .filter(|record| !record.is_synthetic())
-            .map(|record| record.analysis.proposal.confidence),
+            .and_then(|record| record.name_confidence(item.status == QueueStatus::NeedsReview)),
         description: proposal.map(|record| record.description.clone()),
         evidence,
         reason: waiting
@@ -8933,6 +8966,9 @@ mod ipc_thread_tests {
         // shell to take it.
         leaves_the_ipc_thread_2(document_open);
         leaves_the_ipc_thread_2(document_reveal);
+        // Reads a whole document, or reads its text again, OCR and all.
+        leaves_the_ipc_thread_2(super::viewer::document_file);
+        leaves_the_ipc_thread_2(super::viewer::document_text);
     }
 
     #[test]
@@ -14520,6 +14556,44 @@ mod approval_dto_tests {
         }
     }
 
+    /// The confidence a row shows is how sure Intern is of its name, and it
+    /// never says sure of a row in review: the model's rating of 0.9 shows
+    /// on a ready row stored before token probabilities were kept, the
+    /// least token probability where it is lower, and a row in review shows
+    /// at most one in two, less for each reason on it. A name with no
+    /// reading behind it shows none.
+    #[test]
+    fn the_confidence_a_row_shows_is_how_sure_intern_is_of_the_name() {
+        let shown = |item: PipelineItem| queue_item_dto(item).unwrap().confidence.unwrap();
+        let close = |left: f32, right: f32| (left - right).abs() < 1e-6;
+
+        assert!(close(shown(item(QueueStatus::Ready, false)), 0.9));
+        let mut unsure_tokens = item(QueueStatus::Ready, false);
+        let record = unsure_tokens.proposal.as_mut().unwrap();
+        record.analysis.token_confidence = Some(intern_engine::TokenConfidence {
+            min: 0.74,
+            mean: 0.9,
+            tokens: 12,
+        });
+        assert!(close(shown(unsure_tokens), 0.74));
+
+        let mut held = item(QueueStatus::NeedsReview, false);
+        held.proposal.as_mut().unwrap().reasons = vec!["PARTY_UNSUPPORTED".into()];
+        assert!(close(shown(held.clone()), 0.45));
+        let record = held.proposal.as_mut().unwrap();
+        record.reasons.push("NEAR_DUPLICATE".into());
+        assert!(close(shown(held), 0.405));
+
+        // A ready row with a note shows a little less than its figure.
+        let mut noted = item(QueueStatus::Ready, false);
+        noted.proposal.as_mut().unwrap().reasons = vec!["DATE_FROM_FILE_MODIFIED".into()];
+        assert!(close(shown(noted), 0.81));
+
+        let mut typed = item(QueueStatus::NeedsReview, false);
+        typed.proposal.as_mut().unwrap().manual = true;
+        assert_eq!(queue_item_dto(typed).unwrap().confidence, None);
+    }
+
     /// Who read a document reaches the inspector as the reading recorded
     /// it, and a reading stored before there were two local models - or
     /// made by a hosted one - says nothing.
@@ -14830,11 +14904,11 @@ mod filed_dto_tests {
         for (doubt, sentence) in [
             (
                 "timeout",
-                "Waiting to be read again once Intern has shown it can read another document.",
+                "Waiting to be read again once ATLAS has shown it can read another document.",
             ),
             (
                 "crash:pdf",
-                "Waiting to be read again once Intern has read another document of this kind.",
+                "Waiting to be read again once ATLAS has read another document of this kind.",
             ),
         ] {
             let dto = queue_item_dto(PipelineItem {

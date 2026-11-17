@@ -95,7 +95,7 @@ describe('what the site says about the network', () => {
   // the automatic update check is disabled.
   it('says what else contacts the network when asked how to stop all unrequested traffic', async () => {
     const guide = text(await readFile('site/guide.html', 'utf8'));
-    const start = guide.indexOf('Intern must not contact anything on its own');
+    const start = guide.indexOf('ATLAS must not contact anything on its own');
     expect(start).toBeGreaterThan(0);
     const answer = guide.slice(start, guide.indexOf('NAMING', start));
     expect(answer).toContain('Check for updates automatically');
@@ -162,7 +162,7 @@ describe('what the guide says about setting up a folder', () => {
     expect(guide).toContain('This is a private local Queue folder, not a shared or synced folder');
     expect(setup).toContain('Look for OneDrive folders again');
     expect(guide).toContain('Look for OneDrive folders again');
-    for (const hint of ['Put files here that you want Intern to process.', 'Processed files end up here, renamed.']) {
+    for (const hint of ['Put files here that you want ATLAS to process.', 'Processed files end up here, renamed.']) {
       expect(setup).toContain(hint);
       expect(guide).toContain(hint.replace(/\.$/, ''));
     }
@@ -171,7 +171,7 @@ describe('what the guide says about setting up a folder', () => {
   it('says adding a file copies it into the Queue folder and leaves the original', async () => {
     const guide = text(await readFile('site/guide.html', 'utf8'));
     expect(guide).toMatch(/copied (here|into the Queue folder)[^.]*; the original(s)? stay/);
-    expect(guide).toMatch(/Send to (>|&gt;) Intern/);
-    expect(guide).toMatch(/Intern copies them into your Queue folder/);
+    expect(guide).toMatch(/Send to (>|&gt;) ATLAS/);
+    expect(guide).toMatch(/ATLAS copies them into your Queue folder/);
   });
 });

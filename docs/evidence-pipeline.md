@@ -1,5 +1,7 @@
 # The evidence pipeline
 
+ATLAS was called Intern before v0.1.0-alpha.20; this document uses the old name.
+
 The evidence pipeline is how Intern reads a document with its local model,
 the default since phase 3 (`Pipeline::Evidence`; `--pipeline evidence` in
 the evaluation tools, where it is also the default). The digest pipeline
@@ -54,7 +56,19 @@ only, and with each fact the id of the line that states it.
   tokens with the model's tokenizer; 472 with the shared opening line)
   and the user turn is the document alone: one line that says whether
   the whole document follows or only excerpts, then the evidence lines,
-  each written `[handle] text`.
+  each written `[handle] text`. Before them, when the file's current name
+  is one a person chose ("Host Chair SOW John Smith.pdf"), one line gives
+  it: `The file is currently named "...". That name is a hint, not
+  evidence: every fact and id comes from the lines below.` The name has no
+  handle, so the grammar gives a reply no way to cite it, and validation
+  accepts only facts the evidence lines state; a type or a party the name
+  alone states is `Unsupported`. A name a scanner, a camera or a program
+  gave (`scan0001`, `IMG_1234`, `Document1`, a hash) says nothing and is
+  left out (`prompt::file_name_hint`), and a request without a name is the
+  request from before names were shown, byte for byte. The queue sets the
+  name (`DocumentSource::file_name`) from the file's path just before the
+  engine reads it; the evaluators never do, since the corpora's names are
+  their ids.
   llama-server keeps a hybrid model's cache only at checkpoints - the start
   of the last user message, and a few tokens before the end of the prompt -
   so instructions at the head of the user turn were prefilled afresh for
