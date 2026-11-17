@@ -168,6 +168,8 @@ pub fn run() {
             commands::operation_undo,
             commands::document_open,
             commands::document_reveal,
+            commands::viewer::document_file,
+            commands::viewer::document_text,
             commands::settings_get,
             commands::settings_save,
             commands::setup_get,

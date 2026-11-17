@@ -2821,6 +2821,21 @@ impl Pipeline {
             .collect()
     }
 
+    /// What the reader made of item `id` the last time it read the bytes the
+    /// item was checked against, while the extraction memo still holds it
+    /// (see [`crate::memo`]): the text the window's document viewer shows as
+    /// the text Intern read, without reading the document again. `None`
+    /// when nothing is kept - the document was read before this run of
+    /// Intern, or was let go for others since - and when there is no such
+    /// item. Reads only; the entry stays as it was, apart from counting as
+    /// recently used.
+    pub fn remembered_extraction(&self, id: i64) -> PipelineResult<Option<DocumentSource>> {
+        let Some(item) = self.store.get(id)? else {
+            return Ok(None);
+        };
+        Ok(self.memo.get(id, &item.source_hash, &item.source_path))
+    }
+
     /// The newest item enqueued from `path` - as given, or as it
     /// canonicalizes now - with its proposal and receipt, or `None` when the
     /// queue has never seen the path.
