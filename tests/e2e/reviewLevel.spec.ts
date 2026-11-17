@@ -57,7 +57,7 @@ test('choosing Balanced in Settings makes the lease ready with a note, the choic
   // Ready with a note: on its row, in the counts, and in its details.
   await expect(queueCell(page, LEASE, 'status')).toHaveText('Ready with a note');
   await expect(queueCell(page, LEASE)).toHaveAccessibleDescription('Ready with a note');
-  await expect(queueCell(page, LEASE, 'check')).toHaveText('Note: Type uncertain +1 more');
+  await expect(queueCell(page, LEASE, 'check')).toHaveText('Note: Type not confirmed +1 more');
   await expect(page.getByRole('button', { name: /needs? review/ })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '4 ready, 1 with a note' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Rename all ready' })).toHaveText('Rename all ready 4');
@@ -69,8 +69,9 @@ test('choosing Balanced in Settings makes the lease ready with a note, the choic
   const panel = await openDetails(page, LEASE);
   const note = panel.getByRole('region', { name: "Intern's note" });
   await expect(note.getByRole('heading', { name: 'Ready with a note' })).toBeVisible();
-  await expect(note).toContainText('This document is ready: nothing holds it. Intern noted this about its reading.');
-  await expect(note).toContainText('The document does not confirm the type in this name as its own.');
+  await expect(note).toContainText('Nothing holds it. Intern only noted this about its reading.');
+  await expect(note.getByRole('button', { name: 'Type not confirmed' })).toBeVisible();
+  await expect(note).toContainText('The document does not state the type in this name as its own'); // its why, a press away
   await expect(note).toContainText('The model was unsure of its reading. If you look at this name, start with the date and the parties.');
   await expect(panel.getByRole('heading', { name: 'What to check' })).toHaveCount(0);
   await expect(panel.getByRole('note', { name: 'Part of the name to check' })).toHaveCount(0);
@@ -128,7 +129,7 @@ test('a document renamed with a note is marked in Completed and in the history, 
   await page.getByRole('button', { name: 'Completed, 2' }).click();
   await expect(page.getByRole('row')).toHaveCount(3);
   await expect(queueCell(page, 'Scan 0098.pdf', 'status')).toHaveText('Completed with a note');
-  await expect(queueCell(page, 'Scan 0098.pdf', 'check')).toHaveText('Note: Type supplied by Intern +1 more');
+  await expect(queueCell(page, 'Scan 0098.pdf', 'check')).toHaveText('Note: Type guessed +1 more');
   await expect(queueCell(page, 'Completed lease.pdf', 'status')).toHaveText('Completed');
   // The longer status fits its column on one line: here, beside the open
   // panel (below), and at the window's narrowest, where the column is too.
@@ -152,7 +153,7 @@ test('a document renamed with a note is marked in Completed and in the history, 
   expect(await fits()).toBe(true);
   const note = panel.getByRole('region', { name: "Intern's note" });
   await expect(note.getByRole('heading', { name: 'Renamed with a note' })).toBeVisible();
-  await expect(note).toContainText('Intern had this noted about its reading when the document was renamed.');
+  await expect(note).toContainText('Intern noted this about its reading when it was renamed.');
   await expect(note).toContainText('No specific document type was identified.');
   await expect(panel.getByRole('button', { name: 'Undo', exact: true })).toBeVisible();
 
@@ -161,7 +162,7 @@ test('a document renamed with a note is marked in Completed and in the history, 
   const history = page.getByRole('dialog', { name: 'Rename history' });
   const mark = history.getByRole('note');
   await expect(mark).toHaveCount(1);
-  await expect(mark).toHaveText('Note: Type supplied by Intern (+1 more)');
+  await expect(mark).toHaveText('Note: Type guessed (+1 more)');
   await expect(history.getByRole('row').filter({ has: page.getByRole('note') })).toContainText('Scan 0098.pdf');
   await page.keyboard.press('Escape');
   await expect(history).toBeHidden();

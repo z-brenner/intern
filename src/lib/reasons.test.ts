@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { describeActionError } from './actionErrors';
-import { describeNotes, describeQueueStop, humanizeReason, noteCodes, outcomeFirst, shortNote, shortOutcome, shortReason } from './reasons';
+import { describeNotes, describeQueueStop, humanizeReason, noteCodes, noteLabel, noteWhy, outcomeFirst, reasonLabel, reasonWhy, shortNote, shortOutcome, shortReason } from './reasons';
 
 describe('humanizeReason', () => {
   it('translates a single code into its sentence', () => {
@@ -46,7 +46,7 @@ describe('humanizeReason', () => {
   it('translates the pipeline comma-joined list into sentences', () => {
     const result = humanizeReason('TYPE_UNSUPPORTED, LOW_CONFIDENCE, MODEL_REQUESTED_REVIEW');
     expect(result).toBe(
-      'The document does not confirm the proposed type as its own. The type does not appear verbatim in the document, or appears only where the document says what it is about, such as a subject line or the text of a letter. Check the type. '
+      'The document does not state this type as its own, or names it only in a subject line or the body of a letter. Check the type. '
       + 'The model was unsure of its reading. Check the name against the document, starting with the date and the parties. '
       + 'The model asked for a person to look at this one.',
     );
@@ -62,14 +62,13 @@ describe('humanizeReason', () => {
   // model gave none or that a title was used.
   it('says the type reasons without claiming the type is absent or that the model gave none', () => {
     const unsupported = humanizeReason('TYPE_UNSUPPORTED');
-    expect(unsupported).toMatch(/^The document does not confirm the proposed type as its own\./);
-    expect(unsupported).toMatch(/does not appear verbatim in the document, or appears only where/);
+    expect(unsupported).toMatch(/^The document does not state this type as its own, or names it only in a subject line or the body of a letter\./);
     expect(unsupported.endsWith(' Check the type.'), unsupported).toBe(true);
     const inferred = humanizeReason('TYPE_INFERRED');
-    expect(inferred).toMatch(/own title, or the kind its layout shows/);
+    expect(inferred).toMatch(/from the document's title or from its layout/);
     expect(inferred).not.toMatch(/gave no|title was used/);
-    expect(shortReason(['TYPE_UNSUPPORTED'])).toEqual({ text: 'Type uncertain', more: 0 });
-    expect(shortReason(['TYPE_INFERRED'])).toEqual({ text: 'Type supplied by Intern', more: 0 });
+    expect(shortReason(['TYPE_UNSUPPORTED'])).toEqual({ text: 'Type not confirmed', more: 0 });
+    expect(shortReason(['TYPE_INFERRED'])).toEqual({ text: 'Type guessed', more: 0 });
   });
 
   // LOW_CONFIDENCE is raised when the model rates itself low, and also when
@@ -108,7 +107,7 @@ describe('humanizeReason', () => {
   // so and assumes no party.
   it('names the usual cause of an uncertain party, and does not assume the name has one', () => {
     const sentence = humanizeReason('PARTY_UNSUPPORTED');
-    expect(sentence).toMatch(/^Intern could not confirm from the document which party this name should give\. Most often the document does not say which side a party is on/);
+    expect(sentence).toMatch(/^The document does not confirm which party this name should give, most often because it never says which side a party is on\./);
     expect(sentence).not.toMatch(/the party in this name|the proposed party/);
   });
 
@@ -122,21 +121,21 @@ describe('humanizeReason', () => {
   });
 
   // A name a learned spelling changed waits for a person until they choose
-  // "Use on its own" for the spelling: the sentence says why, and what to do
-  // either way - approve a right name, and choose Use on its own in
-  // Settings to stop being asked, or put the document's word back. It does not say an
+  // "Always use" for the spelling: the sentence says why, and what to do
+  // either way - approve a right name, and choose Always use in Settings to
+  // stop being asked, or put the document's word back. It does not say an
   // approval checks the spelling: none does. Nor does it promise a put-back
   // forgets the spelling whatever else changed: one made with another part
   // of the name changed teaches nothing (tests/pipeline.rs
   // the_documents_own_word_put_back_is_no_check_of_the_rule).
-  it('says a name a learned spelling changed waits until the spelling is used on its own, and what to do if the name is right or not', () => {
+  it('says a name a learned spelling changed waits until the spelling is always used, and what to do if the name is right or not', () => {
     const sentence = humanizeReason('LEARNED_SPELLING_UNCONFIRMED');
-    expect(sentence).toBe('Intern used a spelling it learned from your edits. Until you tell it to use that spelling on its own, a name it changes waits for you. If the name is right, approve it; to stop being asked, choose Use on its own for the spelling in Settings, under Learned spellings. If not, put the document\'s own words back - when that is the only change, Intern stops using that spelling.');
+    expect(sentence).toBe('Intern used a spelling it learned from your edits, and a name it changes waits for you until you choose Always use for it in Settings, under Learned spellings. Approve the name if it is right; if not, put the document\'s own words back.');
     // It is chosen in Settings, not beside this sentence in the review window.
-    expect(sentence).toMatch(/Use on its own for the spelling in Settings, under Learned spellings/);
-    expect(sentence).not.toMatch(/first time/);
+    expect(sentence).toMatch(/Always use for it in Settings, under Learned spellings/);
+    expect(sentence).not.toMatch(/first time|Use on its own/);
     expect(sentence).not.toMatch(/approv\w* (it )?checks|checked by approv/i);
-    expect(shortReason(['LEARNED_SPELLING_UNCONFIRMED'])).toEqual({ text: 'Learned spelling', more: 0 });
+    expect(shortReason(['LEARNED_SPELLING_UNCONFIRMED'])).toEqual({ text: 'Uses a learned spelling', more: 0 });
   });
 
   it('explains a bare duplicate flag once the filed name it referred to is gone', () => {
@@ -243,8 +242,8 @@ describe('a note on a document that is not waiting', () => {
       // No instruction, and nothing about waiting or approving: the document is ready.
       expect(note, code).not.toMatch(/(^|\. )Check\b|\bwaits?\b|\bapprove\b/i);
     }
-    expect(describeNotes(['TYPE_UNSUPPORTED'])).toBe('The document does not confirm the type in this name as its own. The type does not appear verbatim in the document, or appears only where the document says what it is about, such as a subject line or the text of a letter.');
-    expect(describeNotes(['TYPE_INFERRED'])).toBe('Intern supplied the type in this name: the document\'s own title, or the kind its layout shows, such as “Letter” or “Email”.');
+    expect(describeNotes(['TYPE_UNSUPPORTED'])).toBe('The document does not state the type in this name as its own, or names it only in a subject line or the body of a letter.');
+    expect(describeNotes(['TYPE_INFERRED'])).toBe('Intern took the type from the document\'s title or from its layout, such as “Letter” or “Email”.');
     // Where to look is still said, for someone who does look.
     expect(describeNotes(['LOW_CONFIDENCE'])).toBe('The model was unsure of its reading. If you look at this name, start with the date and the parties.');
     // These two already say what was found and ask for nothing.
@@ -258,7 +257,7 @@ describe('a note on a document that is not waiting', () => {
       expect(describeNotes([code]), code).not.toBe(humanizeReason(code));
     }
     // The note keeps what the review sentence says was found.
-    expect(humanizeReason('TYPE_UNSUPPORTED')).toContain(describeNotes(['TYPE_UNSUPPORTED']).replace('the type in this name', 'the proposed type'));
+    expect(humanizeReason('TYPE_UNSUPPORTED')).toContain(describeNotes(['TYPE_UNSUPPORTED']).replace('the type in this name', 'this type'));
     expect(humanizeReason('TYPE_INFERRED').startsWith(describeNotes(['TYPE_INFERRED']))).toBe(true);
     expect(humanizeReason('LOW_CONFIDENCE').startsWith('The model was unsure of its reading.')).toBe(true);
   });
@@ -303,7 +302,7 @@ describe('a note on a document that is not waiting', () => {
     for (const code of carried.filter((code) => code !== 'TYPE_MISSING')) expect(shortNote([code]), code).toEqual(shortReason([code]));
     // Ranked as a review's are: a note about a part of the name leads, the rest are counted.
     expect(shortNote(['LOW_CONFIDENCE', 'TYPE_MISSING'])).toEqual({ text: 'No specific type', more: 1 });
-    expect(shortNote(['TYPE_INFERRED', 'TYPE_MISSING', 'LOW_CONFIDENCE'])).toEqual({ text: 'Type supplied by Intern', more: 2 });
+    expect(shortNote(['TYPE_INFERRED', 'TYPE_MISSING', 'LOW_CONFIDENCE'])).toEqual({ text: 'Type guessed', more: 2 });
     expect(shortNote(['NOT_A_CODE'])).toBeUndefined();
     expect(shortNote([])).toBeUndefined();
     // The review's few words for the same code are as they were.
@@ -326,9 +325,75 @@ describe('a note on a document that is not waiting', () => {
 
   it('leaves every review sentence as it was', () => {
     expect(humanizeReason('TYPE_UNSUPPORTED, TYPE_INFERRED, LOW_CONFIDENCE')).toBe(
-      'The document does not confirm the proposed type as its own. The type does not appear verbatim in the document, or appears only where the document says what it is about, such as a subject line or the text of a letter. Check the type. '
-      + 'Intern supplied the type in this name: the document\'s own title, or the kind its layout shows, such as “Letter” or “Email”. Check that it names the document. '
+      'The document does not state this type as its own, or names it only in a subject line or the body of a letter. Check the type. '
+      + 'Intern took the type from the document\'s title or from its layout, such as “Letter” or “Email”. Check that it names the document. '
       + 'The model was unsure of its reading. Check the name against the document, starting with the date and the parties.',
     );
+  });
+});
+
+/*
+  Each reason in a few words, for the review panel's chips, the Check column
+  and the history: the sentence is the "why", one press away. The words were
+  sentences, and some reasons a paragraph, in the panel a person reads first.
+*/
+describe('a reason in a few words', () => {
+  // Every code the backend can store, and the queue's own.
+  const codes = [
+    'DATE_MISSING', 'DATE_UNSUPPORTED', 'DATE_AMBIGUOUS', 'DATE_IS_DEADLINE', 'DATE_IS_PERIOD', 'DATE_IS_FORMULA', 'DATE_IMPLAUSIBLE', 'DATE_REQUIRED',
+    'TYPE_MISSING', 'TYPE_UNSUPPORTED', 'TYPE_INFERRED', 'PARTY_UNSUPPORTED', 'PARTY_MISSING', 'DESCRIPTION_UNSUPPORTED', 'DESCRIPTION_INVALID',
+    'LOW_CONFIDENCE', 'MODEL_REQUESTED_REVIEW', 'PARSER_WARNING', 'FAST_MODEL_READING', 'FILE_CHANGED', 'SOURCE_LOCKED', 'DESTINATION_UNAVAILABLE',
+    'MOVE_VERIFICATION_FAILED', 'SOURCE_DELETE_FAILED', 'RECONCILIATION_REQUIRED', 'PROPOSAL_MISSING', 'IO_ERROR', 'PASSWORD_PROTECTED',
+    'UNSUPPORTED_CONTENT', 'DOCUMENT_TOO_LARGE', 'OCR_UNAVAILABLE', 'EXTRACTION_FAILED', 'ANALYSIS_FAILED', 'MODEL_FAILED', 'MODEL_OUTPUT_INVALID',
+    'MODEL_INPUT_TOO_LARGE', 'MODEL_REPLY_TRUNCATED', 'MODEL_DECLINED', 'HOSTED_MODEL_UNAVAILABLE', 'HOSTED_MODEL_BILLING', 'HOSTED_MODEL_MISCONFIGURED',
+    'HOSTED_MODEL_KEY_MISSING', 'HOSTED_MODEL_UNAUTHORIZED', 'HOSTED_MODEL_UNREACHABLE', 'HOSTED_MODEL_RATE_LIMITED', 'HOSTED_MODEL_REJECTED',
+    'HOSTED_MODEL_REFUSED', 'SECRET_SERVICE_UNAVAILABLE', 'STATE_CONFLICT', 'INVALID_TRANSITION', 'DUPLICATE', 'NEAR_DUPLICATE', 'EXACT_COPY',
+    'LEARNED_SPELLING_UNCONFIRMED', 'UNDONE', 'ALREADY_NAMED', 'INTAKE_WITHDRAWN',
+  ];
+
+  it('gives every code a few words of its own, and a short why', () => {
+    for (const code of codes) {
+      const label = reasonLabel(code);
+      expect(label, code).not.toMatch(/_|\.$/);
+      expect(label.split(/\s+/).length, `${code}: ${label}`).toBeLessThanOrEqual(5);
+      const why = reasonWhy(code);
+      expect(why, code).toMatch(/[.]$/);
+      // At most two short sentences, besides the parties' shared "where to look".
+      const said = why.replace(/ ?Check who the document is from, to, for or between\.$/, '').match(/[^.!?]+[.!?]/g) ?? [];
+      expect(said.length, `${code}: ${why}`).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it('says the reasons a reviewer meets most in words read at a glance', () => {
+    expect(reasonLabel('PARTY_UNSUPPORTED')).toBe('Party unclear');
+    expect(reasonLabel('DATE_MISSING')).toBe('No date found');
+    expect(reasonLabel('DATE_UNSUPPORTED')).toBe('Date not in document');
+    expect(reasonLabel('TYPE_INFERRED')).toBe('Type guessed');
+    expect(reasonLabel('LOW_CONFIDENCE')).toBe('Model unsure');
+    expect(reasonLabel('NEAR_DUPLICATE')).toBe('Possible duplicate');
+    expect(reasonLabel('LEARNED_SPELLING_UNCONFIRMED')).toBe('Uses a learned spelling');
+    expect(reasonLabel('DATE_IS_PERIOD')).toBe('Date is a period end');
+    // Codes arrive in other cases and with spaces from other serializations.
+    expect(reasonLabel(' low_confidence ')).toBe('Model unsure');
+  });
+
+  it('says the why of one code as the code stands alone: its sentence, and where to look about the parties', () => {
+    expect(reasonWhy('DATE_AMBIGUOUS')).toBe(humanizeReason('DATE_AMBIGUOUS'));
+    expect(reasonWhy('PARTY_MISSING')).toBe(humanizeReason('PARTY_MISSING'));
+    expect(reasonWhy('PARTY_MISSING').endsWith('Check who the document is from, to, for or between.')).toBe(true);
+    // On a document that is not waiting, the note's sentence where it has one.
+    expect(noteWhy('TYPE_INFERRED')).toBe(describeNotes(['TYPE_INFERRED']));
+    expect(noteWhy('DATE_AMBIGUOUS')).toBe(humanizeReason('DATE_AMBIGUOUS'));
+    expect(noteLabel('TYPE_MISSING')).toBe('No specific type');
+    expect(noteLabel('LOW_CONFIDENCE')).toBe('Model unsure');
+  });
+
+  // An unmapped code is a bug to notice: it is shown as it came, with no
+  // why to open.
+  it('shows an unknown code as it came, with nothing to open', () => {
+    expect(reasonLabel('SOMETHING_NEW')).toBe('SOMETHING_NEW');
+    expect(reasonWhy('SOMETHING_NEW')).toBe('');
+    expect(noteWhy('SOMETHING_NEW')).toBe('');
+    expect(shortReason(['SOMETHING_NEW'])).toBeUndefined();
   });
 });

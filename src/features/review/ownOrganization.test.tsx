@@ -29,7 +29,9 @@ describe('a name filed by the other side', () => {
     await selectRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
 
     const note = screen.getByRole('note', { name: 'Filed by the other side' });
-    expect(note).toHaveTextContent('Filed by the other side: Contoso Worldwide, Inc. is your organization, so it is left out of the name. Change this under Settings.');
+    expect(note).toHaveTextContent(/^Left out as your organization: Contoso Worldwide, Inc\.$/);
+    // Where to change it is a hover away.
+    expect(note).toHaveAttribute('title', 'Your organization\'s names are in Settings.');
     expect(within(note).getByText('Contoso Worldwide, Inc.').tagName).toBe('Q');
     expect(screen.getByLabelText('Filename')).toHaveValue('2026-04-01 Statement of Work with Ridgeline Cartography LLC');
     fireEvent.click(screen.getByText('Analysis details'));
@@ -43,7 +45,7 @@ describe('a name filed by the other side', () => {
     render(<App bridge={createInMemoryBridge({ items: [twice] })} />);
     await selectRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
 
-    expect(screen.getByRole('note', { name: 'Filed by the other side' })).toHaveTextContent('Filed by the other side: Contoso Worldwide, Inc., Contoso UK and CONTOSO are your organization, so they are left out of the name. Change this under Settings.');
+    expect(screen.getByRole('note', { name: 'Filed by the other side' })).toHaveTextContent('Left out as your organization: Contoso Worldwide, Inc., Contoso UK and CONTOSO');
   });
 
   it('says nothing when the name carries every party', async () => {

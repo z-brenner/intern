@@ -95,6 +95,7 @@ transitive versions are pinned in the lockfiles.
 | Tauri and Tauri plugins | Apache-2.0 OR MIT |
 | React and React DOM | MIT |
 | Lucide icons | ISC |
+| PDF.js (`pdfjs-dist`), which draws a PDF in the document viewer, with its OpenJPEG decoder | Apache-2.0 (OpenJPEG: BSD-2-Clause) |
 | AnyDoc | see the pinned crate package metadata and source distribution |
 | serde / serde_json | Apache-2.0 OR MIT |
 | image | Apache-2.0 OR MIT |

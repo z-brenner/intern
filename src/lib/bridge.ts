@@ -119,6 +119,21 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
   openItem(id: string): Promise<void>;
   /** Show an item's document selected in its folder. Same id-only contract as `openItem`. */
   revealItem(id: string): Promise<void>;
+  /**
+   * An item's document as its file's bytes, for the window's own viewer to
+   * draw: a PDF, or a PNG or JPEG picture, of at most 50 MB, wherever the
+   * document is now. Refused for any other format (VIEW_UNSUPPORTED), past
+   * the limit (VIEW_TOO_LARGE), and as `openItem` is. Same id-only contract
+   * as `openItem`: the webview reaches no file by path.
+   */
+  documentFile(id: string): Promise<Uint8Array>;
+  /**
+   * The text Intern read from an item's document, page by page: the queue's
+   * own reading while it still has it, or else the document read again now,
+   * which can take a while for a long scan. Same id-only contract as
+   * `openItem`.
+   */
+  documentText(id: string): Promise<DocumentText>;
   getSettings(): Promise<AppSettings>;
   saveSettings(settings: AppSettings): Promise<void>;
   getSetup(): Promise<SetupState>;
@@ -261,6 +276,26 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
    */
   houseRuleCheck(id: string, shown: HouseRule): Promise<void>;
 }
+
+/** One page of the text Intern read from a document. */
+export interface DocumentTextPage {
+  number: number;
+  text: string;
+  /** Recognized from a picture of the page, so a letter can be misread. */
+  ocr: boolean;
+}
+
+/** The text Intern read from a document (`documentText`). */
+export interface DocumentText {
+  pages: DocumentTextPage[];
+  /** Read again for the viewer, the queue no longer having its own reading. */
+  readNow: boolean;
+  /** The file has changed since Intern read it: this is the file as it is now. */
+  changed: boolean;
+}
+
+/** What the document viewer needs of a bridge. */
+export type DocumentSource = Pick<DesktopBridge, 'documentFile' | 'documentText'>;
 
 /**
  * Optional capability, duck-typed like QueueEventSource: bridges that can push

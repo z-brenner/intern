@@ -1265,6 +1265,38 @@ fn a_document_put_back_for_want_of_a_model_is_read_only_once() {
     assert_eq!(item.processing_failures, 0);
 }
 
+/// The window's document viewer shows the text Intern read from what the
+/// memo kept of the reading, without reading the document again: the same
+/// pages, for the item that read them, and nothing for an item the memo let
+/// go of or never had.
+#[test]
+fn the_text_a_document_was_read_as_is_kept_for_the_viewer_while_the_memo_holds_it() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["scan.pdf"]);
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(READABLE))]));
+    let model = Arc::new(FakeModel::new(vec![Ok(proposal(0.94, false))]));
+    let pipeline = pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        model,
+        files,
+        AppSettings::default(),
+    );
+    pipeline.enqueue_files(&paths).unwrap();
+    pipeline.run_until_idle().unwrap();
+    let id = pipeline.list().unwrap()[0].id;
+
+    let kept = pipeline.remembered_extraction(id).unwrap().unwrap();
+    assert_eq!(kept.pages, parsed(READABLE).pages);
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 1, "not read again");
+    assert!(pipeline.remembered_extraction(id + 1).unwrap().is_none());
+
+    // Removed from the queue, the memo lets it go, and there is no item.
+    pipeline.remove(id, false).unwrap();
+    assert!(pipeline.remembered_extraction(id).unwrap().is_none());
+}
+
 /// Admits every document on a provider's proof of its bytes, read from a
 /// private snapshot made afresh for every check, as Microsoft's word on an
 /// uploader is: the snapshot's path is new each time, its bytes proven to

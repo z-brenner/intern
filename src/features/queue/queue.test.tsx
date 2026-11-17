@@ -358,7 +358,7 @@ describe('queue interactions', () => {
 
     await selectRow(await screen.findByRole('row', { name: /broken.pdf/i }));
     expect(screen.queryByLabelText('Filename')).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Failure details' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Why it failed' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Retry item' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Remove item' }));
 

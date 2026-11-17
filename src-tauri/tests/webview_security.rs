@@ -43,6 +43,32 @@ fn csp_is_configured() {
     }
 }
 
+/// The document viewer shows a picture the window made from the bytes the
+/// backend read (a blob address), and draws a PDF with the bundled pdf.js:
+/// its worker is one of the app's own scripts, and nothing it needs is
+/// evaluated from a string. So the only widening is pictures from blob
+/// addresses - no frame, no eval, no worker or script from anywhere else.
+#[test]
+fn the_document_viewer_widens_only_pictures() {
+    let csp = security()["csp"].as_str().unwrap_or_default().to_owned();
+    let directive = |name: &str| {
+        csp.split(';')
+            .map(str::trim)
+            .find(|directive| directive.starts_with(&format!("{name} ")))
+            .map(str::to_owned)
+    };
+    assert_eq!(
+        directive("img-src").as_deref(),
+        Some("img-src 'self' data: blob:")
+    );
+    assert_eq!(
+        directive("script-src").as_deref(),
+        Some("script-src 'self'")
+    );
+    assert_eq!(directive("worker-src"), None, "workers follow script-src");
+    assert!(!csp.contains("unsafe-eval"), "{csp}");
+}
+
 /// Created visible, the window appeared before setup ran and sat blank and
 /// unresponsive through initialization - a white window flashing at sign-in
 /// for a launch meant for the tray. Setup shows it as its last step instead

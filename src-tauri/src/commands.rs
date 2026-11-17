@@ -59,6 +59,9 @@ use crate::intake::{
 use crate::model::{HostedModel, HostedModelStatusDto, HostedModelTestDto, suggested_date};
 use crate::secrets::{KeyringStore, SecretStore};
 
+/// The document viewer: the file and the text Intern read, for the window.
+pub mod viewer;
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExistingModelFilesDto {
@@ -3995,6 +3998,8 @@ pub struct AppState {
     launch_reports: LaunchReports,
     /// Documents launches named before there was an input folder.
     pending_launch: PendingLaunch,
+    /// Reads a document's text for the viewer when the queue kept none.
+    viewer: Arc<viewer::ViewerReader>,
 }
 
 /// The watcher's configuration for the canonical intake `folder`.
@@ -4146,6 +4151,10 @@ impl AppState {
             code: "APP_DATA_UNAVAILABLE".into(),
             message: "private worker temporary directory is unavailable".into(),
         })?;
+        let viewer = Arc::new(viewer::ViewerReader::new(
+            executable_directory.join(worker_name),
+            worker_temp_root.clone(),
+        ));
         let microsoft = Arc::new(crate::microsoft_intake::MicrosoftIntake::new(
             settings.clone(),
             data.clone(),
@@ -4238,6 +4247,7 @@ impl AppState {
             sharepoint_activation: AtomicBool::new(false),
             launch_reports: LaunchReports::default(),
             pending_launch,
+            viewer,
         };
         state.refresh_hosted_active(&startup_settings);
         if state.setup.model_ready.load(Ordering::SeqCst) {
@@ -8940,6 +8950,9 @@ mod ipc_thread_tests {
         // shell to take it.
         leaves_the_ipc_thread_2(document_open);
         leaves_the_ipc_thread_2(document_reveal);
+        // Reads a whole document, or reads its text again, OCR and all.
+        leaves_the_ipc_thread_2(super::viewer::document_file);
+        leaves_the_ipc_thread_2(super::viewer::document_text);
     }
 
     #[test]
