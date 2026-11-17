@@ -354,9 +354,9 @@ impl TauriPipelineEvents {
 fn waiting_in_doubt(item: &PipelineItem) -> Option<&'static str> {
     let doubt = item.doubt.as_deref()?;
     Some(if doubt.starts_with("crash:") {
-        "Waiting to be read again once Intern has read another document of this kind."
+        "Waiting to be read again once ATLAS has read another document of this kind."
     } else {
-        "Waiting to be read again once Intern has shown it can read another document."
+        "Waiting to be read again once ATLAS has shown it can read another document."
     })
 }
 
@@ -5019,7 +5019,7 @@ fn background_task_failed(task: &str) -> CommandError {
 pub(crate) fn app_not_ready() -> CommandError {
     CommandError {
         code: "APP_NOT_READY".into(),
-        message: "Intern could not start. Restart it; if this happens again, startup-error.log in its data folder says why".into(),
+        message: "ATLAS could not start. Restart it; if this happens again, startup-error.log in its data folder says why".into(),
     }
 }
 
@@ -5051,7 +5051,7 @@ fn unreadable_settings(loaded: &Result<LoadedSettings, PipelineError>) -> Option
             }
         )),
         Err(error) => Some(format!(
-            "{}: your settings file could not be read, so Intern started with defaults - no destination folder, no watched folder, and automatic renaming off. The file has not been written over: repair it, or save from this window to replace it.",
+            "{}: your settings file could not be read, so ATLAS started with defaults - no destination folder, no watched folder, and automatic renaming off. The file has not been written over: repair it, or save from this window to replace it.",
             error.code
         )),
     }
@@ -5704,7 +5704,7 @@ fn locate_document(item: Option<&PipelineItem>) -> Result<PathBuf, CommandError>
         .filter(|path| path.is_file())
         .ok_or_else(|| CommandError {
             code: "PATH_UNAVAILABLE".into(),
-            message: "the document is not where Intern last saw it".into(),
+            message: "the document is not where ATLAS last saw it".into(),
         })
 }
 
@@ -5731,9 +5731,8 @@ fn document_to_open(item: Option<&PipelineItem>) -> Result<PathBuf, CommandError
     }) {
         return Err(CommandError {
             code: "UPLOADER_UNVERIFIED".into(),
-            message:
-                "a document from an uploader Intern could not verify is not opened from Intern"
-                    .into(),
+            message: "a document from an uploader ATLAS could not verify is not opened from ATLAS"
+                .into(),
         });
     }
     openable_document(locate_document(item)?)
@@ -5759,7 +5758,7 @@ fn openable_document(path: PathBuf) -> Result<PathBuf, CommandError> {
     } else {
         Err(CommandError {
             code: "UNSUPPORTED_FORMAT".into(),
-            message: "Intern opens only the document formats it reads".into(),
+            message: "ATLAS opens only the document formats it reads".into(),
         })
     }
 }
@@ -6360,9 +6359,9 @@ fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<(), CommandError> {
     result.map_err(|_| CommandError {
         code: "AUTOSTART_FAILED".into(),
         message: if enabled {
-            "starting Intern at sign-in could not be enabled".into()
+            "starting ATLAS at sign-in could not be enabled".into()
         } else {
-            "starting Intern at sign-in could not be disabled".into()
+            "starting ATLAS at sign-in could not be disabled".into()
         },
     })
 }
@@ -14905,11 +14904,11 @@ mod filed_dto_tests {
         for (doubt, sentence) in [
             (
                 "timeout",
-                "Waiting to be read again once Intern has shown it can read another document.",
+                "Waiting to be read again once ATLAS has shown it can read another document.",
             ),
             (
                 "crash:pdf",
-                "Waiting to be read again once Intern has read another document of this kind.",
+                "Waiting to be read again once ATLAS has read another document of this kind.",
             ),
         ] {
             let dto = queue_item_dto(PipelineItem {

@@ -50,7 +50,7 @@ pub(crate) fn viewer_bytes(path: &Path, max: u64) -> Result<Vec<u8>, CommandErro
     if !drawn_in_window(path) {
         return Err(CommandError {
             code: "VIEW_UNSUPPORTED".into(),
-            message: "the window shows this format as the text Intern read".into(),
+            message: "the window shows this format as the text ATLAS read".into(),
         });
     }
     let too_large = || CommandError {
@@ -86,7 +86,7 @@ fn read_failed(error: io::Error) -> CommandError {
     } else if error.kind() == io::ErrorKind::NotFound {
         CommandError {
             code: "PATH_UNAVAILABLE".into(),
-            message: "the document is not where Intern last saw it".into(),
+            message: "the document is not where ATLAS last saw it".into(),
         }
     } else {
         CommandError {
@@ -193,7 +193,7 @@ pub(crate) fn extraction_failed(failure: &ExtractFailure) -> CommandError {
     };
     CommandError {
         code: code.into(),
-        message: "Intern could not read the document's text".into(),
+        message: "ATLAS could not read the document's text".into(),
     }
 }
 
