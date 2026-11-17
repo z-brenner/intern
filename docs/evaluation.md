@@ -217,8 +217,11 @@ both are recorded again whole, live, with the pinned accurate model. The
 
 The widening of the evidence in November 2026
 ([`evidence-retrieval.md`](evidence-retrieval.md#the-chosen-configuration))
-is such a change. Until the recordings are made again, CI's
-`corpus-replay` job reads:
+is such a change. Before the recordings were made again, CI's
+`corpus-replay` job read as below. Both were made again on 2026-11-17 -
+the fixture corpus on a four-core Linux machine, InternBench by
+candidate-bench run 44162258206 - and the job replays them with no
+regression:
 
 | Step | Recording | Stale | Result |
 | --- | --- | --- | --- |
