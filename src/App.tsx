@@ -1,4 +1,4 @@
-import { CircleCheck, ClipboardCopy, Ellipsis, Info, PanelRight, Trash2 } from 'lucide-react';
+import { CircleCheck, ClipboardCopy, Ellipsis, Info, PanelRight, Trash2, X } from 'lucide-react';
 import { useDeferredValue, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { AppHeader } from './components/AppHeader';
@@ -390,6 +390,11 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   const selected = items.find((item) => item.id === selectedId);
   const panelOpen = Boolean(selected) && (narrowInspector ? detailsAskedFor : detailsOpen);
   const drawerOpen = panelOpen && narrowInspector;
+  // Wide and left open with no row selected - another view, or the last
+  // document decided - the panel stays where it was and says how to fill
+  // it, rather than going and giving the table its width back until the
+  // next click takes it again.
+  const detailsEmpty = !narrowInspector && detailsOpen && !selected && visible.length > 0;
   // A name or a description with the caret in it leaves the screen only by
   // something the person did. Its field can go by itself - the document is
   // read again (every untouched provisional reading is, at once, when the
@@ -558,6 +563,30 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     rememberDetails(true);
     setFocusRequest({ id: item.id, target: itemActions(item).approve ? 'filename' : 'heading' });
   };
+  // A row asked for from the table - a double-click, Enter - or by F2: the
+  // panel says so where it is. Opened, it fades in (CSS); open already, it
+  // follows a click, so a double-click changed nothing anyone could see but
+  // the caret, and was taken for a double-click that did nothing. Once a row
+  // has been opened so, the hint below the table has done its work.
+  const [opened, setOpened] = useState(0);
+  const [knowsHowToOpen, setKnowsHowToOpen] = useState(readOpenHintSeen);
+  const openFromQueue = (item: QueueItem, trigger?: HTMLElement) => {
+    openItem(item, trigger);
+    setOpened((count) => count + 1);
+    if (!knowsHowToOpen) {
+      setKnowsHowToOpen(true);
+      try { window.localStorage.setItem(OPEN_HINT_KEY, 'seen'); } catch { /* Shown again next launch; nothing else. */ }
+    }
+  };
+  useEffect(() => {
+    if (!opened) return;
+    const panel = document.getElementById(REVIEW_PANEL_ID);
+    if (!panel?.animate || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    // A ring that fades, and nothing that moves: a control that moves under
+    // the pointer is one a press is refused on (src/lib/aimedPress.ts).
+    const ring = getComputedStyle(panel).getPropertyValue('--accent').trim() || 'Highlight';
+    panel.animate([{ boxShadow: `inset 0 0 0 3px ${ring}` }, { boxShadow: 'inset 0 0 0 3px transparent' }], { duration: 700, easing: 'ease-out' });
+  }, [opened]);
   // "3 need review": the next one after the selected row, round to the first.
   // It selects, and leaves the Details panel as it was.
   const goToNextReview = () => {
@@ -1094,7 +1123,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     selected,
     inspector: inspectorHandle,
     onMove: moveSelection,
-    onOpen: (item) => openItem(item),
+    onOpen: (item) => openFromQueue(item),
     onNext: goToNextUndecided,
     // Delete removes the panel's one item; with several rows of cells
     // selected it would read as removing them all, so it does nothing.
@@ -1246,8 +1275,8 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
             says which, so nobody pastes four hundred rows expecting three.
           */}
           <button type="button" disabled={visible.length === 0} onClick={clipboard.copy}><Icon icon={ClipboardCopy} />{clipboard.hasSelection ? 'Copy selection' : 'Copy table'}</button>
-          <button ref={detailsButton} type="button" className="details-toggle" aria-expanded={panelOpen} aria-controls={panelOpen ? REVIEW_PANEL_ID : undefined} disabled={!selected}
-            title={selected ? 'Show or hide details for the selected row. Enter, F2 or a double-click on a row opens them at its name.' : 'Select a row to see its details'} onClick={() => panelOpen ? closeDetails(true) : rememberDetails(true)}><Icon icon={PanelRight} />Details</button>
+          <button ref={detailsButton} type="button" className="details-toggle" aria-expanded={panelOpen || detailsEmpty} aria-controls={panelOpen || detailsEmpty ? REVIEW_PANEL_ID : undefined} disabled={!selected && !detailsEmpty}
+            title={selected ? 'Show or hide details for the selected row. Enter, F2 or a double-click on a row opens them at its name.' : 'Double-click a row to see its details'} onClick={() => panelOpen || detailsEmpty ? closeDetails(true) : rememberDetails(true)}><Icon icon={PanelRight} />Details</button>
           {/*
             The way out of a folder chosen by mistake. Pointing the queue at a
             large directory used to be unrecoverable from inside the app:
@@ -1284,11 +1313,13 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
         }} />
       </div>}
       {items.length > 0 && (visible.length > 0
-        ? <QueueTable items={visible} selectedId={selectedId} store={gridStore} onSelectRow={selectRow} onOpen={openItem} />
+        ? <QueueTable items={visible} selectedId={selectedId} store={gridStore} onSelectRow={selectRow} onOpen={openFromQueue} />
         : query
           ? <p className="queue-filter-empty" role="status">No items match “{deferredFilter.trim()}”.</p>
           : <ViewEmpty view={view} />)}
-      <p className="item-count">{query || readyFilter || notedFilter ? `${visible.length} of ${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}` : `${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}`}</p>
+      <p className="item-count">{query || readyFilter || notedFilter ? `${visible.length} of ${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}` : `${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}`}
+        {/* Until a row has been opened from the table once: how. Quiet, and gone for good after. */}
+        {!knowsHowToOpen && !panelOpen && visible.length > 0 && <span className="open-hint">Double-click a row to see its details</span>}</p>
       </DropZone>}</section>
       {/*
         At the foot of the queue, beside the panel rather than in it: the
@@ -1306,6 +1337,11 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
           onDismiss={toast.kind === 'progress' ? undefined : () => setToast(undefined)}>{toast.text}</Toast>}
         {actionError && <Toast tone="error" label="Action error" onDismiss={() => setActionError('')}>{actionError}</Toast>}
       </div>}
+      {/* Not the review panel: nothing in it acts, and it has the panel's place only while nothing is selected. */}
+      {detailsEmpty && <aside id={REVIEW_PANEL_ID} className="inspector inspector--empty" aria-label="Details" role="complementary">
+        <div className="inspector-title"><h2>Details</h2><button type="button" className="icon-button" onClick={() => closeDetails()} aria-label="Close details"><Icon icon={X} /></button></div>
+        <p>Double-click a row to see its details.</p>
+      </aside>}
       {panelOpen && selected && <ReviewInspector id={REVIEW_PANEL_ID} ref={inspectorHandle} busy={actionPending} drawer={drawerOpen} item={selected} drafts={reviewDrafts}
         earlier={earlierDrafts.get(selected.id)} onDiscardEarlier={(kept) => discardEarlier(selected.id, kept.key)}
         position={undecided.length ? { index: undecided.findIndex((item) => item.id === selected.id) + 1 || undefined, total: undecided.length } : undefined}
@@ -1323,6 +1359,14 @@ const REVIEW_PANEL_ID = 'review-panel';
 
 /** Where the Details panel's open or closed state is remembered between launches. */
 const DETAILS_PREFERENCE_KEY = 'intern.detailsPanel';
+
+/** Where Intern remembers that a row has been opened from the table, so the hint saying how is not shown again. */
+const OPEN_HINT_KEY = 'intern.openHint';
+
+/** Whether the hint below the table has been seen through; storage that cannot be read shows it. */
+function readOpenHintSeen(): boolean {
+  try { return window.localStorage.getItem(OPEN_HINT_KEY) === 'seen'; } catch { return false; }
+}
 
 /**
  * Closed unless a person left it open last time. Storage can be missing or

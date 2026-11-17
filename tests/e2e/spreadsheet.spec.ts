@@ -158,3 +158,34 @@ test('a double-click on a row opens its details at the name', async ({ page }) =
   await expect(panel).toContainText('Scan 0106.pdf');
   await expect(disclosure).toHaveAttribute('open', '');
 });
+
+/*
+  A double-click is two presses at one place, and a working queue moves under
+  it: a document filed above, the toolbar or the progress strip growing by a
+  line. The browser's dblclick goes to wherever the rows are by then - the
+  row that has come under the pointer, or the table body when they moved
+  under the second press, which opened nothing. The row the first press was
+  on is the one opened, from the second press.
+*/
+test('a double-click opens the row it began on when the rows move between its presses', async ({ page }) => {
+  await page.goto('/?queue=changes');
+  const nda = queueCell(page, 'NDA - Acme Corp.docx', 'proposed');
+  const box = (await nda.boundingBox())!;
+  const at = { x: box.x + 30, y: box.y + box.height / 2 };
+  await page.mouse.move(at.x, at.y);
+  await page.mouse.down();
+  await page.mouse.up();
+  // A document above is filed from another machine: every row below moves up one.
+  await page.evaluate(() => (window as unknown as { internQueue: { leave(id: string): void } }).internQueue.leave('employment'));
+  await expect(page.getByRole('gridcell', { name: 'Employment Agreement - John Smith.pdf' })).toHaveCount(0);
+  expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('tr')?.textContent ?? '', at)).not.toContain('NDA - Acme Corp.docx');
+  await page.mouse.down({ clickCount: 2 });
+  await page.mouse.up({ clickCount: 2 });
+
+  const panel = page.getByRole('complementary', { name: 'Review item' });
+  await expect(panel).toContainText('NDA - Acme Corp.docx');
+  await expect(panel.getByLabel('Filename')).toBeFocused();
+  await expect(page.getByRole('row', { name: /NDA - Acme Corp\.docx/ })).toHaveAttribute('aria-current', 'true');
+  await expect(page.locator('.queue-grid [aria-selected="true"]')).toHaveCount(1);
+});
+
