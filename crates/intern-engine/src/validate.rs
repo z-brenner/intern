@@ -25,6 +25,13 @@ use crate::infer::{
 
 /// Below this self-reported confidence a proposal goes to review even when
 /// every literal check passed.
+///
+/// Left where it was when the token gate was lowered
+/// ([`crate::tiers::REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE`]). The local
+/// model's reply carries no rating and reads as 1.0, so this holds only a
+/// hosted model's readings, and nothing measured speaks for a lower line
+/// there: no report scored the rating, and the corpus's digest recording
+/// rates every reading 0.9 or 0.95, so it would move nothing it can see.
 pub const READY_CONFIDENCE: f32 = 0.60;
 /// A description may say a little more than the filename, but only a little.
 pub const MAX_DESCRIPTION_WORDS: usize = 42;

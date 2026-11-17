@@ -664,7 +664,24 @@ pub fn escalation_with(
 /// filed 55 right and 2 wrong, 0.8 39 and none. A name filed wrong is
 /// renamed with no one looking; a right one held is a click. 51 documents
 /// cannot certify a rate, and the counts say so.
-pub const REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE: f32 = 0.8;
+///
+/// 0.7 again after alpha.19, at the owner's word: a little less review, at
+/// a known price, now that the owner accepts some wrong names for it
+/// (`bench/reports/review-levels-2026-11`). The price, from what is
+/// measured at both gates: InternBench's committed recording files 38 of
+/// 77 where 0.8 filed 28, one of them wrong where 0.8 filed none; the
+/// sixth real set 4 right and 2 wrong where 0.8 filed 3 and 1; the
+/// development recordings above 55 and 2 where 0.8 filed 39 and none. On
+/// the two held-out sets read since (real7 and real8, 109 documents), no
+/// really wrong name with no other reason had a least token probability
+/// between 0.7 and 0.8, so 0.7 files none there that 0.8 held. Between
+/// 0.7 and 0.8 the figure does not tell good names from bad: on
+/// InternBench's committed recording, the corpus's two and the sixth real
+/// set, the readings with no other reason there are 13 right names and 3
+/// wrong, and 0.75 would keep the worse half of that (5 and 2 from 0.75
+/// up, 8 and 1 below it). The quick model's gate, and its readings, are as
+/// they were.
+pub const REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE: f32 = 0.7;
 
 /// The same for the quick model's readings. A quick reading always goes to
 /// a person ([`hold_fast_reading`]), so this decides only whether a cascade
