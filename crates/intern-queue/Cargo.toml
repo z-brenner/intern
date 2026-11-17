@@ -9,6 +9,7 @@ license.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std"] }
 intern-core = { path = "../intern-core" }
 intern-engine = { path = "../intern-engine" }
 rusqlite = { version = "=0.37.0", features = ["bundled"] }

@@ -9,6 +9,8 @@
  */
 const SENTENCES: Record<string, string> = {
   DATE_MISSING: 'No date that defines the document was found.',
+  DATE_FROM_FILENAME: 'Date taken from the original filename.',
+  DATE_FROM_FILE_MODIFIED: 'Date taken from the file\'s last-modified date.',
   DATE_UNSUPPORTED: 'The proposed date does not appear verbatim in the document.',
   TYPE_MISSING: 'No specific document type was identified.',
   // Both are raised in more cases than their first (ReviewReason in
