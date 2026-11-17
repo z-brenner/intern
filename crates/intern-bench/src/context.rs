@@ -813,8 +813,12 @@ fn set_weight(weights: &mut Weights, component: &str, value: u32) {
 /// The configurations the sweep compares, each named once (a
 /// configuration another name already covers is left out):
 ///
-/// * `chosen`, [`RetrievalConfig::default`], and `plan_start`, the
-///   phase plan's starting point ([`RetrievalConfig::plan_start`]);
+/// * `chosen`, [`RetrievalConfig::default`]; `stage4`, the configuration
+///   Stage 4 chose for the fewest tokens and the default before the
+///   evidence was widened ([`RetrievalConfig::stage4`]), with each half of
+///   the widening alone (`stage4_whole_3000`, and `whole_1800`, the
+///   chosen budgets at Stage 4's threshold); and `plan_start`, the phase
+///   plan's starting point ([`RetrievalConfig::plan_start`]);
 /// * from each, every scoring component off in turn (`without_*`), each
 ///   alone (`only_*`), and the combinations of cue logic, BM25 and
 ///   structure;
@@ -828,9 +832,18 @@ fn set_weight(weights: &mut Weights, component: &str, value: u32) {
 ///   which hides how well retrieval itself chooses.
 pub fn sweep_configs() -> Vec<(String, RetrievalConfig)> {
     let chosen = RetrievalConfig::default();
+    let stage4 = RetrievalConfig::stage4();
     let start = RetrievalConfig::plan_start();
     let mut configs: Vec<(String, RetrievalConfig)> = vec![
         ("chosen".to_owned(), chosen.clone()),
+        ("stage4".to_owned(), stage4.clone()),
+        (
+            "stage4_whole_3000".to_owned(),
+            RetrievalConfig {
+                whole_document_tokens: chosen.whole_document_tokens,
+                ..stage4.clone()
+            },
+        ),
         ("plan_start".to_owned(), start.clone()),
     ];
     let off = Weights {
@@ -911,24 +924,15 @@ pub fn sweep_configs() -> Vec<(String, RetrievalConfig)> {
         );
     }
     for percent in [50, 75, 125, 150] {
-        let scaled = |value: u32| value * percent / 100;
-        let budgets = &base.budgets;
         vary(
             format!("budgets_{percent}"),
             RetrievalConfig {
-                budgets: FieldBudgets {
-                    document_type: scaled(budgets.document_type),
-                    date: scaled(budgets.date),
-                    parties: scaled(budgets.parties),
-                    subject: scaled(budgets.subject),
-                    identifier: scaled(budgets.identifier),
-                    key_facts: scaled(budgets.key_facts),
-                },
+                budgets: base.budgets.scaled(percent),
                 ..base.clone()
             },
         );
     }
-    for parties in [250, 300, 450] {
+    for parties in [350, 450, 700] {
         vary(
             format!("parties_{parties}"),
             RetrievalConfig {
@@ -956,7 +960,7 @@ pub fn sweep_configs() -> Vec<(String, RetrievalConfig)> {
             ..base.clone()
         },
     );
-    for tokens in [0, 1_200, 3_000] {
+    for tokens in [0, 1_800, 4_000] {
         vary(
             format!("whole_{tokens}"),
             RetrievalConfig {
@@ -1037,6 +1041,7 @@ pub fn sweep_configs() -> Vec<(String, RetrievalConfig)> {
         .iter()
         .filter(|(name, _)| {
             name == "chosen"
+                || name == "stage4"
                 || name == "plan_start"
                 || name.starts_with("chosen/")
                 || matches!(

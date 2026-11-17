@@ -2053,6 +2053,36 @@ mod tests {
         assert!(prepared.scale_pct < 100, "{}", prepared.scale_pct);
     }
 
+    /// The widest evidence the default configuration sends - a document
+    /// whole at its threshold, or a long one's excerpts at the dense tier -
+    /// fits the local server's context beside the instructions, the
+    /// costliest file name and the whole reply, so it is sent as retrieved,
+    /// never condensed to fit. (The condensing below stays for what the
+    /// estimate cannot see: a document of digits or CJK whose excerpts cost
+    /// more than their budget says.)
+    #[test]
+    fn the_widest_default_evidence_fits_the_local_context() {
+        let config = RetrievalConfig::default();
+        let widest = (config.whole_document_tokens as usize)
+            .max(config.budgets.total() as usize * config.dense_pct as usize / 100);
+        let index = EvidenceIndex::build(&source_from_text(""));
+        let context = retrieve(&index, &config, 100);
+        let costliest_name = format!(
+            "Lease {}",
+            "1".repeat(crate::prompt::MAX_FILE_NAME_CHARACTERS - "Lease ".len())
+        );
+        let fixed = request_tokens(&build_evidence_request_named(
+            &index,
+            &context,
+            Some(&costliest_name),
+        ));
+        let ceiling = crate::server::CONTEXT_TOKENS as usize - TEMPLATE_TOKENS;
+        assert!(
+            fixed + widest + MAX_REPLY_TOKENS as usize <= ceiling,
+            "{fixed} + {widest} + {MAX_REPLY_TOKENS} of {ceiling}"
+        );
+    }
+
     /// A document's file name rides on its request, before the evidence,
     /// and on the request a refit sends; validation never reads it. A type
     /// or a party only the name states is not accepted, whatever line the
