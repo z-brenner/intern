@@ -295,9 +295,22 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
             unscored.len(),
             unscored.join(", ")
         );
-        eprintln!(
-            "re-record (scripts/run-internbench.sh, then `intern-bench merge-recordings` to replace only these documents); --allow-stale scores stale_prompt documents anyway, never stale_fixture or unrecorded ones"
-        );
+        // A merge refuses a recording made with another retrieval, prompt,
+        // digest budget or context, so after such a change only a whole
+        // recording replaces the old one.
+        let configuration_changed = info
+            .recording
+            .as_ref()
+            .is_some_and(|recording| recording.configuration_change.is_some());
+        if configuration_changed {
+            eprintln!(
+                "re-record every document (scripts/run-internbench.sh, or the candidate benchmark workflow): the engine's configuration changed, and `intern-bench merge-recordings` refuses a recording made with another one; --allow-stale scores stale_prompt documents anyway, never stale_fixture or unrecorded ones"
+            );
+        } else {
+            eprintln!(
+                "re-record (scripts/run-internbench.sh, then `intern-bench merge-recordings` to replace only these documents); --allow-stale scores stale_prompt documents anyway, never stale_fixture or unrecorded ones"
+            );
+        }
         exit = EXIT_REGRESSED;
     }
     let stale = records.iter().filter(|record| record.stale).count();
