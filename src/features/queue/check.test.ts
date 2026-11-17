@@ -227,6 +227,68 @@ describe('a proposed name in parts', () => {
     expect(typed.some((part) => part.flagged)).toBe(false);
     expect(typed.map((part) => part.text).join('')).toBe('Lease for 12 Main St.pdf');
   });
+
+  /** The parts of `name` flagged when every field is, by field, in the order the name reads. */
+  const fields = (name: string) => nameParts(name, ['date', 'type', 'parties'])
+    .filter((part) => part.field)
+    .map((part) => [part.field, part.text]);
+
+  it('reads the organization a name leads with as one of its parties', () => {
+    const name = '2026-10-16 Vistage International - Host Chair SOW for John Smith.pdf';
+    expect(nameParts(name, []).map((part) => part.text).join('')).toBe(name);
+    expect(fields(name)).toEqual([
+      ['date', '2026-10-16'],
+      ['parties', 'Vistage International'],
+      ['type', 'Host Chair SOW'],
+      ['parties', 'John Smith'],
+    ]);
+    expect(nameParts(name, ['parties']).filter((part) => part.flagged).map((part) => part.text))
+      .toEqual(['Vistage International', 'John Smith']);
+    expect(nameParts(name, ['type']).filter((part) => part.flagged).map((part) => part.text)).toEqual(['Host Chair SOW']);
+    // No other side.
+    expect(fields('2024-11-09 EGN Denmark - Incorporation Email Communications.pdf')).toEqual([
+      ['date', '2024-11-09'],
+      ['parties', 'EGN Denmark'],
+      ['type', 'Incorporation Email Communications'],
+    ]);
+    expect(fields('2025-04-30 Nimbus Orchard Supply - Invoice.pdf')).toEqual([
+      ['date', '2025-04-30'],
+      ['parties', 'Nimbus Orchard Supply'],
+      ['type', 'Invoice'],
+    ]);
+    // A party given no relation after it, and two sides of a "between".
+    expect(fields('2024-04-12 Acme - Notice of Termination - John Smith.pdf')).toEqual([
+      ['date', '2024-04-12'],
+      ['parties', 'Acme'],
+      ['type', 'Notice of Termination'],
+      ['parties', 'John Smith'],
+    ]);
+    expect(fields('2024-04-12 Wingtip - Agreement between John Smith and Acme Corporation (2).pdf')).toEqual([
+      ['date', '2024-04-12'],
+      ['parties', 'Wingtip'],
+      ['type', 'Agreement'],
+      ['parties', 'John Smith and Acme Corporation (2)'],
+    ]);
+  });
+
+  it('reads a name with no organization as the type and the party after it', () => {
+    // A document naming only people: the side that names a kind of document is the type.
+    expect(fields('2026-12-29 Notice of Termination - John Smith.pdf')).toEqual([
+      ['date', '2026-12-29'],
+      ['type', 'Notice of Termination'],
+      ['parties', 'John Smith'],
+    ]);
+    expect(fields('2024-02-09 Letter to Smith - signed.pdf')).toEqual([
+      ['date', '2024-02-09'],
+      ['type', 'Letter'],
+      ['parties', 'Smith - signed'],
+    ]);
+    expect(fields('2025-01-05 Settlement Agreement between John Smith and Jane Doe.pdf')).toEqual([
+      ['date', '2025-01-05'],
+      ['type', 'Settlement Agreement'],
+      ['parties', 'John Smith and Jane Doe'],
+    ]);
+  });
 });
 
 describe('another party put in a name', () => {
@@ -243,6 +305,23 @@ describe('another party put in a name', () => {
     // A name with no date yet is still a name with a party.
     const undated = offer('Letter to Carl Malamud', ['Carl Malamud']);
     expect(withParty(undated.proposed, 'Department of the Air Force', undated)).toBe('Letter to Department of the Air Force');
+  });
+
+  it('takes the place of the other side after the organization the name leads with, which stays', () => {
+    const sow = offer('2026-10-16 Vistage International - Host Chair SOW for John Smith', ['John Smith'], ['Jane Doe']);
+    expect(withParty(sow.proposed, 'Jane Doe', sow)).toBe('2026-10-16 Vistage International - Host Chair SOW for Jane Doe');
+    expect(partyGiven(sow.proposed, sow)).toBe('John Smith');
+    // A note typed after the party stays, and so does the organization respelled by hand.
+    expect(withParty('2026-10-16 Vistage International - Host Chair SOW for John Smith re Renewal', 'Jane Doe', sow))
+      .toBe('2026-10-16 Vistage International - Host Chair SOW for Jane Doe re Renewal');
+    expect(withParty('2026-10-16 Vistage Intl - Host Chair SOW for John Smith', 'Jane Doe', sow))
+      .toBe('2026-10-16 Vistage Intl - Host Chair SOW for Jane Doe');
+    // One that gives no other side is given one after its type, as a party with no relation.
+    const invoice = offer('2025-04-30 Nimbus Orchard Supply - Invoice', [], ['Contoso Ltd']);
+    const added = withParty(invoice.proposed, 'Contoso Ltd', invoice);
+    expect(added).toBe('2025-04-30 Nimbus Orchard Supply - Invoice - Contoso Ltd');
+    expect(partyGiven(added, invoice)).toBe('Contoso Ltd');
+    expect(partyGiven(invoice.proposed, invoice)).toBeUndefined();
   });
 
   it('replaces the second side of a "between", and an earlier choice', () => {
