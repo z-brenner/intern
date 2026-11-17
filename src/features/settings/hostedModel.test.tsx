@@ -12,7 +12,7 @@ describe('simple processing settings', () => {
     expect(within(dialog).queryByLabelText('API address')).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Provider')).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Hosted model with my API key')).not.toBeInTheDocument();
-    const summary = within(dialog).getByText('Local processing', { selector: 'summary' });
+    const summary = within(dialog).getByText('Model', { selector: 'summary' });
     expect(summary.parentElement).not.toHaveAttribute('open');
     fireEvent.click(summary);
     expect(within(dialog).getByRole('group', { name: 'Local model' })).toBeVisible();
@@ -25,11 +25,11 @@ describe('simple processing settings', () => {
     const folders = within(dialog).getByRole('group', { name: 'Folders' });
     expect(within(folders).getByText('Queue folder')).toBeVisible();
     expect(within(folders).getByText('Completed folder')).toBeVisible();
-    const naming = within(dialog).getByText('Naming and filing', { selector: 'summary' });
+    const naming = within(dialog).getByText('How Intern names files', { selector: 'summary' });
     naming.focus();
     fireEvent.keyDown(document, { key: 'Tab' });
     expect(within(dialog).getByText('Learned spellings', { selector: 'summary' })).toHaveFocus();
-    for (const title of ['Naming and filing', 'Learned spellings', 'Local processing', 'SharePoint descriptions']) {
+    for (const title of ['How Intern names files', 'Learned spellings', 'Model', 'SharePoint descriptions']) {
       expect(within(dialog).getByText(title, { selector: 'summary' }).parentElement).not.toHaveAttribute('open');
     }
   });

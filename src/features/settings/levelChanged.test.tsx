@@ -156,7 +156,7 @@ describe('the words for a level change', () => {
 async function openSettings() {
   fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
   const dialog = await screen.findByRole('dialog', { name: 'Settings' });
-  fireEvent.click(within(dialog).getByText('Naming and filing', { selector: 'summary' }));
+  fireEvent.click(within(dialog).getByText('How Intern names files', { selector: 'summary' }));
   return dialog;
 }
 const level = (dialog: HTMLElement) => within(dialog).getByRole('group', { name: 'Which documents are ready' });

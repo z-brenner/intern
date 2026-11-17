@@ -12,8 +12,8 @@ import type { HouseRule, LearnedRule } from '../types';
  */
 export function onItsOwnConsequence(rule: HouseRule): ReactNode {
   return rule.kind === 'party'
-    ? <>Every later document Intern reads as naming <q>{rule.from}</q> will name <q>{rule.to}</q> instead, and may be filed under that name without your check.</>
-    : <>Every later document Intern reads as <q>{rule.from}</q> will be called <q>{rule.to}</q> instead, and may be filed under that name without your check.</>;
+    ? <>From now on Intern will write <q>{rule.from}</q> as <q>{rule.to}</q>, and may file the name without asking you.</>
+    : <>From now on Intern will call <q>{rule.from}</q> documents <q>{rule.to}</q>, and may file the name without asking you.</>;
 }
 
 /** How a learned spelling is named to a screen reader: "Acme written as Acme Corp". */
@@ -214,11 +214,11 @@ function Question({ rule, describedBy, onConfirm, onCancel }: QuestionProps) {
     if (matches) onConfirm();
     else if (typed.trim() !== '') setNotYet(true);
   };
-  return <div ref={group} className="rule-confirm" role="group" aria-label={`Use on its own: ${spellingLabel(rule)}`} aria-describedby={describedBy} onKeyDown={(event) => {
+  return <div ref={group} className="rule-confirm" role="group" aria-label={`Always use: ${spellingLabel(rule)}`} aria-describedby={describedBy} onKeyDown={(event) => {
     if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); onCancel(); }
   }}>
-    <p id={describedBy}>{onItsOwnConsequence(rule)} Do this only if that is right for every one of them.</p>
-    <label className="rule-confirm-field">Type <q>{rule.to}</q> to use it on its own
+    <p id={describedBy}>{onItsOwnConsequence(rule)} Only do this if it is right every time.</p>
+    <label className="rule-confirm-field">Type <q>{rule.to}</q> to always use it
       <input ref={field} type="text" name={name} value={typed} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
         onChange={(event) => {
           const input = event.nativeEvent;
@@ -243,7 +243,7 @@ function Question({ rule, describedBy, onConfirm, onCancel }: QuestionProps) {
           if (!event.repeat && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) answer();
         }} />
     </label>
-    <span className="rule-confirm-buttons"><button type="button" className="primary" disabled={!matches} onClick={answer}>Use on its own</button>
+    <span className="rule-confirm-buttons"><button type="button" className="primary" disabled={!matches} onClick={answer}>Always use</button>
       <button type="button" onClick={onCancel}>Cancel</button></span>
     <span className="rule-confirm-not-yet" role="status">{notYet && !matches ? <>That is not <q>{rule.to}</q>: type it as it is shown.</> : null}</span>
   </div>;

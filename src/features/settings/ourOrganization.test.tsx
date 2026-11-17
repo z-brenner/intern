@@ -7,7 +7,7 @@ import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 async function openSettings() {
   fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
   const dialog = await screen.findByRole('dialog', { name: 'Settings' });
-  fireEvent.click(within(dialog).getByText('Naming and filing', { selector: 'summary' }));
+  fireEvent.click(within(dialog).getByText('How Intern names files', { selector: 'summary' }));
   return dialog;
 }
 
@@ -17,9 +17,9 @@ describe('your organization\'s names', () => {
     const saveSettings = vi.fn(base.saveSettings);
     render(<App bridge={{ ...base, saveSettings }} />);
     let dialog = await openSettings();
-    const names = within(dialog).getByLabelText('Your organization\'s names');
+    const names = within(dialog).getByLabelText('Your organizations');
     expect(names).toHaveValue('Contoso Worldwide, Inc.');
-    expect(names).toHaveAccessibleDescription('Your own firm\'s names. When a document names your firm and someone else, the filename and the Party folder use the other side.');
+    expect(names).toHaveAccessibleDescription('List each of your company names, one per line. Intern puts the matching name right after the date: 2025-03-26 Vistage Malaysia - Termination Letter for Johnny Appleseed.');
 
     // A list typed one name per line picks up padding and blank lines; the
     // box shows them as typed, or the caret would jump while typing.
@@ -33,7 +33,7 @@ describe('your organization\'s names', () => {
     expect((await base.getSettings()).ourNames).toEqual(['Contoso Worldwide, Inc.', 'Contoso']);
 
     dialog = await openSettings();
-    expect(within(dialog).getByLabelText('Your organization\'s names')).toHaveValue('Contoso Worldwide, Inc.\nContoso');
+    expect(within(dialog).getByLabelText('Your organizations')).toHaveValue('Contoso Worldwide, Inc.\nContoso');
   });
 
   it('saves an empty list when every line is cleared', async () => {
@@ -41,7 +41,7 @@ describe('your organization\'s names', () => {
     const saveSettings = vi.fn(base.saveSettings);
     render(<App bridge={{ ...base, saveSettings }} />);
     const dialog = await openSettings();
-    fireEvent.change(within(dialog).getByLabelText('Your organization\'s names'), { target: { value: ' \n' } });
+    fireEvent.change(within(dialog).getByLabelText('Your organizations'), { target: { value: ' \n' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }));
     await waitFor(() => expect(saveSettings).toHaveBeenCalledWith(expect.objectContaining({ ourNames: [] })));
   });
@@ -51,17 +51,17 @@ describe('your organization\'s names', () => {
   it('says which names are too short to be used', async () => {
     render(<App bridge={createInMemoryBridge()} />);
     const dialog = await openSettings();
-    const names = within(dialog).getByLabelText('Your organization\'s names');
+    const names = within(dialog).getByLabelText('Your organizations');
 
     fireEvent.change(names, { target: { value: 'E.Y.\nPwC\nContoso Worldwide, Inc.\nKPMG\n' } });
-    expect(names).toHaveAccessibleDescription(expect.stringContaining('“E.Y.”, “PwC” are too short to match safely and will not be used. Add the name as your documents print it in full.'));
+    expect(names).toHaveAccessibleDescription(expect.stringContaining('“E.Y.”, “PwC” are too short to match and will not be used. Use the full name as your documents print it.'));
 
     fireEvent.change(names, { target: { value: 'IBM\nKPMG' } });
-    expect(names).toHaveAccessibleDescription(expect.stringContaining('“IBM” is too short to match safely'));
+    expect(names).toHaveAccessibleDescription(expect.stringContaining('“IBM” is too short to match'));
 
     fireEvent.change(names, { target: { value: 'KPMG' } });
     expect(within(dialog).queryByText(/too short to match/)).not.toBeInTheDocument();
-    expect(names).toHaveAccessibleDescription('Your own firm\'s names. When a document names your firm and someone else, the filename and the Party folder use the other side.');
+    expect(names).toHaveAccessibleDescription('List each of your company names, one per line. Intern puts the matching name right after the date: 2025-03-26 Vistage Malaysia - Termination Letter for Johnny Appleseed.');
   });
 
   /*
@@ -79,7 +79,7 @@ describe('your organization\'s names', () => {
     expect(screen.getByLabelText('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc');
 
     const dialog = await openSettings();
-    fireEvent.change(within(dialog).getByLabelText('Your organization\'s names'), { target: { value: 'TenantCo Inc.' } });
+    fireEvent.change(within(dialog).getByLabelText('Your organizations'), { target: { value: 'TenantCo Inc.' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }));
 
     await waitFor(() => expect(screen.getByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i })).toHaveTextContent('2023-09-15 Lease Agreement with ABC Properties LLC.pdf'));

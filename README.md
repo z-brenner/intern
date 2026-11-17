@@ -475,7 +475,7 @@ Full details, thresholds, and measurements are in
 
 ### Which documents are ready
 
-Settings, under **Naming and filing**, has a choice of two levels. The level
+Settings, under **How Intern names files**, has a choice of two levels. The level
 decides which documents are ready: the ones **Rename all ready** renames, and
 the ones Intern renames by itself when **Automatically rename ready
 documents** is on.
@@ -605,19 +605,18 @@ and Intern cannot tell that reliably from a document's text. So a name it
 changes keeps waiting, document after document, until you say the spelling is
 right for every one of them. If a name is right, approve it; if it is not,
 put the document's own word back, changing nothing else, and Intern forgets
-the spelling. Until you choose "Use on its own", a spelling is used only where
+the spelling. Until you choose "Always use", a spelling is used only where
 the name shows it: a document whose name leaves out the party it respells (a
 long party left out for length, the third party of a "between") is filed and
 reported under the document's own words, and does not wait for it.
 
-"Use on its own" is in Settings, under Learned spellings, for every spelling in
+"Always use" is in Settings, under Learned spellings, for every spelling in
 use that you have not chosen it for. A name waiting for such a spelling says so
 in the review window, under "Uses your spelling", and points you to Settings;
 the review window itself does not ask, so nothing typed while you review can
-reach it. "Use on its own" first says, in plain words, what it does - every
-later document Intern reads as naming the word will be named with the spelling,
-and may be filed under that name without your check. You then type the spelling
-to confirm it; "Use on its own" stays off until you have, so no stray click can
+reach it. "Always use" first says, in plain words, what it does - from now on Intern
+writes the word as the spelling and may file the name without asking you. You then type the spelling
+to confirm it; "Always use" stays off until you have, so no stray click can
 choose it, and a paste does not count. While it asks, what you type in Settings
 goes into it unless you are typing in another field. Case, accents, spaces and
 punctuation do not matter: "contoso ltd" confirms "Contoso Ltd.", and "Soren"
@@ -632,8 +631,8 @@ different spelling for the same word, learned later, waits for its own choice.
 Spellings learned before alpha.18 wait for one too.
 
 Settings lists everything learned, with "Use now" for a spelling seen once
-that you want at once (the names it changes still wait until you choose "Use
-on its own"), "Use on its own", and "Forget" for one you do not want. The
+that you want at once (the names it changes still wait until you choose "Always
+use"), "Always use", and "Forget" for one you do not want. The
 review panel says "Uses your spelling" whenever a name differs from the
 evidence under it. The evidence itself always keeps the document's own words:
 a learned spelling changes what Intern calls a thing, never what it found.
