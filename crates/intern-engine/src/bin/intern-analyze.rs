@@ -57,7 +57,9 @@ fn run() -> Result<Value, String> {
         .to_owned();
 
     let extraction_started = Instant::now();
-    let source = load_source(&arguments, path)?;
+    // Named as the queue names a document it reads, so the prompt is the
+    // app's.
+    let source = load_source(&arguments, path)?.with_file_name_of(Path::new(path));
     let extraction_millis = millis(extraction_started);
 
     let budget = arguments
