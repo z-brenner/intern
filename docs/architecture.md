@@ -502,7 +502,13 @@ the document's text, instead of taking the model thread down with it.
 
 Self-reported confidence below 0.60 also routes to review, as does any
 fact-affecting parser warning, and any document with no defining date or no
-specific type.
+specific type. The local model's reply carries no self-rating and reads as
+1.0, so for it the confidence that counts is the token gate's: the least
+probable token of the date and the parties' names, below 0.7
+(`tiers::REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE`), raises `LOW_CONFIDENCE`.
+A document with no defining date is not always left there: the queue dates
+it from the file when that is its only doubt about the date (see the review
+level below).
 
 Three things are then decided from the document rather than from the model,
 because a two-billion-parameter model is good at finding facts and poor at
@@ -553,16 +559,41 @@ renamed with no person when automatic renaming is on.
 written. The queue asks it for every reading it stores (`record_for`) and the
 benchmark for every reading it scores (`intern-bench run --review-level`).
 
-* **`strict`**, the default: the engine's own status, exactly, as in every
-  release before the levels. Settings with no `reviewLevel`, or with a value
-  this build does not know, are strict; an unknown value is also named in the
-  notice that says which settings could not be read.
+**Minor reasons, at every level.** A few reasons leave the facts the name is
+made of standing, and hold a reading at no level, strict included
+(`review_level::MINOR`). A reading whose every reason is minor is ready, at
+either level, when it has a date its name starts with and a document type:
+
+* `DATE_MISSING`, once the queue has given the reading a date from the file
+  itself (see *A date from the file* below). With none it holds, as before.
+* `TYPE_INFERRED`: the type is the document's own title, or the kind its
+  layout shows. It still holds where the name would say "Document", and
+  where a title stood in for a type the document did not support (clause 5
+  below).
+* `DESCRIPTION_INVALID` and `DESCRIPTION_UNSUPPORTED`: the description is not
+  in the name. The evidence pipeline composes it from validated facts and
+  leaves out any fact it could not find, so it is kept; a sentence the model
+  wrote itself (a hosted model's, the digest pipeline's) that says more than
+  the document is not kept on the record, which is then filed with no
+  description rather than with a claim nobody checked.
+
+Everything that touches the date's correctness (`DATE_UNSUPPORTED`,
+`DATE_AMBIGUOUS`, `DATE_IS_DEADLINE`, `DATE_IMPLAUSIBLE`, `DATE_IS_PERIOD`,
+`DATE_IS_FORMULA`), every party reason, a type the reply gave that the
+document does not confirm, `LOW_CONFIDENCE`, `PARSER_WARNING`, the model's
+own request, the quick model's `FAST_MODEL_READING`, the queue's own holds
+and any reason added later still hold at strict.
+
+* **`strict`**, the default: the engine's own status, but for the minor
+  reasons. Settings with no `reviewLevel`, or with a value this build does
+  not know, are strict; an unknown value is also named in the notice that
+  says which settings could not be read.
 * **`balanced`**: a reading strict holds is ready when all of these are true.
   1. It has a date and its name starts with it.
-  2. Every reason on it is one of `TYPE_MISSING`, `TYPE_UNSUPPORTED`,
-     `TYPE_INFERRED`, `DESCRIPTION_UNSUPPORTED` and `LOW_CONFIDENCE`. The
-     list names what does not hold a reading, so everything else does: every
-     date reason, every party reason, `DESCRIPTION_INVALID`,
+  2. Every reason on it is minor or one of `TYPE_MISSING`,
+     `TYPE_UNSUPPORTED` and `LOW_CONFIDENCE`. The lists name what does not
+     hold a reading, so everything else does: every date reason but a
+     missing date the queue has filled in, every party reason,
      `PARSER_WARNING`, the model's own request for review, the quick model's
      `FAST_MODEL_READING`, and any reason added after this was written.
   3. A `LOW_CONFIDENCE` on it is there for the token probabilities only. A
@@ -574,13 +605,71 @@ benchmark for every reading it scores (`intern-bench run --review-level`).
      `TYPE_UNSUPPORTED` with `TYPE_INFERRED` and without `TYPE_MISSING`
      waits.
 
-A level takes no reason off a reading. At balanced a ready record carries its
-reasons, and the window shows them as notes: "Ready with a note", and
-"Completed with a note" once Intern has renamed the document by itself. A
-person's approval clears the reasons, so "Completed with a note" marks only
-names nobody approved: those Intern renamed by itself while their reading
-had a note. A name Intern gave by itself to a reading with no note, every
-one at strict among them, is not marked.
+A level takes no reason off a reading. A ready record carries its reasons -
+at strict only minor ones - and the window shows them as notes: "Ready with
+a note", and "Completed with a note" once Intern has renamed the document by
+itself. A person's approval clears the reasons, so "Completed with a note"
+marks only names nobody approved: those Intern renamed by itself while their
+reading had a note. A name Intern gave by itself to a reading with no note
+is not marked.
+
+**A date from the file.** A name must start with a date, and a reading the
+document gave no date used to wait for a person to type one. When
+`DATE_MISSING` is the reading's only doubt about the date, the queue gives it
+one from the file itself as it stores the reading
+(`intern_queue::fallback_date`, applied in `record_for`), in this order:
+
+1. The one date the original filename states unambiguously: a year first
+   (`2024-03-08`, `2024_03_08`, `2024.03.08`, `20240308` standing alone), or
+   a day and a month before a four-digit year where only one reading is a
+   date (`31-01-2024`). Two different dates, a two-digit year, a date not
+   yet come or before 1900 give none.
+2. The day the file was last modified, in this machine's calendar, where it
+   is a day that has come and is from 1900 on. A document added through
+   Intern is copied into the input folder with its times kept (`keep_times`
+   in intern-core; `a_copy_keeps_the_originals_last_modified_time`), so this
+   is the original's date, not the day it was added.
+3. Neither: the reading waits, undated, exactly as before.
+
+The date goes into the stored reading's proposal, so the name starts with it
+and the layout's year folder follows it, and `DATE_MISSING` stays among the
+reading's reasons beside it: that pair is how a supplied date is told from
+the document's own (`review_level::supplied_date`). The record's reasons say
+where it came from instead of `DATE_MISSING` - `DATE_FROM_FILENAME` or
+`DATE_FROM_FILE_MODIFIED` - so a document so dated is ready with a note and
+can be found afterwards. A reading held for something else takes the date
+too, and waits with its name dated for whoever approves it. A missing date
+beside any other doubt about the date is not answered from the file. The
+near-duplicate check reads a reading so dated as undated: two scans of one
+document made on different days are still one document.
+
+The price: a file whose last-modified day is not the document's - a scan
+saved weeks after the letter, a document edited and saved again, a web
+upload stamped with the day it arrived - is filed under that day, with the
+note saying where the day came from.
+
+**The confidence a person is shown** is how sure Intern is of the name, not
+the model's own rating (the local model gives none, and the engine writes
+1.0, which is how a document in review used to read 100%). It is worked out
+in one place, `review_level::name_confidence`, and sent as the queue item's
+`confidence` (`ProposalRecord::name_confidence`):
+
+1. The lower of the model's two figures: its rating of the reading, and the
+   least probable token of its date and its parties' names. A reading with
+   no token probabilities - a hosted model's, or one stored before they were
+   kept - has its rating alone.
+2. A document waiting for a person shows no more than 50%
+   (`WAITING_CEILING`).
+3. Each reason on the record, a hold or a note, the queue's own included,
+   leaves nine tenths of what is left (`DOUBT_FACTOR`); only
+   `ALREADY_NAMED`, which says the file had the name already, is no doubt.
+
+So a ready document with nothing on it shows the model's figure, at least
+70% for the local model by the token gate; one ready with a note a little
+less; and one in review 45% at most with one reason on it, less with each
+further reason. The window colors the figure by the document's status,
+never by its size: green for ready or renamed, amber for review
+(`confidenceTone` in `src/lib/format.ts`).
 
 What a level does not decide:
 
@@ -1609,9 +1698,13 @@ it with `FAST_MODEL_READING` (`tiers::hold_fast_reading`), as the builds
 before alpha.13 held Bonsai's: on the four real-document sets the 4B filed
 a wrong name for about every right one at any gate threshold
 (`bench/reports/model-qualification-2026-11`), where the 9B at the 0.7
-gate it had then filed one wrong name in seven. Its gate is 0.8 from
-alpha.17 (`tiers::REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE`,
-[`bench/reports/review-gate-2026-11`](../bench/reports/review-gate-2026-11/README.md)). What sets a quick reading apart beyond
+gate it had then filed one wrong name in seven. Its gate was 0.8 from
+alpha.17 ([`bench/reports/review-gate-2026-11`](../bench/reports/review-gate-2026-11/README.md))
+and is 0.7 again after alpha.19, at the owner's word, for a little less
+review at a measured price: InternBench's committed recording files 38 of
+77 where 0.8 filed 28, one of them wrong where 0.8 filed none, and the sixth
+real set 4 right and 2 wrong where 0.8 filed 3 and 1
+(`tiers::REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE` gives the rest). What sets a quick reading apart beyond
 that is whether it stands in: made while the accurate model was wanted and
 not installed yet, or did not fit in memory, it is provisional, and once the
 accurate model can read - its download verified, or memory back - the queue

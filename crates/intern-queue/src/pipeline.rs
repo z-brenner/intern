@@ -16,18 +16,21 @@ use intern_core::{
 };
 use intern_engine::{
     DocumentAnalysis, DocumentSource, ExtractProgress, HouseRule, HouseStyle, ProposalStatus,
-    ReviewLevel, RuleKind, Support, ValidatedProposal, approved_party, compose_styled_filename,
-    counterparty_view,
+    ReviewLevel, ReviewReason, RuleKind, Support, ValidatedProposal, approved_party,
+    compose_filename, compose_styled_filename, counterparty_view,
     evidence::is_valid_iso_date,
     fingerprint::{self, NEAR_DUPLICATE_DISTANCE},
     is_a_spelling, is_own_name, lesson_from_edit, named_parties, party_and_more, party_as_named,
-    proposed_party, readiness, respelled_party, same_stem, sanitize_folder_name,
+    proposed_party, readiness, respelled_party,
+    review_level::{name_confidence, supplied_date},
+    same_stem, sanitize_folder_name,
     setup::{semantic_probes, validate_semantic_probe},
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
 use crate::admission::{AdmissionEvidence, AdmissionGuard, AdmissionStage, LocalAdmission};
+use crate::fallback_date::{self, DateSource};
 use crate::memo::ExtractionMemo;
 use crate::paths::display_path;
 use crate::settings::{AppSettings, DestinationLayout, SettingsStore, normalize_own_names};
@@ -654,10 +657,17 @@ impl DuplicateOracle for NoDuplicateOracle {
 
 /// What the queue stores about one proposal.
 ///
-/// `analysis` is exactly what the engine produced and never changes; `filename`
-/// and `description` are what will actually be applied, and a human edit
-/// changes only those. Keeping them apart means the evidence a reviewer sees
-/// still belongs to the model's own answer.
+/// `analysis` is what the engine produced and never changes; `filename` and
+/// `description` are what will actually be applied, and a human edit changes
+/// only those. Keeping them apart means the evidence a reviewer sees still
+/// belongs to the model's own answer. One thing the queue adds to the
+/// analysis before it is stored, and only to a reading whose one doubt about
+/// the date is that the document gave none: a date from the file itself, in
+/// the proposal, with the reading's `DATE_MISSING` kept beside it
+/// ([`intern_engine::review_level::supplied_date`]) and the record's reasons
+/// saying where the date came from (see [`crate::fallback_date`]). Every name
+/// composed from the analysis then starts with it, and every folder follows
+/// it.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProposalRecord {
@@ -808,6 +818,26 @@ impl ProposalRecord {
     /// its name from, and no confidence or evidence to show.
     pub fn is_synthetic(&self) -> bool {
         self.manual || self.copy_of.is_some()
+    }
+
+    /// How sure Intern is of this record's name, for the window, when the
+    /// row `waits` for a person or not
+    /// ([`intern_engine::review_level::name_confidence`]): every reason on
+    /// the record counts as a doubt, a hold of the queue's own as much as
+    /// the reading's, and so does a date taken from the file. Only
+    /// [`ALREADY_NAMED`], which says the file had the name already, is no
+    /// doubt about it. `None` for a name with no reading behind it: a copy's,
+    /// or one a person typed for a document that could not be read.
+    pub fn name_confidence(&self, waits: bool) -> Option<f32> {
+        if self.is_synthetic() {
+            return None;
+        }
+        let doubts = self
+            .reasons
+            .iter()
+            .filter(|reason| *reason != ALREADY_NAMED)
+            .count();
+        Some(name_confidence(&self.analysis, doubts, waits))
     }
 
     /// The validated facts as the name carries them: the document's words,
@@ -3532,6 +3562,11 @@ impl Pipeline {
             .load()
             .map(|settings| settings.own_names())
             .unwrap_or_default();
+        // A reading whose only doubt about the date is that the document
+        // gave none is dated from the file itself, before the name is
+        // composed from it (see `crate::fallback_date`).
+        let mut analysis = analysis;
+        let dated_from = date_from_the_file(&mut analysis, &item.source_path, extension, existing);
         let spellings = self.repository.spellings()?;
         let (styled, house_rules) = spellings.styled(&analysis.proposal, &own_names, extension);
         let (named, _) = counterparty_view(&styled, &own_names);
@@ -3542,22 +3577,31 @@ impl Pipeline {
         // copy saved again with new metadata says what a filed document
         // says, and is not filed on its own.
         let near_duplicate_of = self.near_duplicate_of(item.id, &analysis);
+        // A date the file gave says where it came from in the place of the
+        // reading's "no date": the window shows it as a note, and a person
+        // can find every name so dated afterwards.
         let mut reasons = analysis
             .review_reasons
             .iter()
-            .map(|reason| reason.as_str().to_owned())
+            .map(|reason| match (reason, dated_from) {
+                (ReviewReason::DateMissing, Some(source)) => source.code(),
+                _ => reason.as_str(),
+            })
+            .map(str::to_owned)
             .collect::<Vec<_>>();
         // The level's answer, not the engine's own status: at strict the
-        // two are the same. The queue's own holds follow, as at any level.
+        // two differ only where every reason is minor. The queue's own
+        // holds follow, as at any level.
         let mut status = readiness(&analysis, level).status();
         if near_duplicate_of.is_some() {
             reasons.push(NEAR_DUPLICATE.to_owned());
             status = ProposalStatus::NeedsReview;
         }
+        let description = kept_description(&analysis);
         let mut record = ProposalRecord {
             status,
             filename,
-            description: analysis.description.clone(),
+            description,
             reasons,
             analysis,
             revision: 1,
@@ -3762,12 +3806,21 @@ impl Pipeline {
     /// other machines.
     fn near_duplicate_of(&self, item_id: i64, analysis: &DocumentAnalysis) -> Option<String> {
         let fingerprint = fingerprint::decode(analysis.text_fingerprint.as_deref()?)?;
-        let date = analysis.proposal.document_date.clone().or_else(|| {
-            analysis
-                .model_proposal
-                .as_ref()
-                .and_then(|reply| reply.document_date.clone())
-        });
+        // A reading dated from the file is undated as far as the document
+        // goes: the file's date is no document's, and two scans of one
+        // document made on different days are still one document. Nor is a
+        // date the model gave and validation would not take as the
+        // document's, which is all its reply can hold then.
+        let date = if supplied_date(analysis).is_some() {
+            None
+        } else {
+            analysis.proposal.document_date.clone().or_else(|| {
+                analysis
+                    .model_proposal
+                    .as_ref()
+                    .and_then(|reply| reply.document_date.clone())
+            })
+        };
         let local = self
             .repository
             .find_similar(fingerprint, item_id)
@@ -4491,8 +4544,9 @@ impl Pipeline {
     /// either.
     ///
     /// At strict no row is held that an earlier release would have filed:
-    /// there a reading is ready only by the engine's own word, and so is
-    /// every ready record no person approved.
+    /// there a reading is ready by the engine's own word, or with minor
+    /// reasons only ([`intern_engine::review_level::MINOR`]), which an
+    /// earlier release held; so is every ready record no person approved.
     ///
     /// As in [`Self::held_for_unchecked_spelling`], whether it is held is
     /// decided again on the record as stored, in the transaction that puts
@@ -5865,8 +5919,9 @@ impl Pipeline {
     /// said, so a new reading may take its place: in review or ready by its
     /// record's own status, with no file error; its record [`untouched`],
     /// holding the request its reply answered, and no reason but the
-    /// reading's, a near duplicate's and an unchecked learned spelling's;
-    /// and no rename of it ever begun.
+    /// reading's (a date from the file counting as the reading's "no
+    /// date"), a near duplicate's and an unchecked learned spelling's; and
+    /// no rename of it ever begun.
     fn waits_as_read(&self, item: &QueueItem, record: &ProposalRecord) -> PipelineResult<bool> {
         Ok(record.analysis.telemetry.request_sha256.is_some()
             && self.waits_on_its_reading(item, record)?)
@@ -5887,6 +5942,8 @@ impl Pipeline {
             && record.reasons.iter().all(|reason| {
                 reason == NEAR_DUPLICATE
                     || reason == LEARNED_SPELLING_UNCONFIRMED
+                    // The reading's own "no date", answered from the file.
+                    || DateSource::is_note(reason)
                     || record
                         .analysis
                         .review_reasons
@@ -7826,6 +7883,63 @@ fn hold_unchecked_spelling(
 /// read - is judged by no level.
 fn waits_at(record: &ProposalRecord, level: ReviewLevel) -> bool {
     !record.approved && !record.is_synthetic() && !readiness(&record.analysis, level).ready
+}
+
+/// Gives `analysis`, a reading of the file at `source_path`, a date from
+/// the file itself where the document gave none and nothing else about the
+/// date is in doubt, and says where it came from (see
+/// [`crate::fallback_date`]). The proposal takes the date and the engine's
+/// own name is composed again with it, as the engine would have composed
+/// it, so the name starts with it; `DATE_MISSING` stays among the reading's
+/// reasons, which is how a date so given is told from the document's own
+/// ([`supplied_date`]). A missing date beside any other doubt about the
+/// date - a date withheld as unsupported, a deadline, one end of a period -
+/// is not answered from the file: that reading waits as it always did, and
+/// so does one whose file gives no date either.
+fn date_from_the_file(
+    analysis: &mut DocumentAnalysis,
+    source_path: &Path,
+    extension: &str,
+    existing: &[String],
+) -> Option<DateSource> {
+    let reasons = &analysis.review_reasons;
+    let only_missing = reasons.contains(&ReviewReason::DateMissing)
+        && reasons.iter().all(|reason| {
+            *reason == ReviewReason::DateMissing || !reason.as_str().starts_with("DATE_")
+        });
+    let undated = analysis
+        .proposal
+        .document_date
+        .as_deref()
+        .is_none_or(|date| date.trim().is_empty());
+    if !only_missing || !undated {
+        return None;
+    }
+    let (date, source) = fallback_date::date_for(source_path)?;
+    analysis.proposal.document_date = Some(date);
+    let existing = existing.iter().map(String::as_str).collect::<Vec<_>>();
+    analysis.filename = compose_filename(&analysis.proposal, extension, &existing).value;
+    Some(source)
+}
+
+/// The description a record made of `analysis` keeps. A sentence the model
+/// wrote itself - a hosted model's reply, or any reading with no validated
+/// facts behind it - that says something the document does not is left
+/// out: it is not in the name and does not hold it, so it could otherwise
+/// be filed, and written to a library's Description column, unseen.
+/// The evidence pipeline's description is composed from validated facts
+/// only, a fact it could not find left out already, and is kept whole.
+fn kept_description(analysis: &DocumentAnalysis) -> String {
+    let model_wrote_it = analysis.facts.is_none();
+    if model_wrote_it
+        && analysis
+            .review_reasons
+            .contains(&ReviewReason::DescriptionUnsupported)
+    {
+        String::new()
+    } else {
+        analysis.description.clone()
+    }
 }
 
 /// What judging a waiting document again at another review level did (see
@@ -10104,8 +10218,11 @@ mod hold_tests {
             record.filename =
                 compose_styled_filename(&record.styled_proposal(), &[], "pdf", &[]).value;
             record.analysis.filename.clone_from(&record.filename);
-            record.analysis.review_reasons = vec![ReviewReason::TypeInferred];
-            record.reasons = vec![ReviewReason::TypeInferred.as_str().to_owned()];
+            // A note at balanced that strict holds: a type the document
+            // does not confirm. (A type its title gave is minor, and
+            // strict files it too.)
+            record.analysis.review_reasons = vec![ReviewReason::TypeUnsupported];
+            record.reasons = vec![ReviewReason::TypeUnsupported.as_str().to_owned()];
             record.status = ProposalStatus::Ready;
             assert_eq!(record.analysis.status, ProposalStatus::NeedsReview);
             let connection = Connection::open(&database).unwrap();

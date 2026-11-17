@@ -1,5 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import { eta, formatBytes, statusLabel } from './format';
+import { confidence, confidenceTone, eta, formatBytes, statusLabel } from './format';
+import type { QueueStatus } from '../types';
+
+describe('confidence', () => {
+  it('is a whole percentage, and a dash where nothing was measured', () => {
+    expect(confidence(0.45)).toBe('45%');
+    expect(confidence(0.405)).toBe('41%');
+    expect(confidence(1)).toBe('100%');
+    expect(confidence(0)).toBe('0%');
+    expect(confidence(undefined)).toBe('—');
+    expect(confidence(Number.NaN)).toBe('—');
+  });
+
+  // A figure of 100% beside a document in review, in that document's amber,
+  // read as Intern contradicting itself. The tone is the status's alone.
+  it('takes its tone from the status, never from the figure', () => {
+    expect(confidenceTone('ready')).toBe('ready');
+    expect(confidenceTone('completed')).toBe('ready');
+    expect(confidenceTone('review')).toBe('review');
+    for (const status of ['processing', 'waiting', 'failed'] as QueueStatus[]) expect(confidenceTone(status), status).toBeUndefined();
+  });
+});
 
 describe('status labels', () => {
   // The backend never sends a percentage, so "Processing (0%)" was what every

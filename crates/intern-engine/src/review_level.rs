@@ -12,9 +12,18 @@
 //! place the rule is written: the queue asks it for every reading it stores,
 //! and the benchmark asks it for every reading it scores.
 //!
-//! A level never takes a reason off a reading. At the balanced level a ready
-//! reading can carry reasons: there they are notes for whoever looks, not
-//! holds.
+//! A few reasons are minor at every level, strict included ([`MINOR`]): a
+//! missing date the queue has filled in from the file itself, a type the
+//! document's own title or layout gave, and a description that is not a
+//! usable sentence or says more than the document does. None of them
+//! touches a fact the name is made of.
+//!
+//! A level never takes a reason off a reading. A ready reading can carry
+//! reasons: there they are notes for whoever looks, not holds.
+//!
+//! [`name_confidence`] is the figure a person is shown beside a reading's
+//! name. It is written here, beside the rule, so that the two cannot
+//! disagree: a reading in review never shows as surer than a ready one.
 
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -26,8 +35,8 @@ use crate::validate::READY_CONFIDENCE;
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReviewLevel {
-    /// Ready only when the engine raised no review reason. The default, and
-    /// what every release before the levels did.
+    /// Ready only when the engine raised no review reason but minor ones
+    /// ([`MINOR`]). The default.
     #[default]
     Strict,
     /// Also ready when the only doubts are about how the type or the
@@ -110,25 +119,52 @@ impl Readiness {
     }
 }
 
+/// The reasons that are minor at every level, strict included: each leaves
+/// the facts the name is made of standing, or names one the queue has
+/// settled, under the conditions [`readiness`] gives. Everything that
+/// touches the date's correctness, a party, the type the reply gave, the
+/// model's figures, the quick model, the parser and the queue's own holds
+/// is not here, and holds.
+///
+/// * [`ReviewReason::DateMissing`], once the reading has a date its name
+///   starts with. The engine raises it only on a reading with no date, so
+///   a date beside it is one the queue gave it from the file itself - the
+///   original filename's, or the file's last-modified date - and the record
+///   says which ([`supplied_date`]). With no such date it holds.
+/// * [`ReviewReason::TypeInferred`]: the type is the document's own title,
+///   or the kind its layout shows ("Letter", "Email"). It holds where the
+///   name would say "Document", and where a title stood in for a type the
+///   document did not support (clause 5 of [`readiness`]).
+/// * [`ReviewReason::DescriptionInvalid`] and
+///   [`ReviewReason::DescriptionUnsupported`]: the description is not in
+///   the name. The evidence pipeline composes it from validated facts only,
+///   and leaves out any it could not find; a sentence the model wrote
+///   itself that says more than the document is not kept by the queue.
+pub const MINOR: [ReviewReason; 4] = [
+    ReviewReason::DateMissing,
+    ReviewReason::TypeInferred,
+    ReviewReason::DescriptionInvalid,
+    ReviewReason::DescriptionUnsupported,
+];
+
 /// Whether `analysis` is ready at `level`, and which of its reasons hold it.
 ///
-/// Strict is the engine's own status, exactly.
-///
-/// Balanced: a reading that is ready at strict is ready. Any other reading
-/// is ready when all of these hold, and waits otherwise.
+/// A reading the engine marked ready is ready at every level. Any other
+/// reading is ready when all of these hold, and waits otherwise.
 ///
 /// 1. It has a date: the proposal's date is there and the name starts with
 ///    it.
-/// 2. Every reason on it is one of [`ReviewReason::TypeMissing`],
-///    [`ReviewReason::TypeUnsupported`], [`ReviewReason::TypeInferred`],
-///    [`ReviewReason::DescriptionUnsupported`] and
+/// 2. Every reason on it is minor ([`MINOR`]) or, at balanced, a note:
+///    [`ReviewReason::TypeMissing`], [`ReviewReason::TypeUnsupported`] or
 ///    [`ReviewReason::LowConfidence`]. Any other reason holds it: every date
-///    and party reason, a description that is not a sentence, a parser
-///    warning, the model's own request for review, the quick model's
-///    readings ([`ReviewReason::FastModelReading`]), and any reason added
-///    after this was written. The list names what does not hold, so a new
-///    reason holds until someone decides otherwise.
-/// 3. A [`ReviewReason::LowConfidence`] on it is there for the token
+///    reason but a missing date the queue has filled in, every party
+///    reason, a parser warning, the model's own request for review, the
+///    quick model's readings ([`ReviewReason::FastModelReading`]), at strict
+///    a low confidence and a type the reply gave that the document does not
+///    confirm, and any reason added after this was written. The lists name
+///    what does not hold, so a new reason holds until someone decides
+///    otherwise.
+/// 3. A [`ReviewReason::LowConfidence`] at balanced is there for the token
 ///    probabilities only. When the model's own reported confidence is below
 ///    [`READY_CONFIDENCE`], or the reading stores no reply to read it from,
 ///    it waits.
@@ -152,14 +188,10 @@ pub fn readiness(analysis: &DocumentAnalysis, level: ReviewLevel) -> Readiness {
         return Readiness::ready();
     }
     let reasons = &analysis.review_reasons;
-    if level == ReviewLevel::Strict {
-        return Readiness {
-            ready: false,
-            held_by: reasons.clone(),
-        };
-    }
+    let balanced = level == ReviewLevel::Balanced;
     let has = |reason: ReviewReason| reasons.contains(&reason);
     let typed = names_a_type(analysis);
+    let dated = dated(analysis);
     let title_stood_in = has(ReviewReason::TypeUnsupported)
         && has(ReviewReason::TypeInferred)
         && !has(ReviewReason::TypeMissing);
@@ -171,17 +203,36 @@ pub fn readiness(analysis: &DocumentAnalysis, level: ReviewLevel) -> Readiness {
         .iter()
         .copied()
         .filter(|reason| match reason {
-            ReviewReason::TypeMissing => !typed,
-            ReviewReason::TypeUnsupported | ReviewReason::TypeInferred => !typed || title_stood_in,
-            ReviewReason::DescriptionUnsupported => false,
-            ReviewReason::LowConfidence => unsure_of_itself,
+            // Minor, at every level.
+            ReviewReason::DateMissing => !dated,
+            ReviewReason::TypeInferred => !typed || title_stood_in,
+            ReviewReason::DescriptionInvalid | ReviewReason::DescriptionUnsupported => false,
+            // Notes, at balanced only.
+            ReviewReason::TypeMissing if balanced => !typed,
+            ReviewReason::TypeUnsupported if balanced => !typed || title_stood_in,
+            ReviewReason::LowConfidence if balanced => unsure_of_itself,
             _ => true,
         })
         .collect::<Vec<_>>();
     Readiness {
-        ready: held_by.is_empty() && !reasons.is_empty() && typed && dated(analysis),
+        ready: held_by.is_empty() && !reasons.is_empty() && typed && dated,
         held_by,
     }
+}
+
+/// The date the queue gave a reading the document gave none, when it has
+/// one: a date beside [`ReviewReason::DateMissing`], which the engine
+/// raises only on a reading with no date. The queue takes it from the file
+/// itself, and the record says from where; nothing in the document backs
+/// it, so whatever compares a reading's date with another document's -
+/// whether two scans are one document - reads the reading as undated.
+pub fn supplied_date(analysis: &DocumentAnalysis) -> Option<&str> {
+    analysis
+        .proposal
+        .document_date
+        .as_deref()
+        .filter(|date| !date.trim().is_empty())
+        .filter(|_| analysis.review_reasons.contains(&ReviewReason::DateMissing))
 }
 
 /// Whether the reading has a date its name starts with.
@@ -192,6 +243,51 @@ fn dated(analysis: &DocumentAnalysis) -> bool {
         .as_deref()
         .map(str::trim)
         .is_some_and(|date| !date.is_empty() && analysis.filename.starts_with(date))
+}
+
+/// What each doubt on a record leaves of how sure Intern is of its name:
+/// nine tenths ([`name_confidence`]).
+pub const DOUBT_FACTOR: f32 = 0.9;
+
+/// The most a reading that waits for a person is shown as: one in two
+/// ([`name_confidence`]). Below any ready reading's figure unless the model
+/// itself put that one lower.
+pub const WAITING_CEILING: f32 = 0.5;
+
+/// How sure Intern is of a reading's name, from 0 to 1: the figure a person
+/// is shown beside it, and the one place it is worked out.
+///
+/// 1. The lower of the model's two figures: its own rating of the reading
+///    (the proposal's confidence; the evidence pipeline's reply carries no
+///    rating and reads as sure), and the least probable token of its date
+///    and its parties' names ([`crate::TokenConfidence::min`]). A reading
+///    with no token probabilities - a hosted model's, or one stored before
+///    they were kept - has its rating alone.
+/// 2. A reading that `waits` for a person is shown no surer than
+///    [`WAITING_CEILING`], whatever the model's figures say: the model was
+///    sure of something a check then doubted, and the window says the
+///    check's word.
+/// 3. Each of the record's `doubts` - its review reasons, those that hold
+///    it and those that are only notes - leaves [`DOUBT_FACTOR`] of what
+///    is left.
+///
+/// So a ready reading with nothing on it shows the model's own figure, a
+/// ready one with a note a little less, and one in review at most 45%
+/// with a reason on it, less with each further reason. A figure that is
+/// not a number reads as 0.
+pub fn name_confidence(analysis: &DocumentAnalysis, doubts: usize, waits: bool) -> f32 {
+    let rating = analysis.proposal.confidence;
+    let tokens = analysis.token_confidence.map_or(1.0, |tokens| tokens.min);
+    let mut sure = if rating.is_finite() && tokens.is_finite() {
+        rating.min(tokens).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    if waits {
+        sure = sure.min(WAITING_CEILING);
+    }
+    let doubts = i32::try_from(doubts).unwrap_or(i32::MAX);
+    sure * DOUBT_FACTOR.powi(doubts)
 }
 
 /// Whether the reading has a document type a name can say: one that is
@@ -325,12 +421,10 @@ mod tests {
         }
     }
 
-    /// The reasons that are notes at balanced.
-    const NOTES: [ReviewReason; 5] = [
+    /// The reasons that are notes at balanced and hold at strict.
+    const NOTES: [ReviewReason; 3] = [
         ReviewReason::TypeMissing,
         ReviewReason::TypeUnsupported,
-        ReviewReason::TypeInferred,
-        ReviewReason::DescriptionUnsupported,
         ReviewReason::LowConfidence,
     ];
 
@@ -381,27 +475,134 @@ mod tests {
         }
     }
 
-    /// Strict is the engine's own status, whatever else the reading says.
+    /// Strict is the engine's own status but for the minor reasons: a
+    /// reading the engine marked ready is ready, and one it held waits for
+    /// every reason that is not minor, held by exactly those.
     #[test]
-    fn strict_is_the_engines_own_status() {
+    fn strict_is_the_engines_own_status_but_for_the_minor_reasons() {
         let mut readings = vec![reading(&[])];
         readings.extend(EVERY_REASON.iter().map(|reason| reading(&[*reason])));
         // A stored reading need not be one the engine would make now.
-        let mut ready_with_a_reason = reading(&[ReviewReason::TypeInferred]);
+        let mut ready_with_a_reason = reading(&[ReviewReason::PartyUnsupported]);
         ready_with_a_reason.status = ProposalStatus::Ready;
         let mut waiting_with_none = reading(&[]);
         waiting_with_none.status = ProposalStatus::NeedsReview;
         readings.extend([ready_with_a_reason, waiting_with_none]);
         for analysis in &readings {
             let answer = strict(analysis);
-            assert_eq!(answer.status(), analysis.status, "{analysis:?}");
-            assert_eq!(answer.ready, analysis.status == ProposalStatus::Ready);
+            let minor_only = !analysis.review_reasons.is_empty()
+                && analysis
+                    .review_reasons
+                    .iter()
+                    .all(|reason| MINOR.contains(reason));
+            assert_eq!(
+                answer.ready,
+                analysis.status == ProposalStatus::Ready || minor_only,
+                "{analysis:?}"
+            );
             if answer.ready {
                 assert!(answer.held_by.is_empty());
             } else {
-                assert_eq!(answer.held_by, analysis.review_reasons);
+                let held = analysis
+                    .review_reasons
+                    .iter()
+                    .copied()
+                    .filter(|reason| !MINOR.contains(reason))
+                    .collect::<Vec<_>>();
+                assert_eq!(answer.held_by, held, "{analysis:?}");
             }
         }
+    }
+
+    /// The minor reasons are ready at every level, alone and together, and
+    /// beside a reason that holds they hold nothing themselves.
+    #[test]
+    fn the_minor_reasons_hold_at_no_level() {
+        for level in ReviewLevel::ALL {
+            for minor in MINOR {
+                assert_eq!(
+                    readiness(&reading(&[minor]), level),
+                    Readiness::ready(),
+                    "{minor:?} at {level:?}"
+                );
+            }
+            assert_eq!(
+                readiness(&reading(&MINOR), level),
+                Readiness::ready(),
+                "{level:?}"
+            );
+            assert_eq!(
+                readiness(
+                    &reading(&[
+                        ReviewReason::DescriptionInvalid,
+                        ReviewReason::PartyMissing,
+                        ReviewReason::TypeInferred,
+                    ]),
+                    level
+                ),
+                waits(&[ReviewReason::PartyMissing]),
+                "{level:?}"
+            );
+        }
+        // What does not touch the name's facts, and nothing more.
+        for reason in [
+            ReviewReason::DateUnsupported,
+            ReviewReason::DateAmbiguous,
+            ReviewReason::DateIsDeadline,
+            ReviewReason::DateImplausible,
+            ReviewReason::DateIsPeriod,
+            ReviewReason::DateIsFormula,
+            ReviewReason::PartyUnsupported,
+            ReviewReason::PartyMissing,
+            ReviewReason::ParserWarning,
+            ReviewReason::ModelRequestedReview,
+            ReviewReason::FastModelReading,
+        ] {
+            assert!(!MINOR.contains(&reason), "{reason:?}");
+        }
+    }
+
+    /// A missing date is minor only once the queue has given the reading a
+    /// date its name starts with ([`supplied_date`]). With none it holds,
+    /// as before, and so does any other doubt about the date beside it.
+    #[test]
+    fn a_missing_date_is_minor_only_with_a_date_from_the_file() {
+        let supplied = reading(&[ReviewReason::DateMissing]);
+        assert_eq!(supplied_date(&supplied), Some(DATE));
+        for level in ReviewLevel::ALL {
+            assert_eq!(readiness(&supplied, level), Readiness::ready(), "{level:?}");
+
+            let mut none = supplied.clone();
+            none.proposal.document_date = None;
+            none.filename = "Dispatch Note.pdf".into();
+            assert_eq!(supplied_date(&none), None);
+            assert_eq!(
+                readiness(&none, level),
+                waits(&[ReviewReason::DateMissing]),
+                "{level:?}"
+            );
+
+            let mut named_without_it = supplied.clone();
+            named_without_it.filename = "Dispatch Note.pdf".into();
+            assert_eq!(
+                readiness(&named_without_it, level),
+                waits(&[ReviewReason::DateMissing]),
+                "{level:?}"
+            );
+
+            let doubted = reading(&[ReviewReason::DateMissing, ReviewReason::DateAmbiguous]);
+            assert_eq!(
+                readiness(&doubted, level),
+                waits(&[ReviewReason::DateAmbiguous]),
+                "{level:?}"
+            );
+        }
+        // A date the document gave is no date the queue supplied.
+        assert_eq!(supplied_date(&reading(&[])), None);
+        assert_eq!(
+            supplied_date(&reading(&[ReviewReason::DateAmbiguous])),
+            None
+        );
     }
 
     /// Balanced only ever adds to what strict files: never the reverse,
@@ -425,8 +626,9 @@ mod tests {
         }
     }
 
-    /// Clause 2: the five reasons about wording and token probabilities are
-    /// notes, alone or together, and every other reason holds.
+    /// Clause 2: the three reasons about the type the reply gave and the
+    /// token probabilities are notes at balanced, alone, together and with
+    /// the minor ones, and every other reason holds.
     #[test]
     fn only_the_named_reasons_are_notes_at_balanced() {
         for note in NOTES {
@@ -441,9 +643,13 @@ mod tests {
             ReviewReason::LowConfidence,
         ]);
         assert_eq!(balanced(&together), Readiness::ready());
+        assert_eq!(
+            strict(&together),
+            waits(&[ReviewReason::TypeMissing, ReviewReason::LowConfidence])
+        );
 
         for reason in EVERY_REASON {
-            if NOTES.contains(&reason) {
+            if NOTES.contains(&reason) || MINOR.contains(&reason) {
                 continue;
             }
             assert_eq!(
@@ -453,7 +659,7 @@ mod tests {
             );
             // Beside a note it still holds, and the note does not.
             assert_eq!(
-                balanced(&reading(&[ReviewReason::TypeInferred, reason])),
+                balanced(&reading(&[ReviewReason::TypeUnsupported, reason])),
                 waits(&[reason]),
                 "{reason:?}"
             );
@@ -461,18 +667,27 @@ mod tests {
     }
 
     /// A reason this rule has not heard of holds. Every reason that is not
-    /// one of the five is tried, and the list of every reason cannot fall
+    /// minor or a note is tried, and the list of every reason cannot fall
     /// behind the enum.
     #[test]
     fn an_unknown_reason_holds() {
         assert!(EVERY_REASON.into_iter().all(listed));
-        let holding = EVERY_REASON
-            .into_iter()
-            .filter(|reason| !balanced(&reading(&[*reason])).ready)
-            .count();
-        assert_eq!(holding, EVERY_REASON.len() - NOTES.len());
-        for note in NOTES {
-            assert!(EVERY_REASON.contains(&note));
+        let holding = |level| {
+            EVERY_REASON
+                .into_iter()
+                .filter(|reason| !readiness(&reading(&[*reason]), level).ready)
+                .count()
+        };
+        assert_eq!(
+            holding(ReviewLevel::Balanced),
+            EVERY_REASON.len() - NOTES.len() - MINOR.len()
+        );
+        assert_eq!(
+            holding(ReviewLevel::Strict),
+            EVERY_REASON.len() - MINOR.len()
+        );
+        for reason in NOTES.into_iter().chain(MINOR) {
+            assert!(EVERY_REASON.contains(&reason));
         }
     }
 
@@ -745,6 +960,87 @@ mod tests {
         for level in ReviewLevel::ALL {
             assert_eq!(readiness(&analysis, level), waits(&[]), "{level:?}");
         }
+    }
+
+    fn close(left: f32, right: f32) -> bool {
+        (left - right).abs() < 1e-6
+    }
+
+    /// A reading `rated` by the model, with `tokens` as its least probable
+    /// date or party token when the model reported any.
+    fn rated(rating: f32, tokens: Option<f32>) -> DocumentAnalysis {
+        let mut analysis = reading(&[]);
+        analysis.proposal.confidence = rating;
+        analysis.token_confidence = tokens.map(|min| crate::domain::TokenConfidence {
+            min,
+            mean: min,
+            tokens: 12,
+        });
+        analysis
+    }
+
+    /// The figure shown is the lower of the model's rating and its least
+    /// token probability. The evidence pipeline's reply has no rating and
+    /// reads as sure, so its token figure is what shows; a reading with no
+    /// token figures, a hosted model's or one stored before they were
+    /// kept, shows its rating.
+    #[test]
+    fn the_figure_shown_is_the_lower_of_the_models_two() {
+        assert!(close(
+            name_confidence(&rated(1.0, Some(0.83)), 0, false),
+            0.83
+        ));
+        assert!(close(
+            name_confidence(&rated(0.7, Some(0.95)), 0, false),
+            0.7
+        ));
+        assert!(close(name_confidence(&rated(0.9, None), 0, false), 0.9));
+        // What is not a figure counts for nothing, and what is out of
+        // range is brought into it.
+        assert!(close(
+            name_confidence(&rated(f32::NAN, Some(0.9)), 0, false),
+            0.0
+        ));
+        assert!(close(
+            name_confidence(&rated(1.0, Some(f32::NAN)), 0, false),
+            0.0
+        ));
+        assert!(close(name_confidence(&rated(1.7, None), 0, false), 1.0));
+        assert!(close(name_confidence(&rated(-0.2, None), 0, false), 0.0));
+    }
+
+    /// A reading in review never shows above one in two, and each reason
+    /// on the record takes a tenth of what is left: so a reading the model
+    /// was sure of, held for a party, reads 45% where it used to read
+    /// 100%. A ready reading with nothing on it shows its figure exactly,
+    /// and one with a note a little less.
+    #[test]
+    fn every_doubt_pulls_the_figure_down_and_review_never_reads_as_sure() {
+        let sure = rated(1.0, Some(1.0));
+        assert!(close(name_confidence(&sure, 0, false), 1.0));
+        assert!(close(name_confidence(&sure, 1, false), 0.9));
+        assert!(close(name_confidence(&sure, 0, true), WAITING_CEILING));
+        assert!(close(name_confidence(&sure, 1, true), 0.45));
+        assert!(close(name_confidence(&sure, 2, true), 0.405));
+        // Below the ceiling already, review takes off only the reasons.
+        let unsure = rated(1.0, Some(0.3));
+        assert!(close(name_confidence(&unsure, 1, true), 0.27));
+        // However sure the model and however few the reasons, a reading in
+        // review shows below every ready reading the model was as sure of.
+        for doubts in 0..6 {
+            for figure in [0.5, 0.75, 0.9, 1.0] {
+                let analysis = rated(1.0, Some(figure));
+                let waiting = name_confidence(&analysis, doubts, true);
+                assert!(waiting <= WAITING_CEILING, "{doubts} {figure}");
+                assert!(waiting <= name_confidence(&analysis, doubts, false));
+                assert!(
+                    name_confidence(&analysis, doubts + 1, false)
+                        < name_confidence(&analysis, doubts, false)
+                );
+            }
+        }
+        // An absurd count of reasons is no overflow.
+        assert!(name_confidence(&sure, usize::MAX, true) >= 0.0);
     }
 
     /// The level is stored as a lowercase word, strict is the default, and

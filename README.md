@@ -245,6 +245,15 @@ states is one click away, and the file's own last-modified date is the last,
 labeled resort. The date a reviewer gives a name is the date the document
 is filed under: the year folder and the description record follow it.
 
+When the only doubt about a document's date is that it states none, Intern
+dates it from the file instead of waiting for you: the date its original
+filename states (`Scan 2024-03-08.pdf`), or else the day the file was last
+modified. A document added through Intern is copied with that time kept, so
+it is the original's, not the day you added it. Such a document is **Ready
+with a note** that says where the date came from ("Date taken from the
+file's last-modified date."), so it can be found and checked afterwards.
+With neither date to go on, it waits for you as before.
+
 Filed documents can be **arranged into subfolders** of the Completed folder —
 by year, by year and document type, by type, or by first party — with
 **Arrange filed documents** in Settings. Folders are created as documents
@@ -468,8 +477,12 @@ decides which documents are ready: the ones **Rename all ready** renames, and
 the ones Intern renames by itself when **Automatically rename ready
 documents** is on.
 
-- **Strict**, the default and what every earlier release did: a document is
-  ready only when every check passes.
+- **Strict**, the default: a document is ready only when every check passes,
+  apart from a few minor ones that do not touch the name's facts - a date
+  taken from the file as above, a type taken from the document's own title or
+  layout, a description that is not one clean sentence or says more than the
+  document does (Intern then files no description rather than an unchecked
+  one). Each of those is shown as a note.
 - **Balanced**: a document can also be ready when the only doubts are about
   its type or its description, or when the model was unsure of the words it
   read. It still waits for you when Intern could not confirm its date or a
@@ -493,8 +506,14 @@ and Details shows the note first. Once Intern has renamed it by itself it is
 **Completed with a note**, and Completed has a **with a note** filter that
 lists those: names nobody approved, which Intern gave by itself while its
 reading had a note, so they can be found and checked later. A name Intern
-gave by itself with no note, every one at Strict among them, is not listed.
+gave by itself with no note is not listed.
 Approving a name, one at a time or with Rename all ready, clears its notes.
+
+The percentage beside a name is how sure Intern is of that name: the lower of
+the model's own rating and how probable it found the words of the date and
+the parties, never more than 50% for a document waiting for you, and a little
+less for every note or reason on it. It is green when the document is ready
+and amber when it waits, whatever the number.
 
 Changing the level judges the documents waiting in the queue again from what
 Intern has already read; nothing is read again. To Balanced: a document only

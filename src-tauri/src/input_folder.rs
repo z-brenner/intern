@@ -625,6 +625,52 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// A copy keeps the original's last-modified time (`keep_times` in
+    /// intern-core). The queue dates a document whose text gives no date by
+    /// that time (intern-queue's `fallback_date`), so a copy stamped with
+    /// the moment it was added would date every dropped document "today".
+    #[test]
+    fn a_copy_keeps_the_originals_last_modified_time() {
+        let root = folder("copy-modified");
+        let folders = folders(&root);
+        let desktop = root.join("Desktop");
+        std::fs::create_dir_all(&desktop).unwrap();
+        let letter = write(&desktop, "Letter.pdf", b"%PDF-1.7 a letter");
+        // 2001-09-09, long before any copy could be made.
+        let modified =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        std::fs::File::options()
+            .write(true)
+            .open(&letter)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+
+        let report = copy_into_input(
+            std::slice::from_ref(&letter),
+            &folders,
+            &StdFileSystem,
+            &|_| false,
+            &|_| false,
+            &|_| None,
+            &|_| Arrival::Added,
+        );
+
+        assert_eq!(report.copied, Some(1));
+        let copy = folders.input.join("Letter.pdf");
+        assert_eq!(std::fs::read(&copy).unwrap(), b"%PDF-1.7 a letter");
+        assert_eq!(
+            std::fs::metadata(&copy).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_eq!(
+            std::fs::metadata(&letter).unwrap().modified().unwrap(),
+            modified,
+            "the original is untouched"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// A document already in the input folder is handed over where it is, a
     /// filed one in the output folder is not filed again, and a name the
     /// queue has seen before is not reused.
