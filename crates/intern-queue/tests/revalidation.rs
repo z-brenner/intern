@@ -871,7 +871,7 @@ fn a_waiting_reading_an_unchecked_spelling_renames_when_validated_again_waits_fo
         .unwrap()
         .execute(
             "INSERT INTO house_rules(kind, from_key, from_value, to_value, seen, created_at, updated_at)
-             VALUES ('party', 'acme corporation', 'Acme Corporation', 'Acme', 2, 1, 1)",
+             VALUES ('party', 'acme corporation', 'Acme Corporation', 'ACME Corp', 2, 1, 1)",
             [],
         )
         .unwrap();
@@ -882,6 +882,10 @@ fn a_waiting_reading_an_unchecked_spelling_renames_when_validated_again_waits_fo
     let again = item(&next, waiting);
     assert_eq!(again.status, QueueStatus::NeedsReview);
     let again = again.proposal.unwrap();
-    assert!(again.filename.ends_with(" Acme.pdf"), "{}", again.filename);
+    assert!(
+        again.filename.contains(" ACME Corp - "),
+        "{}",
+        again.filename
+    );
     assert_eq!(again.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
 }
