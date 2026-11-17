@@ -275,28 +275,30 @@ describe('the Windows builds', () => {
 
   // The in-app updater installs over the old files; an update over alpha.14,
   // the last release with a llama.cpp build at the install root, is smoked
-  // when CI is started by hand, from the release's own installer at its
-  // published SHA-256, after the plain install smoke.
-  it('smokes an update over alpha.14 when started by hand', async () => {
-    const steps = stepsOf(jobOf(await ci(), 'windows-package'));
+  // on every QA run, from the release's own installer at its published
+  // SHA-256, after the plain install smoke. It used to run only in a CI run
+  // started by hand beside QA, which every release had to remember to start.
+  it('smokes an update over alpha.14 on every QA run, as part of its evidence', async () => {
+    const qa = await readFile('.github/workflows/qa.yml', 'utf8');
+    const steps = stepsOf(jobOf(qa, 'windows-whole-product-qa'));
     const plain = steps.findIndex((step) => step.includes('name: Smoke test per-user installer'));
     const update = steps.findIndex((step) => step.includes('name: Smoke test an update over v0.1.0-alpha.14'));
     expect(plain).toBeGreaterThanOrEqual(0);
     expect(update).toBe(plain + 1);
     const step = steps[update];
-    expect(step).toContain("if: github.event_name == 'workflow_dispatch'");
+    expect(step).not.toMatch(/^ {8}if:/m);
     expect(step).toContain('https://github.com/z-brenner/intern/releases/download/v0.1.0-alpha.14/Intern_0.1.0-alpha.14_x64-setup.exe');
     expect(step).toContain('"20177531ab3f5f0b428ac79a63f813a83b2d5b460ee695c39f607aeec76f218f"');
-    expect(step).toContain('./scripts/smoke-installer.ps1 -InstallerPath $Installer.FullName -PreviousInstallerPath $Previous');
+    expect(step).toContain('& ./scripts/smoke-installer.ps1 -InstallerPath $Installer.FullName -PreviousInstallerPath $Previous *>&1 | Tee-Object -FilePath docs\\qa\\logs\\update-smoke.log');
     expect(step.indexOf('Get-FileHash')).toBeLessThan(step.indexOf('./scripts/smoke-installer.ps1'));
-    // Neither QA nor the release workflow runs it, so the release sequence
-    // asks for the dispatched run by the step's name.
-    for (const name of ['qa.yml', 'release.yml']) {
-      expect(await readFile(`.github/workflows/${name}`, 'utf8'), name).not.toContain('-PreviousInstallerPath');
-    }
+    // Bound into QA's evidence manifest, where the release looks for it.
+    const bind = steps.find((s) => s.includes('name: Bind QA artifacts to this immutable run'))!;
+    expect(bind).toContain('--log=docs/qa/logs/update-smoke.log');
+    // CI no longer needs to be started by hand for a release.
+    expect(await ci()).not.toContain('-PreviousInstallerPath');
     const releasing = await readFile('docs/releasing.md', 'utf8');
-    const sequence = releasing.slice(releasing.indexOf('## The sequence'), releasing.indexOf('Dispatch "Release'));
-    expect(sequence).toContain('Dispatch **CI** (`ci.yml`) on `main` at the same commit');
+    const sequence = releasing.slice(releasing.indexOf('## The sequence'), releasing.indexOf('## The reviewer rule'));
+    expect(sequence).not.toContain('Dispatch **CI**');
     expect(sequence).toContain('"Smoke test an update over v0.1.0-alpha.14"');
   });
 });

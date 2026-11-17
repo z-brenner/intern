@@ -93,10 +93,11 @@ it('captures smoke output that is written to the host, not just stdout', async (
   expect(installer).toContain('Write-Host');
   expect(worker).toContain('Write-Host');
 
-  for (const [name, workflow] of [['release.yml', release], ['qa.yml', qa]] as const) {
+  // QA tees two: the plain install and the update over alpha.14.
+  for (const [name, workflow, smokes] of [['release.yml', release, 1], ['qa.yml', qa, 2]] as const) {
     const teed = workflow.split('\n').filter((line) => line.includes('Tee-Object') && line.includes('smoke-installer.ps1'));
-    expect(teed.length, `${name} should tee the installer smoke log`).toBe(1);
-    expect(teed[0], `${name} must redirect all streams, not just stderr`).toContain('*>&1');
+    expect(teed.length, `${name} should tee each installer smoke log`).toBe(smokes);
+    for (const line of teed) expect(line, `${name} must redirect all streams, not just stderr`).toContain('*>&1');
   }
   // And the log must be checked where it is written, not where it is consumed.
   expect(release).toContain('Installer smoke produced no log');
