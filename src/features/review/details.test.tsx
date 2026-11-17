@@ -182,6 +182,9 @@ describe('the Details panel', () => {
     render(<App bridge={createInMemoryBridge()} />);
     await screen.findByRole('grid', { name: 'Queue' });
     fireEvent.click(screen.getByRole('button', { name: /^Completed/ }));
+    // Nothing the window selects by itself at launch lands on a row this view does not show.
+    await waitFor(() => expect(detailsToggle()).toBeDisabled());
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(detailsToggle()).toBeDisabled();
     expect(detailsToggle()).toHaveAttribute('title', 'Double-click a row to see its details');
     const filed = queueCell('Completed lease.pdf', 'proposed');

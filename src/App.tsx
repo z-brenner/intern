@@ -356,6 +356,14 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     void check();
     return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
   }, [bridge, automaticUpdateChecks]);
+  // The first document to review is selected once, when the queue first has
+  // documents. A person who has already chosen - a view switched to by hand
+  // (the ViewSwitch below marks it) - has made that choice: this effect can
+  // run after their click, when a slow machine has not flushed it before the
+  // click's render, and it used to select a Queue document under the
+  // Completed view, one the view does not show, so the Details toggle opened
+  // a row nobody could see. The ref is read when the effect runs, not when
+  // it was scheduled, so a late run sees the choice.
   useEffect(() => {
     if (!seededSelection.current && items.length) {
       seededSelection.current = true;
@@ -1268,7 +1276,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
         onChooseFiles={selection ? addFiles : undefined} onChooseFolder={selection ? addFolder : undefined} />}
       {items.length > 0 && <DropZone variant="panel" inputFolder={inputName} onDrop={(payload) => { if (selection) void importSelection(() => selection.resolveDrop(payload)); }}>
       <div className="queue-toolbar">
-        <ViewSwitch active={view} items={items} onChange={(next) => { byThePerson(); focusRestoreVersion.current += 1; reviewTrigger.current = null; setView(next); setSelectedId(undefined); clearCellSelection(); setMoreOpen(false); }} />
+        <ViewSwitch active={view} items={items} onChange={(next) => { byThePerson(); seededSelection.current = true; focusRestoreVersion.current += 1; reviewTrigger.current = null; setView(next); setSelectedId(undefined); clearCellSelection(); setMoreOpen(false); }} />
         <div className="toolbar-filters">
           {/*
             What the Needs Review page used to collect, counted where the work
