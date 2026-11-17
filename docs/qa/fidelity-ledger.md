@@ -757,3 +757,52 @@ the alpha.13, alpha.14, alpha.17 and alpha.18 records were written under
 theirs, and says so rather than naming a person who did not look. Acceptance
 was recorded at `2026-11-15T08:16:06Z`. No acceptance from alpha.18 or an earlier release is
 carried forward.
+
+
+## Alpha.20 fresh capture — accepted by Claude Code under the maintainer's instruction
+
+Whole-product QA run `44191876137`, attempt `1`, completed successfully on
+main commit `d54288db4d8f9a5091f47c0e685f8cbf7a7244ca`.
+Release-input digest: `0ecbed124343f9379790361427f3630bb96f94e84e7f5a7a668a38862cdeabf9`.
+Capture SHA-256: `01a6e62e660a13351be3b5a45be14227a1330e7cdad9698e2e82b4705904362c`.
+The committed capture is the exact 1536x1024 image from that artifact. The
+artifact's own digest was checked against the one GitHub reports, all eleven
+manifest file hashes were verified, and the release-input digest was
+recomputed on main and equals the one the run recorded. Model and
+installed-core gates passed. The artifact correctly recorded
+rendered-fidelity acceptance as pending. An earlier QA run on this release,
+`44187628650` at `ec13d36`, failed in its unit tests on a race between the
+launch selection and a view switched to by hand; pull request #86 fixed the
+race, and this run is on the fix.
+
+Claude Code inspected the image at full size beside the alpha.19 capture. The
+header states “Private · On this device” beside the new name, ATLAS, and its
+expansion, Analyze · Title · Label · Approve · Store. The counts strip and
+toolbar, the queue table and the review panel read as distinct planes. Status
+comes first, with original filename, proposed filename, description and check
+contiguous; proposed filenames are date-first, with em-dashes for absent
+values. Ready, Needs review, Proposing a name and Waiting have distinct icons
+as well as color. Approve & rename and Keep original stay pinned with their
+shortcuts. Filename focus and row selection remain visibly distinct. No
+unintended clipping, collisions or illegible text were observed; the ellipses
+in the Description and Check cells are deliberate one-line truncation.
+
+What differs from the concept this ledger recorded, all intended by this
+release: the review panel opens with the document - its name, its status,
+View document, Open and Show in folder - and then “What to check”, where the
+concept put “What to check” first; the confidence figure is inside the
+collapsed Analysis details rather than beside the name; Copy table is in the
+More menu; the counts read as words rather than pills; and “All checks
+passed” is muted. This frame shows the browser build's demonstration queue,
+whose names are not composed by the engine, so it does not show the
+organization-led names, the reason chips, the document viewer, Clear queue or
+the double-click. Browser tests, in Chromium on Linux and Windows, are the
+evidence for those; nobody has run them in the Windows app's own window.
+
+No person looked at this capture. The maintainer, Zachary Brenner, instructed
+Claude Code in this session to sign off on its own and to keep going until
+the release is cut. This record is written under that instruction, as the
+alpha.13, alpha.14, alpha.17, alpha.18 and alpha.19 records were written
+under theirs, and says so rather than naming a person who did not look.
+Acceptance was recorded at `2026-11-17T23:52:47Z`. No acceptance from alpha.19
+or an earlier release is carried forward.
