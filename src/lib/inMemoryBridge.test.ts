@@ -344,7 +344,7 @@ describe('createInMemoryBridge organization names', () => {
     expect((await bridge.getSettings()).ourNames).toEqual(['TenantCo Inc.']);
   });
 
-  it('names a waiting seeded proposal by the other side, and by both again when the names go', async () => {
+  it('leads a waiting seeded proposal with the organization, and names both sides again when the names go', async () => {
     const bridge = createInMemoryBridge();
     expect(await lease(bridge)).not.toHaveProperty('omittedParties');
 
@@ -352,7 +352,9 @@ describe('createInMemoryBridge organization names', () => {
     await bridge.saveSettings({ ...await bridge.getSettings(), ourNames: ['TENANTCO INC'] });
     // A new proposal revision, as the backend records one, so an open
     // inspector shows the new name rather than keeping the old as a draft.
-    expect(await lease(bridge)).toMatchObject({ proposedFilename: '2023-09-15 Lease Agreement with ABC Properties LLC.pdf', omittedParties: ['TenantCo Inc.'], proposalRevision: '2' });
+    expect(await lease(bridge)).toMatchObject({ proposedFilename: '2023-09-15 TenantCo - Lease Agreement with ABC Properties LLC.pdf', proposalRevision: '2' });
+    // The organization is in the name, so nothing is left out of it.
+    expect(await lease(bridge)).not.toHaveProperty('omittedParties');
     // A save that changes nothing about the name is not a new revision.
     await bridge.saveSettings({ ...await bridge.getSettings(), ourNames: ['TenantCo Inc.'] });
     expect((await lease(bridge)).proposalRevision).toBe('2');
@@ -366,7 +368,7 @@ describe('createInMemoryBridge organization names', () => {
 
   it('applies names already saved, and never to a name a person approved or to rows a test supplied', async () => {
     const named = createInMemoryBridge({ settings: { ourNames: ['ABC Properties'] } });
-    expect(await lease(named)).toMatchObject({ proposedFilename: '2023-09-15 Lease Agreement with TenantCo Inc.pdf', omittedParties: ['ABC Properties LLC'] });
+    expect(await lease(named)).toMatchObject({ proposedFilename: '2023-09-15 ABC Properties - Lease Agreement with TenantCo Inc.pdf' });
 
     const bridge = createInMemoryBridge();
     await bridge.approve('lease', '2023-09-15 Lease for 123 Main St.pdf', 'Lease.');

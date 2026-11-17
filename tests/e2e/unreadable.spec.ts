@@ -19,7 +19,8 @@ test('an unreadable document is renamed for review, named by hand, and filed', a
   await expect(row).toContainText('Needs review');
   const panel = await openDetails(page, 'NEEDS REVIEW - Lease password.pdf');
   await expect(panel.getByRole('heading', { name: 'Name it yourself' })).toBeVisible();
-  await expect(panel.getByText(/password-protected/)).toBeVisible();
+  // The reason in a few words; its sentence opens from it.
+  await expect(panel.getByText('Password-protected', { exact: true })).toBeVisible();
   // It starts from the name the file arrived with, without the prefix;
   // every rename needs a date.
   await expect(panel.getByLabel('Filename')).toHaveValue('Lease password');
