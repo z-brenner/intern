@@ -683,9 +683,68 @@ many waiting documents became ready or went back to review
 
 ## The filename
 
+The name a document is filed under leads with the organization it is filed
+for, the entity, and the subject follows:
+
 ```text
-YYYY-MM-DD <document type> <relation> <party>[ and <party>].<ext>
+YYYY-MM-DD <entity> - <subject>.<ext>
+<subject> = <document type> <relation> <party>[ and <party>]
+
+2026-10-16 Vistage International - Host Chair SOW for John Smith.pdf
+2024-11-09 EGN Denmark - Incorporation Email Communications.pdf
+2025-03-26 Vistage Malaysia - Employment Termination Letter for Johnny Appleseed.pdf
+2025-04-30 Nimbus Orchard Supply - Invoice.pdf
 ```
+
+The engine composes the subject's grammar, and its own name - the one the
+corpus is scored on and the replay baselines record - is the subject with
+every party in it (`YYYY-MM-DD <document type> <relation> <party>[ and
+<party>]`). The entity is a deterministic stage in the queue after
+validation and house style (`own_names::NameView`), so the bench gold and the
+recorded baselines stay what they were. The entity is, in order:
+
+1. the person's own organization, as Settings names it (see [Your
+   organization](#your-organization)), wherever the reading found it - among
+   the name's parties, or among the parties the reading's facts support,
+   which is where it is when validation kept only the other side for a
+   one-sided relation ("for John Smith"). The configured name that matches
+   it most specifically leads; where only a shorter one matches (`Vistage`)
+   and the document's party is more specific (`Vistage Malaysia Sdn. Bhd.`),
+   the document's party leads;
+2. otherwise the first organization among the name's parties, where the
+   relation leaves them first (`from`, `between`, `with`, or none), or the
+   side that issued the document - its issuer, sender, seller, employer,
+   landlord, lender or licensor in the facts - where the relation is about
+   the other side (`for`, `to`): a termination notice "for John Smith" is
+   the employer's, and a letter "to Acme Corporation" from a person leads
+   with nobody. A party is an organization when it ends on a legal form or
+   the engine's party reading takes it for one (`facts::is_organization_name`:
+   "Supply", "Holdings", "Bank", "Office for ...");
+3. otherwise none, and the name is the engine's own: `2026-12-29 Notice of
+   Termination - John Smith`.
+
+In the entity slot only, the legal form a name ends on is left off
+(`without_legal_form`: Inc., LLC, Ltd, Limited, Sdn Bhd, Pte Ltd, Pty Ltd,
+GmbH, AG, A/S, ApS, AB, B.V., N.V., S.A., SAS, SARL, Corp., Corporation, Co.,
+PLC, LLP and the like, with the commas and stops around them); the subject
+keeps a party's whole name. The subject never gives the entity again: its
+party is left out, the person's own organization's others too where someone
+else is left, `between` with one party left is `with`, and a directional
+word that was about the party that went (`from`, `to`, `for` about the first)
+becomes the plain separator rather than a direction the document never
+stated about the other side. A house-style spelling of the entity's party is
+the reviewer's and is carried as typed, legal form and all.
+
+Every queue path reads the one view - the name shown, the name composed
+against the destination, the layout folder, the filing report, a lesson from
+an edit, the spellings a name shows, and a recompose after Settings or a
+learned spelling changes - so they agree. The Party folder is the entity's,
+except the person's own organization, whose documents are filed by the other
+side (or under the organization where the document names nobody else).
+
+Over 120 characters the subject sheds detail first, as below; the type is
+then cut at a word beside the entity while at least twelve characters of it
+are left, and past that the entity goes too.
 
 `<relation>` is one of `between`, `for`, `with`, `from`, `to`, or — when the model
 declines to state one — a bare `-`, which keeps a validated party in the name
@@ -759,6 +818,41 @@ proposed under that name rather than as ` (2)`. Filing it under its own name,
 or that name in other letter case, which Windows takes for the same file,
 completes it without touching the file and records `ALREADY_NAMED`; this
 release makes no case-only renames.
+
+The document's own file name is read last (`NameView::with_original`, kept
+on the record as `original_name`, without a `NEEDS REVIEW - ` mark), because
+a person or a system often named it nearly right already. Its words for the
+type replace the reading's in the subject - the entity, the relation and the
+parties stay the reading's - where the name agrees with the reading and
+contradicts nothing in it:
+
+- it is not a scanner's, a camera's or a copy's name (`is_junk_filename`:
+  `scan0001`, `IMG_1234`, `Document1`, `untitled`, `Doc (3)`, a hash,
+  `final_v2`; "Copy of" in front and "final", "v2", "(2)" at the end are
+  set aside);
+- any date in it reads one way only and is the reading's
+  (`naming::date_in_filename`: ISO, `20250326`, `26.03.2025`,
+  `March 26 2025`, `26 Mar 2025`; `03.04.2025`, a two-digit year or two
+  different dates are none);
+- its parts - between " - ", and around a date - are the entity, the
+  subject's parties with the connecting word before one, another party the
+  reading found, and words for the type in one part only that hold no
+  party's name; and it names the entity and every party of the subject, in
+  any spelling the reading or a name gives them;
+- its type words give the reading's type: all of its words, the same kind
+  of document ("Letter", "Invoice", "Email"), or its initials ("SOW" for
+  "Statement of Work", "NDA" for "Non-Disclosure Agreement"). A reading
+  with no type needs the entity or a party named instead.
+
+So `2025-03-26 Vistage Malaysia - Employment Termination Letter for Johnny
+Appleseed` with that date is proposed as it is, and, filed where it is,
+completes as `ALREADY_NAMED`; the same words with `26.03.2025` at the end
+are put in order with the date first; and `Host Chair SOW - John Smith -
+Vistage International` gives `2026-10-16 Vistage International - Host Chair
+SOW for John Smith`. A date the name gives in one way only dates a reading
+that found none. A type a house-style spelling wrote is kept, and an edit of
+words the filename gave teaches no spelling: they are the file's, not the
+document's. The reading itself keeps the document's own type.
 
 Where a document lands is the destination folder plus, optionally, a
 subfolder the queue derives from the validated facts: the year, the year and
@@ -882,6 +976,20 @@ still waiting when Intern is upgraded teaches as before. Reading the grammar
 rather than diffing matters, because the smallest edit lies: "Acme and
 Contoso" becomes "Acme Corp and Contoso Inc" by inserting text one character
 into the connector, and a diff would credit it all to one party.
+
+A name that leads with an entity is read around it first
+(`NameView::read_edit`). Kept as proposed, it is set aside with the date and
+what follows is read as above. Changed alone - the subject as proposed after
+the new words and " - " - it is a respelling of the party the entity stands
+for, and teaches like one, under the same checks: "ACME Corp - Employment
+Agreement with John Smith" for "Acme - Employment Agreement with John Smith"
+teaches "Acme Corporation" -> "ACME Corp", and the next name leads with
+"ACME Corp", as typed. The person's own organization teaches nothing that
+way: its name is the one Settings gives, and a respelling of it, learned,
+would no longer be recognized as the organization. Nor does an issuer the
+name's parties do not hold, which no rule ever respells. An edit that
+changes both the entity and the subject teaches nothing. A name composed
+before names led with their entity is read with that build's grammar.
 
 A rule takes effect on the second identical edit (`EDITS_TO_LEARN`), or at
 once when a person says "Use now" in Settings, and every document still
@@ -1306,23 +1414,28 @@ no longer what keeps a wrong name from being filed.
 ### Your organization
 
 A firm's own name is on almost everything it files, so a name that carries
-every party says the firm over and over, and the Party layout files one
-client's documents under whichever side the model happened to name first.
-Settings takes the organization's names, one per line, and the queue applies
-them after house style (`own_names::counterparty_view`): when a document
-names the organization and someone else, the organization's parties are left
-out of the name and the others keep their order, "between" becoming "with"
-when one is left. A document that names only the organization keeps it - a
-name with no party says less than one that names the firm. Matching is house
-style's key, plus a whole-word prefix either way round ("Contoso" is
+it among the parties says the firm over and over, and the Party layout files
+one client's documents under whichever side the model happened to name
+first. Settings takes the organization's names, one per line, and the queue
+applies them after house style (`own_names::NameView`): when a document names
+the organization, the name leads with it - the configured name that matches
+it most specifically, without its legal form (see [The
+filename](#the-filename)) - and the subject carries the other side, "between"
+becoming "with" when one is left. The organization's other parties are left
+out of the subject where someone else is left, and the review panel says so
+(`NameView::left_out`). A document that names only the organization is filed
+under it: `2026-05-04 Contoso Worldwide - Statement of Work`. Matching is
+house style's key, plus a whole-word prefix either way round ("Contoso" is
 "Contoso Worldwide, Inc."), and an own name under four characters is ignored
-because it would match far too much.
+because it would match far too much. The organization is found among the
+parties the reading's facts support as well as the name's: validation keeps
+only the other side for a one-sided relation ("for John Smith"), and the firm
+that wrote the document is still the one it is filed for.
 
 Like house style it is deterministic and after validation: the evidence and
-the description stay the document's words, and the review panel says which
-party was left out and why. The names in force are recorded with each
-proposal, so the name, the layout folder, a lesson from an edit, and the
-filing report all read the same view. Changing them in Settings recomposes
+the description stay the document's words. The names in force are recorded
+with each proposal, so the name, the layout folder, a lesson from an edit,
+and the filing report all read the same view. Changing them in Settings recomposes
 every document still waiting, as a learned spelling does; an approved name
 keeps what the person typed, and a parked rename the name it is filing.
 Every save asks, not only one that changed the
