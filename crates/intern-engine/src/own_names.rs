@@ -335,7 +335,8 @@ impl Spellings<'_> {
             self.applied
                 .iter()
                 .filter(move |rule| {
-                    rule.kind == RuleKind::Party && HouseRule::key(&rule.to) == HouseRule::key(party)
+                    rule.kind == RuleKind::Party
+                        && HouseRule::key(&rule.to) == HouseRule::key(party)
                 })
                 .map(|rule| rule.from.as_str()),
         )
@@ -580,8 +581,10 @@ impl NameView {
             .filter(|party| !is_entity(party))
             .cloned()
             .collect::<Vec<_>>();
-        let (mine, others): (Vec<String>, Vec<String>) =
-            rest.iter().cloned().partition(|party| spellings.is_own(party));
+        let (mine, others): (Vec<String>, Vec<String>) = rest
+            .iter()
+            .cloned()
+            .partition(|party| spellings.is_own(party));
         let (parties, left_out) = if others.is_empty() {
             (rest, Vec::new())
         } else {
@@ -719,8 +722,7 @@ impl NameView {
         let trimmed = filename.trim();
         let (date, rest) = match trimmed.get(..10) {
             Some(date)
-                if crate::evidence::is_valid_iso_date(date)
-                    && trimmed[10..].starts_with(' ') =>
+                if crate::evidence::is_valid_iso_date(date) && trimmed[10..].starts_with(' ') =>
             {
                 (Some(date), trimmed[10..].trim_start())
             }
@@ -913,12 +915,9 @@ impl NameView {
         let anchored = named.iter().any(|part| *part != Part::Other);
         if self.entity.is_some() && !named.contains(&Part::Entity)
             || (0..self.subject.parties.len()).any(|index| !named.contains(&Part::Subject(index)))
-            || known.iter().any(|known| {
-                known
-                    .keys
-                    .iter()
-                    .any(|key| holds_words(&wording_key, key))
-            })
+            || known
+                .iter()
+                .any(|known| known.keys.iter().any(|key| holds_words(&wording_key, key)))
             || is_junk_filename(&wording)
             || wording.chars().count() > MAX_ORIGINAL_TYPE_CHARS
         {
@@ -997,7 +996,8 @@ fn strip_known(words: &mut Vec<&str>, known: &[Known]) -> Vec<Part> {
             words.truncate(count - length);
             named.push(part);
             if words.last().is_some_and(|word| {
-                BEFORE_A_PARTY.contains(&word.to_lowercase().trim_matches(',').trim_end_matches(':'))
+                BEFORE_A_PARTY
+                    .contains(&word.to_lowercase().trim_matches(',').trim_end_matches(':'))
             }) {
                 words.pop();
             }
@@ -1053,14 +1053,15 @@ fn without_copy_marks(words: &str) -> String {
     while let Some(last) = tokens.last() {
         let bare = last.trim_matches(|character: char| matches!(character, '(' | ')' | '-'));
         let lower = bare.to_lowercase();
-        let version = lower
-            .strip_prefix('v')
-            .is_some_and(|figures| !figures.is_empty() && figures.bytes().all(|b| b.is_ascii_digit()));
+        let version = lower.strip_prefix('v').is_some_and(|figures| {
+            !figures.is_empty() && figures.bytes().all(|b| b.is_ascii_digit())
+        });
         let counted = last.starts_with('(')
             && last.ends_with(')')
             && !bare.is_empty()
             && bare.bytes().all(|byte| byte.is_ascii_digit());
-        if tokens.len() > 1 && (matches!(lower.as_str(), "copy" | "final" | "-") || version || counted)
+        if tokens.len() > 1
+            && (matches!(lower.as_str(), "copy" | "final" | "-") || version || counted)
         {
             tokens.pop();
         } else {
@@ -1199,9 +1200,7 @@ fn gives_type(wording: &str, document_type: &str) -> bool {
         abbreviation.chars().count() >= 2
             && (initials(words) == abbreviation || initials(&significant(words)) == abbreviation)
     };
-    wording
-        .iter()
-        .any(|word| spelled(word, &typed))
+    wording.iter().any(|word| spelled(word, &typed))
         || typed.iter().any(|word| spelled(word, &wording))
 }
 
@@ -1583,7 +1582,11 @@ mod tests {
         let both = reading(
             Some("Statement of Work"),
             Some("2026-04-01"),
-            &["Contoso", "Contoso Worldwide, Inc.", "Ridgeline Cartography LLC"],
+            &[
+                "Contoso",
+                "Contoso Worldwide, Inc.",
+                "Ridgeline Cartography LLC",
+            ],
             PartyRelation::Between,
         );
         let view = NameView::of(&both, &[], None, &own(&["Contoso Worldwide, Inc."]));
@@ -2022,7 +2025,8 @@ mod tests {
     /// reading's date, is proposed as it is.
     #[test]
     fn an_original_already_in_shape_is_kept() {
-        let original = "2025-03-26 Vistage Malaysia - Employment Termination Letter for Johnny Appleseed";
+        let original =
+            "2025-03-26 Vistage Malaysia - Employment Termination Letter for Johnny Appleseed";
         assert_eq!(letter_view(Some(original)), format!("{original}.pdf"));
         // Without it, the reading's own words.
         assert_eq!(
@@ -2061,7 +2065,9 @@ mod tests {
                 &undated,
                 Some(&facts),
                 &own(&["Vistage Malaysia"]),
-                Some("Vistage Malaysia - Employment Termination Letter for Johnny Appleseed 26.03.2025")
+                Some(
+                    "Vistage Malaysia - Employment Termination Letter for Johnny Appleseed 26.03.2025"
+                )
             ),
             expected
         );
@@ -2156,7 +2162,11 @@ mod tests {
     /// by is not taken.
     #[test]
     fn an_original_does_not_override_a_spelling_or_go_unchecked() {
-        let rule = HouseRule::new(RuleKind::DocumentType, "Termination Letter", "Separation Letter");
+        let rule = HouseRule::new(
+            RuleKind::DocumentType,
+            "Termination Letter",
+            "Separation Letter",
+        );
         let styled = reading(
             Some("Separation Letter"),
             Some("2025-03-26"),
@@ -2187,7 +2197,12 @@ mod tests {
             named(&bare, None, &[], Some("Board Minutes")),
             "2026-12-29 Document.pdf"
         );
-        let minutes = reading(Some("Meeting Minutes"), Some("2025-05-07"), &[], PartyRelation::None);
+        let minutes = reading(
+            Some("Meeting Minutes"),
+            Some("2025-05-07"),
+            &[],
+            PartyRelation::None,
+        );
         assert_eq!(
             named(&minutes, None, &[], Some("Board Minutes 2025-05-07")),
             "2025-05-07 Board Minutes.pdf"
@@ -2199,11 +2214,17 @@ mod tests {
         assert!(gives_type("Host Chair SOW", "Statement of Work"));
         assert!(gives_type("Mutual NDA", "Non-Disclosure Agreement"));
         assert!(gives_type("Statement of Work", "SOW"));
-        assert!(gives_type("Employment Termination Letter", "Termination Letter"));
+        assert!(gives_type(
+            "Employment Termination Letter",
+            "Termination Letter"
+        ));
         assert!(gives_type("Incorporation Email Communications", "Email"));
         assert!(gives_type("April Invoice INV-3301", "Invoice"));
         assert!(!gives_type("Invoice", "Lease Agreement"));
-        assert!(!gives_type("Employment Termination Letter", "Notice of Termination"));
+        assert!(!gives_type(
+            "Employment Termination Letter",
+            "Notice of Termination"
+        ));
         assert!(!gives_type("Holiday Photos", "Statement of Work"));
     }
 }

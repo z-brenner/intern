@@ -206,7 +206,10 @@ fn fit(
         if room >= MIN_TYPE_BESIDE_ENTITY {
             let mut cut = document_type.chars().take(room).collect::<String>();
             // At a word's end where one is in reach, not inside a word.
-            if document_type.chars().nth(room).is_some_and(|next| next != ' ')
+            if document_type
+                .chars()
+                .nth(room)
+                .is_some_and(|next| next != ' ')
                 && let Some(space) = cut.rfind(' ')
             {
                 cut.truncate(space);
@@ -960,10 +963,42 @@ fn calendar_date(year: u32, month: u32, day: u32) -> Option<String> {
 /// which say nothing about the document: "scan0001", "IMG_1234",
 /// "Document1", "untitled", "Copy of", "final_v2".
 const FILENAME_NOISE: &[&str] = &[
-    "scan", "scanned", "scanner", "img", "image", "dsc", "dscn", "dcim", "pxl", "photo", "pic",
-    "doc", "docx", "document", "documents", "untitled", "unnamed", "file", "new", "copy", "of",
-    "final", "version", "rev", "page", "pages", "attachment", "download", "export", "print",
-    "printed", "output", "temp", "tmp", "test", "pdf",
+    "scan",
+    "scanned",
+    "scanner",
+    "img",
+    "image",
+    "dsc",
+    "dscn",
+    "dcim",
+    "pxl",
+    "photo",
+    "pic",
+    "doc",
+    "docx",
+    "document",
+    "documents",
+    "untitled",
+    "unnamed",
+    "file",
+    "new",
+    "copy",
+    "of",
+    "final",
+    "version",
+    "rev",
+    "page",
+    "pages",
+    "attachment",
+    "download",
+    "export",
+    "print",
+    "printed",
+    "output",
+    "temp",
+    "tmp",
+    "test",
+    "pdf",
 ];
 
 /// Whether a filename's stem says nothing about its document: once its
