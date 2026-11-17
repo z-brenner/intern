@@ -32,7 +32,13 @@ it('keeps every current release surface synchronized without rewriting historica
   expect(smoke).toContain(`worker_version -ne "${version}"`);
   expect(sbom).toContain(`-Version "${version}"`);
   expect(sbom).toContain(`Intern-v${version}.spdx.json`);
-  expect(assets).toContain(`version = "${version}"`);
+  // The asset fetch names the worker's package with the app's version, read
+  // from tauri.conf.json (checked above) rather than restated: the script is
+  // part of the runtime-asset cache key, and a literal here changed that key
+  // with every release bump.
+  expect(assets).toContain('$InternVersion = [string](Get-Content -LiteralPath (Join-Path $RepositoryRoot "src-tauri/tauri.conf.json") -Raw | ConvertFrom-Json).version');
+  expect(assets).toContain('name = "Intern"; version = $InternVersion');
+  expect(assets).not.toMatch(/version = "\d/);
   expect(notices).toContain(`Intern ${version}`);
   expect(readme).toContain(`Intern_${version}_x64-setup.exe`);
   expect(checklist).toContain(`Intern v${version} release checklist`);

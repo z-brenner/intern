@@ -61,21 +61,16 @@ jobs:
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
           rustup default 1.88.0
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            ~\.cargo\registry
-            ~\.cargo\git
-            target
-          key: qa-cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'src-tauri/resources/runtime-assets.json') }}
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      # The runtime assets CI's Windows packaging job built and saved on main
+      # (see the matching step in ci.yml), restored under exactly CI's key and
+      # never saved from here. No cargo or Playwright cache: QA's own 4.7 GB
+      # target cache and 314 MB browser cache were evicted before any run
+      # read them (the alpha.19 QA run missed all four of its caches and spent
+      # six minutes saving them), and Chromium installs in 14 seconds.
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}\intern-assets-cache
-          key: qa-runtime-assets-${{ runner.os }}-${{ hashFiles('src-tauri/resources/runtime-assets.json', 'scripts/fetch-windows-assets.ps1') }}
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~\AppData\Local\ms-playwright
-          key: qa-playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('src-tauri/resources/runtime-assets.json', 'scripts/fetch-windows-assets.ps1') }}
       # npm ci has exited at once (about a second, exit 1, nothing printed)
       # on Windows runners three times: alpha.15's and alpha.17's release runs
       # and a pull request's CI. A second attempt has always passed. Retry it,
@@ -182,10 +177,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "PP-OCR runtime tests failed" }
       # Same pinned toolset the CI and release builds use; see
       # scripts/prefetch-nsis.ps1 for why the bundler must not fetch its own.
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}\intern-nsis-cache
-          key: qa-nsis-toolset-${{ runner.os }}-${{ hashFiles('scripts/prefetch-nsis.ps1') }}
+          key: nsis-toolset-${{ runner.os }}-${{ hashFiles('scripts/prefetch-nsis.ps1') }}
       - name: Stage the pinned NSIS toolset
         shell: pwsh
         run: ./scripts/prefetch-nsis.ps1 -CacheDirectory "${{ runner.temp }}\intern-nsis-cache"

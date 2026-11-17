@@ -99,17 +99,21 @@ jobs:
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
           rustup default 1.88.0
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            ~\.cargo\registry
-            ~\.cargo\git
-            target
-          key: release-cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'src-tauri/resources/runtime-assets.json') }}
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      # The runtime assets CI's Windows packaging job built and saved on main,
+      # restored under exactly CI's key, complete entries only, and never
+      # saved from here. A release run reads only main's caches, and only runs
+      # on main write those, so this widens nothing: the release-assets entry
+      # it used to keep was writable by the same main-branch runs. The fetch
+      # below checks every pinned download in it against its size and SHA-256
+      # again, and the vcpkg checkout against the pinned baseline; the
+      # Tesseract closure vcpkg built is used as the main-branch run built it,
+      # exactly as a release-assets hit was. No cargo cache: alpha.19's
+      # release missed both of its caches and then spent 12.5 minutes saving
+      # 5.4 GB of them.
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}\intern-assets-cache
-          key: release-assets-${{ runner.os }}-${{ hashFiles('src-tauri/resources/runtime-assets.json', 'scripts/fetch-windows-assets.ps1') }}
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('src-tauri/resources/runtime-assets.json', 'scripts/fetch-windows-assets.ps1') }}
       # npm ci has exited at once (about a second, exit 1, nothing printed)
       # on Windows runners three times: alpha.15's and alpha.17's release runs
       # and a pull request's CI. A second attempt has always passed. Retry it,
@@ -247,10 +251,10 @@ jobs:
       # Pin the bundler's own toolset rather than letting it fetch one mid-build.
       # See scripts/prefetch-nsis.ps1: an unpinned GitHub download here failed two
       # consecutive CI runs, and a release must not depend on it.
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}\intern-nsis-cache
-          key: release-nsis-toolset-${{ runner.os }}-${{ hashFiles('scripts/prefetch-nsis.ps1') }}
+          key: nsis-toolset-${{ runner.os }}-${{ hashFiles('scripts/prefetch-nsis.ps1') }}
       - name: Stage the pinned NSIS toolset
         shell: pwsh
         run: ./scripts/prefetch-nsis.ps1 -CacheDirectory "${{ runner.temp }}\intern-nsis-cache"

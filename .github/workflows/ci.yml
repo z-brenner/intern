@@ -268,13 +268,14 @@ jobs:
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
           rustup default 1.88.0
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            ~\.cargo\registry
-            ~\.cargo\git
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'src-tauri/resources/runtime-assets.json') }}
+      # No cargo cache on Windows. The target directory this job used to cache
+      # was 4.7 GB compressed, three workflows each kept one under a name of
+      # their own, and the repository's 10 GB cache limit evicted every entry
+      # before anything asked for it: in the runs measured for alpha.19 and
+      # pull request #85 every Windows cargo and runtime-asset restore missed,
+      # and each run then spent 4 to 11 minutes uploading a cache nobody read.
+      # Downloading the crates themselves takes about 7 seconds.
+      #
       # Restore and save separately, because actions/cache declares
       # `post-if: success()` and therefore saves nothing when a later step fails.
       # This step builds Tesseract from a pinned vcpkg baseline, and vcpkg pulls
@@ -296,6 +297,12 @@ jobs:
       # its own, which the next run restores and then completes. A partial
       # cache saved under the primary key would instead be restored as a hit
       # for ever and never upgraded.
+      #
+      # This is the only runtime-asset cache. QA and the release restore this
+      # same key, complete entries only, and never save one, so they reuse what
+      # a CI run on main built instead of each building Tesseract again for
+      # 16 to 22 minutes under a name of their own. A pull request's run reads
+      # main's entry; what it saves is visible to that pull request alone.
       - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         id: assets-cache
         with:

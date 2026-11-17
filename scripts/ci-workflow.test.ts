@@ -15,7 +15,53 @@ function stepsOf(job: string): string[] {
   return job.split(/\n(?= {6}- )/).slice(1);
 }
 
+/** Every job of a workflow that runs on Windows, by id. */
+function windowsJobs(workflow: string): Map<string, string> {
+  const ids = workflow.slice(workflow.indexOf('\njobs:\n')).split('\n')
+    .flatMap((line) => /^ {2}([\w-]+):\s*$/.exec(line)?.[1] ?? []);
+  return new Map(ids.map((id) => [id, jobOf(workflow, id)] as const).filter(([, job]) => job.includes('runs-on: windows-')));
+}
+
 const ci = () => readFile('.github/workflows/ci.yml', 'utf8');
+const WINDOWS_WORKFLOWS = ['ci.yml', 'qa.yml', 'release.yml'] as const;
+
+describe('the Windows caches', () => {
+  // Every Windows cache restore missed in the runs measured for alpha.19 and
+  // pull request #85. Three workflows each kept a 4.7 GB cargo target and a
+  // 666 MB runtime-asset cache under a name of their own, past the
+  // repository's 10 GB limit, so every run rebuilt Tesseract (16-22 minutes)
+  // and then spent 4-12 minutes saving caches that were evicted unread.
+  it('caches no cargo target directory on Windows', async () => {
+    for (const name of WINDOWS_WORKFLOWS) {
+      const jobs = windowsJobs(await readFile(`.github/workflows/${name}`, 'utf8'));
+      expect(jobs.size, name).toBeGreaterThan(0);
+      for (const [id, job] of jobs) {
+        for (const step of stepsOf(job).filter((s) => s.includes('uses: actions/cache'))) {
+          expect(step, `${name} ${id}`).not.toMatch(/^\s+target$/m);
+          expect(step, `${name} ${id}`).not.toContain('.cargo');
+        }
+      }
+    }
+  });
+
+  it('keeps one runtime-asset entry: CI writes it, QA and the release only restore it, complete', async () => {
+    const assetSteps = (workflow: string) => [...windowsJobs(workflow).values()]
+      .flatMap(stepsOf).filter((step) => step.includes('intern-assets-cache') && step.includes('uses: actions/cache'));
+    const keyOf = (step: string) => /^ {10}key: (.+)$/m.exec(step)![1];
+    const ciRestores = assetSteps(await ci()).filter((step) => step.includes('actions/cache/restore@'));
+    expect(ciRestores).toHaveLength(1);
+    const key = keyOf(ciRestores[0]);
+    expect(key).toBe("runtime-assets-${{ runner.os }}-${{ hashFiles('src-tauri/resources/runtime-assets.json', 'scripts/fetch-windows-assets.ps1') }}");
+    for (const name of ['qa.yml', 'release.yml']) {
+      const steps = assetSteps(await readFile(`.github/workflows/${name}`, 'utf8'));
+      expect(steps, name).toHaveLength(1);
+      expect(steps[0], name).toContain('actions/cache/restore@');
+      expect(keyOf(steps[0]), name).toBe(key);
+      // A partial entry is CI's own progress, never what QA or a release builds from.
+      expect(steps[0], name).not.toContain('restore-keys');
+    }
+  });
+});
 
 describe('the runtime-asset cache in CI', () => {
   // CI_RELEASE_DOCS-1. The asset fetch rewrites runtime-assets.json, so a
