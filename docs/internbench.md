@@ -1,5 +1,7 @@
 # InternBench
 
+ATLAS was called Intern before v0.1.0-alpha.20; this document uses the old name.
+
 InternBench is Intern's second evaluation suite. It sits beside the
 clean-room corpus in `fixtures/` ([`evaluation.md`](evaluation.md)) and
 replaces none of it. The corpus there was built to prove the redesign that

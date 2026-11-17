@@ -1,5 +1,7 @@
 # Microsoft upload verification
 
+ATLAS was called Intern before v0.1.0-alpha.20; this document uses the old name.
+
 ## What Intern enforces
 
 For the protected SharePoint intake, unverified ownership is never permission

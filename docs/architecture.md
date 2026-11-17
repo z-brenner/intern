@@ -1,5 +1,7 @@
 # Intern architecture
 
+ATLAS was called Intern before v0.1.0-alpha.20; this document uses the old name.
+
 Intern turns a document into a filename, a one-sentence description, and the
 evidence behind both. This document explains how, why the pieces are shaped the
 way they are, and what the design costs on an ordinary Windows laptop.

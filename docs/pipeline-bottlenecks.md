@@ -1,5 +1,7 @@
 # Where a document goes, and where it slows down or goes wrong
 
+ATLAS was called Intern before v0.1.0-alpha.20; this document uses the old name.
+
 This page traces one file from the moment it enters the queue to the moment
 it has a name and a sentence. For every stage it names the functions
 responsible and what each costs. It then lists the bottlenecks: the places

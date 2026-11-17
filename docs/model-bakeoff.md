@@ -1,5 +1,7 @@
 # Model and pipeline bake-off
 
+ATLAS was called Intern before v0.1.0-alpha.20; this document uses the old name.
+
 Every number here was measured on one machine with real local inference over the
 whole generated corpus. Nothing is extrapolated from published benchmarks.
 

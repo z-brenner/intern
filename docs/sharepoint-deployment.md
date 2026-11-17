@@ -1,5 +1,7 @@
 # SharePoint deployment: administrator guide
 
+ATLAS was called Intern before v0.1.0-alpha.20; this document uses the old name.
+
 This guide is for the person who prepares an Intern build for an organization
 SharePoint deployment. For the admission rules Intern applies to each document,
 see [Microsoft upload verification](microsoft-upload-verification.md). For how
