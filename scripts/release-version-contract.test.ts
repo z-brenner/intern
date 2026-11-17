@@ -1,7 +1,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { expect, it } from 'vitest';
 
-const version = '0.1.0-alpha.19';
+const version = '0.1.0-alpha.20';
 const tag = `v${version}`;
 
 it('keeps every current release surface synchronized without rewriting historical records', async () => {
@@ -37,12 +37,12 @@ it('keeps every current release surface synchronized without rewriting historica
   expect(readme).toContain(`Intern_${version}_x64-setup.exe`);
   expect(checklist).toContain(`Intern v${version} release checklist`);
   expect(checklist).toContain('pending/blocked');
-  expect(notes).toContain(`# Intern ${tag}`);
+  expect(notes).toContain(`# ATLAS ${tag}`);
   expect(notes).toContain('not Authenticode signed');
   expect(release).toContain(`name: Release ${tag}`);
   expect(release).toContain(`RELEASE_TAG: ${tag}`);
   expect(release).toContain(`docs/releases/${tag}.md`);
-  expect(release).toContain(`--title 'Intern ${tag}'`);
+  expect(release).toContain(`--title 'ATLAS ${tag}'`);
   expect(release).toContain(`group: intern-${tag}-release`);
   expect(ci).toContain(`intern-${tag}-windows-`);
   // The final evidence validation accepts exactly one workflow name, written
