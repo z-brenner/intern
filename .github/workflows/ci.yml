@@ -3,7 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+  # The default types plus ready_for_review: a draft pull request skips the
+  # Windows installer job, and marking it ready runs the whole workflow again.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 permissions:
@@ -11,7 +14,7 @@ permissions:
 
 # One run per pull request (or branch) at a time. A new push to a pull request
 # makes its running checks obsolete, so they are canceled rather than left to
-# hold a Windows runner for half an hour. On main nothing in progress is
+# hold a Windows runner for twenty minutes. On main nothing in progress is
 # canceled: a run always finishes, and of the pushes that land meanwhile only
 # the newest waits to run next. A release is still gated on its own commit by
 # the release workflow, whichever main runs were skipped.
@@ -109,7 +112,7 @@ jobs:
             internbench-report.md
           if-no-files-found: ignore
 
-  # Rust feedback in minutes rather than the Windows job's half hour: format,
+  # Rust feedback in minutes rather than the Windows job's twenty: format,
   # Clippy with warnings denied, and the workspace tests. Code that only exists
   # on Windows (#[cfg(windows)]) is still compiled and linted only there, so
   # this job is the fast signal, not the last word.
@@ -158,7 +161,7 @@ jobs:
       - name: Generate the clean-room fixtures the worker tests read
         run: node fixtures/generate-fixtures.mjs
       # Tauri's build script refuses to compile the desktop crate unless every
-      # sidecar and resource it bundles exists. The Windows job below stages
+      # sidecar and resource it bundles exists. The Windows Rust job below stages
       # the same placeholders under its own target triple. A Linux build
       # bundles its own runtime folder instead (tauri.linux.conf.json), so it
       # needs a placeholder of its own too.
@@ -246,10 +249,105 @@ jobs:
             target/release/bundle/deb/*.deb
             src-tauri/resources/runtime/runtime-inventory.json
 
-  windows-release-gates:
-    name: Windows Rust, assets, E2E, and NSIS
+  # Which Windows jobs a pull request needs. The Windows jobs are the slow
+  # ones, and a pull request that changes only documentation (every release's
+  # rendered-fidelity sign-off among them) or only the React app used to hold
+  # a Windows runner for most of an hour all the same. Pushes to main and runs
+  # started by hand run everything. See scripts/ci-changes.mjs for what each
+  # kind of change can reach; a path it does not recognise needs everything.
+  changes:
+    name: Windows jobs this change needs
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.changes.outputs.rust }}
+      package: ${{ steps.changes.outputs.package }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # A pull request's run checks out GitHub's merge commit; its first
+          # parent is the base branch, so the two commits are all it needs.
+          fetch-depth: 2
+      - id: changes
+        name: Classify the changed paths
+        run: node scripts/ci-changes.mjs --event="$GITHUB_EVENT_NAME"
+
+  # The Rust that only compiles on Windows (#[cfg(windows)]), formatted,
+  # linted and tested. Nothing here needs the pinned runtime, npm or the
+  # installer, so it runs beside the packaging job instead of before it.
+  windows-rust:
+    name: Windows Rust (fmt, Clippy, tests)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: windows-latest
-    timeout-minutes: 240
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      INTERN_REQUIRE_GENERATED_FIXTURES: "1"
+      INTERN_PDFIUM_DIR: ${{ github.workspace }}\src-tauri\resources\native\pdfium
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Require committed Rust dependency lock
+        shell: pwsh
+        run: if (-not (Test-Path -LiteralPath Cargo.lock -PathType Leaf)) { throw "Cargo.lock must be committed; CI never resolves release dependencies implicitly" }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.15.0
+      - name: Install pinned Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
+          rustup default 1.88.0
+      # No cargo cache on Windows. The target directory this job used to cache
+      # was 4.7 GB compressed, three workflows each kept one under a name of
+      # their own, and the repository's 10 GB cache limit evicted every entry
+      # before anything asked for it: in the runs measured for alpha.19 and
+      # pull request #85 every Windows cargo and runtime-asset restore missed,
+      # and each run then spent 4 to 11 minutes uploading a cache nobody read.
+      # Downloading the crates themselves takes about 7 seconds.
+      #
+      # The generator uses nothing but Node itself, so no npm install.
+      - name: Generate the clean-room fixtures the worker tests read
+        run: node fixtures/generate-fixtures.mjs
+      - name: Stage parser worker for desktop compile checks
+        shell: pwsh
+        run: |
+          cargo build --locked -p intern-worker
+          New-Item -ItemType Directory src-tauri\binaries -Force | Out-Null
+          Copy-Item target\debug\intern-worker.exe src-tauri\binaries\intern-worker-x86_64-pc-windows-msvc.exe -Force
+          New-Item -ItemType File src-tauri\binaries\tesseract-x86_64-pc-windows-msvc.exe -Force | Out-Null
+          New-Item -ItemType Directory src-tauri\resources\licenses -Force | Out-Null
+          New-Item -ItemType Directory src-tauri\resources\tessdata -Force | Out-Null
+          New-Item -ItemType Directory src-tauri\resources\native\pdfium -Force | Out-Null
+          New-Item -ItemType Directory src-tauri\resources\native\sidecars -Force | Out-Null
+          New-Item -ItemType Directory src-tauri\resources\native\llama-upstream -Force | Out-Null
+          New-Item -ItemType Directory src-tauri\resources\ocr-models -Force | Out-Null
+          New-Item -ItemType File src-tauri\resources\licenses\compile-placeholder.txt -Force | Out-Null
+          New-Item -ItemType File src-tauri\resources\tessdata\compile-placeholder.traineddata -Force | Out-Null
+          New-Item -ItemType File src-tauri\resources\native\pdfium\compile-placeholder.dll -Force | Out-Null
+          New-Item -ItemType File src-tauri\resources\native\sidecars\compile-placeholder.dll -Force | Out-Null
+          New-Item -ItemType File src-tauri\resources\native\llama-upstream\compile-placeholder.dll -Force | Out-Null
+          New-Item -ItemType File src-tauri\resources\ocr-models\compile-placeholder.onnx -Force | Out-Null
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      # The default feature set never compiles the PDFium and Tesseract code, so
+      # nothing had ever linted the paths that only run on a packaged Windows
+      # install. Lint them here, where the crate is built with those features
+      # anyway.
+      - run: cargo clippy --locked -p intern-worker --all-targets --features windows-native -- -D warnings
+      - run: cargo test --locked --workspace --all-targets
+
+  # The installer, built from the pinned runtime and smoke-tested installed.
+  # On a draft pull request it waits until the pull request is marked ready
+  # (ready_for_review starts this workflow again); pushes to main, runs
+  # started by hand and ready pull requests always build it. The browser
+  # tests are not repeated here: the Ubuntu frontend job runs them on every
+  # change, and QA runs them on Windows before every release.
+  windows-package:
+    name: Windows installer (NSIS) and smoke
+    needs: changes
+    if: needs.changes.outputs.package == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    runs-on: windows-latest
+    timeout-minutes: 120
     env:
       CARGO_TERM_COLOR: always
       INTERN_REQUIRE_GENERATED_FIXTURES: "1"
@@ -266,16 +364,8 @@ jobs:
       - name: Install pinned Rust toolchain
         shell: pwsh
         run: |
-          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
+          rustup toolchain install 1.88.0 --profile minimal
           rustup default 1.88.0
-      # No cargo cache on Windows. The target directory this job used to cache
-      # was 4.7 GB compressed, three workflows each kept one under a name of
-      # their own, and the repository's 10 GB cache limit evicted every entry
-      # before anything asked for it: in the runs measured for alpha.19 and
-      # pull request #85 every Windows cargo and runtime-asset restore missed,
-      # and each run then spent 4 to 11 minutes uploading a cache nobody read.
-      # Downloading the crates themselves takes about 7 seconds.
-      #
       # Restore and save separately, because actions/cache declares
       # `post-if: success()` and therefore saves nothing when a later step fails.
       # This step builds Tesseract from a pinned vcpkg baseline, and vcpkg pulls
@@ -328,36 +418,12 @@ jobs:
           }
           exit 1
       - run: npm run fixtures
+      # Vitest on Windows paths (the packaging scripts run here), TypeScript,
+      # and the frontend build the installer bundles.
       - run: npm run check
-      - run: npx playwright install chromium
-      - run: npm run test:e2e
-      - name: Stage parser worker for desktop compile checks
-        shell: pwsh
-        run: |
-          cargo build --locked -p intern-worker
-          New-Item -ItemType Directory src-tauri\binaries -Force | Out-Null
-          Copy-Item target\debug\intern-worker.exe src-tauri\binaries\intern-worker-x86_64-pc-windows-msvc.exe -Force
-          New-Item -ItemType File src-tauri\binaries\tesseract-x86_64-pc-windows-msvc.exe -Force | Out-Null
-          New-Item -ItemType Directory src-tauri\resources\licenses -Force | Out-Null
-          New-Item -ItemType Directory src-tauri\resources\tessdata -Force | Out-Null
-          New-Item -ItemType Directory src-tauri\resources\native\pdfium -Force | Out-Null
-          New-Item -ItemType Directory src-tauri\resources\native\sidecars -Force | Out-Null
-          New-Item -ItemType Directory src-tauri\resources\native\llama-upstream -Force | Out-Null
-          New-Item -ItemType Directory src-tauri\resources\ocr-models -Force | Out-Null
-          New-Item -ItemType File src-tauri\resources\licenses\compile-placeholder.txt -Force | Out-Null
-          New-Item -ItemType File src-tauri\resources\tessdata\compile-placeholder.traineddata -Force | Out-Null
-          New-Item -ItemType File src-tauri\resources\native\pdfium\compile-placeholder.dll -Force | Out-Null
-          New-Item -ItemType File src-tauri\resources\native\sidecars\compile-placeholder.dll -Force | Out-Null
-          New-Item -ItemType File src-tauri\resources\native\llama-upstream\compile-placeholder.dll -Force | Out-Null
-          New-Item -ItemType File src-tauri\resources\ocr-models\compile-placeholder.onnx -Force | Out-Null
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      # The default feature set never compiles the PDFium and Tesseract code, so
-      # nothing had ever linted the paths that only run on a packaged Windows
-      # install. Lint them here, where the crate is built with those features
-      # anyway.
-      - run: cargo clippy --locked -p intern-worker --all-targets --features windows-native -- -D warnings
-      - run: cargo test --locked --workspace --all-targets
+      # No compile placeholders: nothing in this job compiles the desktop crate
+      # before the pinned runtime is staged, so nothing could be left behind
+      # for the installer to bundle.
       - name: Build parser worker sidecar
         shell: pwsh
         run: |
@@ -367,14 +433,7 @@ jobs:
       - name: Fetch and verify pinned Windows assets
         id: fetch-assets
         shell: pwsh
-        run: |
-          Remove-Item src-tauri\resources\licenses\compile-placeholder.txt -Force
-          Remove-Item src-tauri\resources\tessdata\compile-placeholder.traineddata -Force
-          Remove-Item src-tauri\resources\native\pdfium\compile-placeholder.dll -Force
-          Remove-Item src-tauri\resources\native\sidecars\compile-placeholder.dll -Force
-          Remove-Item src-tauri\resources\native\llama-upstream\compile-placeholder.dll -Force
-          Remove-Item src-tauri\resources\ocr-models\compile-placeholder.onnx -Force
-          ./scripts/fetch-windows-assets.ps1 -CacheDirectory "${{ runner.temp }}\intern-assets-cache"
+        run: ./scripts/fetch-windows-assets.ps1 -CacheDirectory "${{ runner.temp }}\intern-assets-cache"
       # A complete fetch is saved under the key the restore step looked for.
       # Skipped on an exact hit, where that key already exists.
       - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -405,7 +464,8 @@ jobs:
           ./scripts/smoke-worker.ps1 -WorkerPath (Join-Path $Stage "intern-worker.exe") -RuntimeDirectory $Stage
       # The last unpinned network dependency in the build. See the script header:
       # the bundler fetches its own NSIS toolset at bundle time, and a connection
-      # reset there failed two consecutive runs of the same commit.
+      # reset there failed two consecutive runs of the same commit. QA and the
+      # release restore this entry and do not save it.
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}\intern-nsis-cache

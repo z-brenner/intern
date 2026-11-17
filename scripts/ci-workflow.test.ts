@@ -69,7 +69,7 @@ describe('the runtime-asset cache in CI', () => {
   // restore ever asked for: ~470 MB uploaded per run, and a 24-minute Tesseract
   // build every time.
   it('cache_save_reuses_primary_key: every save reuses the key the restore step computed', async () => {
-    const steps = stepsOf(jobOf(await ci(), 'windows-release-gates'));
+    const steps = stepsOf(jobOf(await ci(), 'windows-package'));
     const saves = steps.filter((step) => step.includes('actions/cache/save@'));
     expect(saves).toHaveLength(2);
     for (const save of saves) {
@@ -111,6 +111,54 @@ describe('the runtime-asset cache in CI', () => {
   });
 });
 
+describe('the Windows jobs a change runs', () => {
+  // Pull request #85's CI spent 57 minutes in one Windows job: browser tests
+  // the Ubuntu job also runs, Rust tests, and the installer, one after the
+  // other. They are two jobs now, side by side, and a pull request runs only
+  // the ones its changes can reach.
+  it('classifies the change once, from the merge commit and its base', async () => {
+    const job = jobOf(await ci(), 'changes');
+    expect(job).toContain('runs-on: ubuntu-latest');
+    expect(job).toMatch(/^ {10}fetch-depth: 2$/m);
+    expect(job).toContain('run: node scripts/ci-changes.mjs --event="$GITHUB_EVENT_NAME"');
+    expect(job).toContain('rust: ${{ steps.changes.outputs.rust }}');
+    expect(job).toContain('package: ${{ steps.changes.outputs.package }}');
+  });
+
+  it('runs the Windows Rust checks beside the installer, each only when the change needs it', async () => {
+    const workflow = await ci();
+    const rust = jobOf(workflow, 'windows-rust');
+    expect(rust).toContain('needs: changes');
+    expect(rust).toContain("if: needs.changes.outputs.rust == 'true'");
+    const runs = stepsOf(rust).flatMap((step) => /run: (.+)$/m.exec(step)?.[1] ?? []);
+    for (const command of [
+      'cargo fmt --all -- --check',
+      'cargo clippy --locked --workspace --all-targets -- -D warnings',
+      'cargo clippy --locked -p intern-worker --all-targets --features windows-native -- -D warnings',
+      'cargo test --locked --workspace --all-targets',
+    ]) expect(runs, command).toContain(command);
+
+    const packaging = jobOf(workflow, 'windows-package');
+    expect(packaging).toContain('needs: changes');
+    // A draft pull request waits for ready_for_review, which runs CI again.
+    expect(packaging).toContain("if: needs.changes.outputs.package == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)");
+    expect(workflow).toMatch(/^ {2}pull_request:\n(?: {4}#.*\n)*? {4}types: \[opened, synchronize, reopened, ready_for_review\]$/m);
+    for (const command of [
+      'npm run check',
+      'cargo build --locked -p intern-worker --release --features windows-native',
+      'npm run assets:verify -- --require-bundled',
+      'cargo test --locked -p intern-worker --test generated_fixtures --features windows-native',
+      'npm run tauri build -- --bundles nsis -- --locked',
+      './scripts/smoke-installer.ps1 -InstallerPath $Installer.FullName',
+    ]) expect(packaging, command).toContain(command);
+    // The browser tests run in the Ubuntu frontend job on every change, and
+    // on Windows in QA before every release.
+    expect(jobOf(workflow, 'frontend')).toContain('run: npm run test:e2e');
+    expect(await readFile('.github/workflows/qa.yml', 'utf8')).toContain('npm run test:e2e');
+    for (const job of [rust, packaging]) expect(job).not.toContain('test:e2e');
+  });
+});
+
 describe('the Rust (Ubuntu) job', () => {
   it('ubuntu_rust_job_runs_fmt_clippy_test with the pinned toolchain and the desktop libraries', async () => {
     const job = jobOf(await ci(), 'rust-ubuntu');
@@ -145,7 +193,7 @@ describe('the Rust (Ubuntu) job', () => {
     const workflow = await ci();
     const config = JSON.parse(await readFile('src-tauri/tauri.conf.json', 'utf8'));
     const linux = stepsOf(jobOf(workflow, 'rust-ubuntu')).find((step) => step.includes('compile-placeholder'))!;
-    const windows = stepsOf(jobOf(workflow, 'windows-release-gates')).find((step) => step.includes('compile-placeholder'))!;
+    const windows = stepsOf(jobOf(workflow, 'windows-rust')).find((step) => step.includes('compile-placeholder'))!;
 
     expect(linux).toContain('cargo build --locked -p intern-worker');
     expect(linux).toContain('cp target/debug/intern-worker src-tauri/binaries/intern-worker-x86_64-unknown-linux-gnu');
@@ -176,31 +224,45 @@ describe('the Rust (Ubuntu) job', () => {
 });
 
 describe('the Windows builds', () => {
-  // The release and QA builds stage the same placeholders as CI's Windows job
-  // and take every one of them away again before the real assets are fetched:
-  // one left behind would be bundled into the installer, and one missing would
-  // stop the desktop crate compiling.
-  it('creates and removes the same placeholders in every Windows build', async () => {
+  // A Windows job that compiles the desktop crate before the pinned runtime
+  // exists stages the same placeholders as CI's Windows Rust job, and if it
+  // then fetches the runtime it takes every one of them away first: one left
+  // behind would be bundled into the installer, and one missing would stop
+  // the desktop crate compiling. A job that builds nothing before the fetch
+  // stages none at all.
+  it('creates and removes the same placeholders in every Windows build that stages them', async () => {
     const created = (step: string) => [...step.matchAll(/New-Item -ItemType File (src-tauri\\resources\\\S+compile-placeholder\.\w+)/g)].map((match) => match[1]).sort();
     const removed = (step: string) => [...step.matchAll(/Remove-Item (src-tauri\\resources\\\S+compile-placeholder\.\w+)/g)].map((match) => match[1]).sort();
-    const jobs = [
-      ['ci.yml', jobOf(await ci(), 'windows-release-gates')],
-      ['release.yml', jobOf(await readFile('.github/workflows/release.yml', 'utf8'), 'release')],
-      ['qa.yml', jobOf(await readFile('.github/workflows/qa.yml', 'utf8'), 'windows-whole-product-qa')],
+    const [workflow, release, qa] = await Promise.all([
+      ci(),
+      readFile('.github/workflows/release.yml', 'utf8'),
+      readFile('.github/workflows/qa.yml', 'utf8'),
+    ]);
+    const staging = [
+      ['ci.yml windows-rust', jobOf(workflow, 'windows-rust'), false],
+      ['release.yml release', jobOf(release, 'release'), true],
+      ['qa.yml', jobOf(qa, 'windows-whole-product-qa'), true],
     ] as const;
-    const reference = created(stepsOf(jobs[0][1]).find((step) => step.includes('New-Item -ItemType File src-tauri\\resources\\'))!);
+    const reference = created(stepsOf(staging[0][1]).find((step) => step.includes('New-Item -ItemType File src-tauri\\resources\\'))!);
     expect(reference).toHaveLength(6);
-    for (const [name, job] of jobs) {
+    for (const [name, job, fetches] of staging) {
       const steps = stepsOf(job);
       const stage = steps.findIndex((step) => step.includes('New-Item -ItemType File src-tauri\\resources\\'));
       // The invocation, not the cache steps whose keys hash the script.
       const fetch = steps.findIndex((step) => step.includes('./scripts/fetch-windows-assets.ps1'));
       expect(stage, name).toBeGreaterThanOrEqual(0);
-      expect(fetch, name).toBeGreaterThan(stage);
       expect(created(steps[stage]), name).toEqual(reference);
+      if (!fetches) {
+        expect(fetch, name).toBe(-1);
+        continue;
+      }
+      expect(fetch, name).toBeGreaterThan(stage);
       expect(removed(steps[fetch]), name).toEqual(reference);
       expect(steps[fetch].indexOf('Remove-Item'), name).toBeLessThan(steps[fetch].indexOf('./scripts/fetch-windows-assets.ps1'));
     }
+    const packaging = jobOf(workflow, 'windows-package');
+    expect(packaging).toContain('./scripts/fetch-windows-assets.ps1');
+    expect(packaging).not.toContain('compile-placeholder');
   });
 
   // No llama-server is a sidecar any more: a placeholder for one would be left
@@ -216,7 +278,7 @@ describe('the Windows builds', () => {
   // when CI is started by hand, from the release's own installer at its
   // published SHA-256, after the plain install smoke.
   it('smokes an update over alpha.14 when started by hand', async () => {
-    const steps = stepsOf(jobOf(await ci(), 'windows-release-gates'));
+    const steps = stepsOf(jobOf(await ci(), 'windows-package'));
     const plain = steps.findIndex((step) => step.includes('name: Smoke test per-user installer'));
     const update = steps.findIndex((step) => step.includes('name: Smoke test an update over v0.1.0-alpha.14'));
     expect(plain).toBeGreaterThanOrEqual(0);
