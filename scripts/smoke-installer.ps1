@@ -34,10 +34,16 @@ New-Item -ItemType Directory -Path $UserDataDirectory -Force | Out-Null
 Set-Content -LiteralPath $Sentinel -Value "must survive uninstall" -Encoding utf8NoBOM
 
 if (Test-Path -LiteralPath $InstallDirectory) { throw "Smoke install target already exists: $InstallDirectory" }
-# "Send to > Intern" (src-tauri/windows/hooks.nsh). Checked before install so a
-# shortcut some earlier run left behind cannot pass for this installer's.
-$SendToShortcut = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::SendTo)) "Intern.lnk"
-if (Test-Path -LiteralPath $SendToShortcut) { throw "A Send to shortcut already exists before install: $SendToShortcut" }
+# "Send to > ATLAS" (src-tauri/windows/hooks.nsh). Releases before alpha.20,
+# when the app was called Intern, named it Intern.lnk, and an install takes
+# that one away. Checked before install so a shortcut some earlier run left
+# behind cannot pass for this installer's, nor hide that it took the old one.
+$SendToFolder = [Environment]::GetFolderPath([Environment+SpecialFolder]::SendTo)
+$SendToShortcut = Join-Path $SendToFolder "ATLAS.lnk"
+$OldSendToShortcut = Join-Path $SendToFolder "Intern.lnk"
+foreach ($Shortcut in @($SendToShortcut, $OldSendToShortcut)) {
+    if (Test-Path -LiteralPath $Shortcut) { throw "A Send to shortcut already exists before install: $Shortcut" }
+}
 $StartupErrorLog = Join-Path $UserDataDirectory "logs/startup-error.log"
 if (Test-Path -LiteralPath $StartupErrorLog) { Remove-Item -LiteralPath $StartupErrorLog -Force }
 $AppProcess = $null
@@ -54,6 +60,9 @@ if ($PreviousInstallerPath) {
     $PreviousInstall = Start-Process -FilePath $Previous -ArgumentList "/S" -Wait -PassThru
     if ($PreviousInstall.ExitCode -ne 0) { throw "The previous release's NSIS installer exited with $($PreviousInstall.ExitCode)" }
     if (-not (Test-Path -LiteralPath (Join-Path $InstallDirectory "Intern.exe") -PathType Leaf)) { throw "The previous release did not install Intern.exe in $InstallDirectory" }
+    # Every release with a Send to shortcut (alpha.11 on) named it Intern.lnk,
+    # so the check after this install that it is gone is a check of something.
+    if (-not (Test-Path -LiteralPath $OldSendToShortcut -PathType Leaf)) { throw "The previous release did not make its Send to shortcut: $OldSendToShortcut" }
     $PreviousRoot = @(Get-ChildItem -LiteralPath $InstallDirectory -File | Sort-Object Name)
     $PreviousLlama = @($PreviousRoot | Where-Object { $OldRootLlamaFiles -contains $_.Name })
     Write-Host ("Previous release installed: $($PreviousRoot.Count) files at the root, $($PreviousLlama.Count) of them its root llama.cpp build " +
@@ -71,6 +80,7 @@ try {
     if (-not [string]::Equals([IO.Path]::GetFullPath($SendToTarget), [IO.Path]::GetFullPath($App), [StringComparison]::OrdinalIgnoreCase)) {
         throw "Send to shortcut points at $SendToTarget, not $App"
     }
+    if (Test-Path -LiteralPath $OldSendToShortcut) { throw "The old Send to shortcut remains after install: $OldSendToShortcut" }
 
     $ManifestFiles = @(Get-ChildItem -LiteralPath $InstallDirectory -Recurse -File -Filter "runtime-assets.json")
     if ($ManifestFiles.Count -ne 1) { throw "Expected exactly one installed runtime-assets.json, got $($ManifestFiles.Count)" }
@@ -249,7 +259,9 @@ public static class InternSmokeWindow {
     if ($Uninstall.ExitCode -ne 0) { throw "NSIS uninstaller exited with $($Uninstall.ExitCode)" }
     Start-Sleep -Seconds 2
     if (Test-Path -LiteralPath $App) { throw "Application binary remains after uninstall" }
-    if (Test-Path -LiteralPath $SendToShortcut) { throw "Send to shortcut remains after uninstall: $SendToShortcut" }
+    foreach ($Shortcut in @($SendToShortcut, $OldSendToShortcut)) {
+        if (Test-Path -LiteralPath $Shortcut) { throw "Send to shortcut remains after uninstall: $Shortcut" }
+    }
     if ((Test-Path -LiteralPath $InstallDirectory) -and (Get-ChildItem -LiteralPath $InstallDirectory -Recurse -Force | Select-Object -First 1)) {
         throw "Installation files remain after uninstall: $InstallDirectory"
     }
