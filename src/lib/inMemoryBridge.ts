@@ -93,16 +93,33 @@ function isOwnName(party: string, own: string): boolean {
 /** A party as a filename carries it, without the trailing period a name segment cannot end in. */
 const nameSegment = (party: string) => party.replace(/[. ]+$/, '');
 
-/** The counterparty view of a seeded two-party proposal, composed as its name. */
+/**
+ * A legal form at the end of an organization's name, which the entity a name
+ * leads with is written without ("TenantCo Inc." leads as "TenantCo"), as the
+ * backend's NameView writes it. Only the entity loses it; the subject keeps
+ * the document's words.
+ */
+const LEGAL_FORM = /,?\s+(inc|incorporated|llc|l\.l\.c|ltd|limited|corp|corporation|co|plc|llp|gmbh|ag|a\/s|aps|ab|b\.?v|n\.?v|s\.?a|sas|sarl|pty ltd|pte ltd|sdn\.? bhd)\.?$/i;
+const entityOf = (party: string) => nameSegment(party).replace(LEGAL_FORM, '').trim();
+
+/**
+ * A seeded two-party proposal as the backend's NameView composes it once
+ * Settings names the organization: the date, the organization the document
+ * is filed for, then the subject with the other side - "2023-09-15 TenantCo
+ * - Lease Agreement with ABC Properties LLC". With no organization of the
+ * person's own in it the demo keeps the seeded name as it was: it stands in
+ * for the engine, and the rest of the window's journeys read that name.
+ */
 function seededName(name: SeedName, own: string[]): Pick<QueueItem, 'proposedFilename' | 'omittedParties'> {
   const mine = (party: string) => own.some((entry) => isOwnName(party, entry));
+  const firm = name.parties.find(mine);
   const others = name.parties.filter((party) => !mine(party));
-  const omitted = name.parties.filter(mine);
-  if (!omitted.length || !others.length) {
+  if (!firm || !others.length) {
     return { proposedFilename: `${name.stem} between ${nameSegment(name.parties[0])} and ${nameSegment(name.parties[1])}.${name.extension}` };
   }
-  // "between" needs two sides; the one left is "with" it.
-  return { proposedFilename: `${name.stem} with ${nameSegment(others[0])}.${name.extension}`, omittedParties: omitted };
+  const [date, ...type] = name.stem.split(' ');
+  // "between" needs two sides; with the firm leading, the one left is "with" it.
+  return { proposedFilename: `${date} ${entityOf(firm)} - ${type.join(' ')} with ${nameSegment(others[0])}.${name.extension}` };
 }
 
 /**

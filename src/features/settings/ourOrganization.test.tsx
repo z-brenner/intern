@@ -69,7 +69,7 @@ describe('your organization\'s names', () => {
     The queue must show the new name once Settings closes, not only after the
     next unrelated change happens to read it again.
   */
-  it('renames a waiting proposal by the other side as soon as it is saved', async () => {
+  it('leads a waiting proposal with the organization as soon as it is saved', async () => {
     render(<App bridge={createInMemoryBridge()} />);
     const lease = await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i });
     expect(lease).toHaveTextContent('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf');
@@ -82,10 +82,11 @@ describe('your organization\'s names', () => {
     fireEvent.change(within(dialog).getByLabelText('Your organizations'), { target: { value: 'TenantCo Inc.' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }));
 
-    await waitFor(() => expect(screen.getByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i })).toHaveTextContent('2023-09-15 Lease Agreement with ABC Properties LLC.pdf'));
+    await waitFor(() => expect(screen.getByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i })).toHaveTextContent('2023-09-15 TenantCo - Lease Agreement with ABC Properties LLC.pdf'));
     // The inspector follows the new proposal rather than offering the old
     // name to approve.
-    await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveValue('2023-09-15 Lease Agreement with ABC Properties LLC'));
-    expect(screen.getByRole('note', { name: 'Filed by the other side' })).toHaveTextContent('Left out as your organization: TenantCo Inc.');
+    await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveValue('2023-09-15 TenantCo - Lease Agreement with ABC Properties LLC'));
+    // The organization leads the name, so the panel has nothing left out to explain.
+    expect(screen.queryByRole('note', { name: 'Filed by the other side' })).not.toBeInTheDocument();
   });
 });

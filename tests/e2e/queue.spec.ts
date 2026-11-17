@@ -53,7 +53,7 @@ test('mixed batch can be reviewed, approved, and undone entirely in memory', asy
   await expect(page.getByRole('row', { name: /duplicate-invoice-a\.pdf/i })).toContainText('Needs review');
 });
 
-test('naming your organization in Settings files a waiting proposal by the other side', async ({ page }) => {
+test('naming your organization in Settings leads a waiting proposal with it', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
   const lease = page.getByRole('row', { name: /Lease Agreement - 123 Main St\.pdf/i });
@@ -63,22 +63,21 @@ test('naming your organization in Settings files a waiting proposal by the other
   const dialog = page.getByRole('dialog', { name: /Settings/i });
   await dialog.locator('summary', { hasText: 'How Intern names files' }).click();
   // One name per line; the blank line a list picks up is not a name.
-  await dialog.getByLabel('Your organization\'s names').fill('TenantCo Inc.\n\n');
+  await dialog.getByLabel('Your organizations').fill('TenantCo Inc.\n\n');
   await dialog.getByRole('button', { name: 'Save settings' }).click();
   await expect(dialog).toBeHidden();
 
-  // The queue shows the new name at once, by the counterparty alone, and the
-  // inspector says why the evidence names a party the name does not.
-  await expect(lease).toContainText('2023-09-15 Lease Agreement with ABC Properties LLC.pdf');
+  // The queue shows the new name at once: the organization, without its
+  // legal form, leads, and the other side follows the type.
+  await expect(lease).toContainText('2023-09-15 TenantCo - Lease Agreement with ABC Properties LLC.pdf');
   const inspector = await openDetails(page, 'Lease Agreement - 123 Main St.pdf');
   // The extension is locked beside the field; the field holds the name before it.
-  await expect(inspector.getByLabel('Filename')).toHaveValue('2023-09-15 Lease Agreement with ABC Properties LLC');
-  await expect(inspector.getByRole('note', { name: 'Filed by the other side' })).toHaveText('Left out as your organization: TenantCo Inc.');
-  await expect(inspector.getByText('TenantCo Inc.', { exact: true }).first()).toBeVisible();
+  await expect(inspector.getByLabel('Filename')).toHaveValue('2023-09-15 TenantCo - Lease Agreement with ABC Properties LLC');
+  await expect(inspector.getByRole('note', { name: 'Filed by the other side' })).toHaveCount(0);
 
   // Saved as the backend stores it.
   await page.getByRole('button', { name: /Settings/i }).click();
-  await expect(page.getByRole('dialog', { name: /Settings/i }).getByLabel('Your organization\'s names')).toHaveValue('TenantCo Inc.');
+  await expect(page.getByRole('dialog', { name: /Settings/i }).getByLabel('Your organizations')).toHaveValue('TenantCo Inc.');
 });
 
 /*

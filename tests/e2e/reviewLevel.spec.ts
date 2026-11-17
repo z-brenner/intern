@@ -41,7 +41,7 @@ test('choosing Balanced in Settings makes the lease ready with a note, the choic
   await expect(settings.balanced).not.toBeChecked();
   // It says what Balanced costs before anyone chooses it, and that it decides Rename all ready too.
   await expect(settings.level).toContainText('more of those names will be wrong');
-  await expect(settings.level).toContainText('Ready documents are the ones Rename all ready renames.');
+  await expect(settings.level).toContainText('Ready documents are the ones Rename all ready renames');
   await expect(settings.dialog.getByRole('checkbox', { name: 'Automatically rename ready documents' })).not.toBeChecked();
   // From the keyboard, as any pair of radio buttons: the arrow key moves to Balanced and chooses it.
   await settings.strict.focus();

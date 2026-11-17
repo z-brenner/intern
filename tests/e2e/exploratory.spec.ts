@@ -238,7 +238,7 @@ test('settings keeps optional choices collapsed, preserves typing, and discards 
   await expect(dialog.getByRole('radio', { name: /Hosted model/i })).toHaveCount(0);
 
   const naming = dialog.locator('summary', { hasText: 'How Intern names files' });
-  const names = dialog.getByLabel("Your organization's names");
+  const names = dialog.getByLabel('Your organizations');
   await expect(names).toBeHidden();
   // Keyboard navigation skips controls inside closed sections.
   await naming.focus();

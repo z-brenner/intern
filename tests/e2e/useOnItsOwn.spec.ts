@@ -606,6 +606,6 @@ for (const size of sizes) {
     await page.keyboard.press('Escape');
     if (await page.evaluate(() => window.matchMedia('(max-width: 1100px)').matches)) await expect(panel).toHaveCount(0);
     const dialog = (await settings(page, false)).root;
-    await expect(dialog.locator('.rule-state', { hasText: 'asks before filing' })).toHaveCount(2);
+    await expect(dialog.locator('.rule-state', { hasText: 'waits for your OK' })).toHaveCount(2);
   });
 }
