@@ -12933,3 +12933,61 @@ fn a_receipt_from_a_newer_build_does_not_empty_the_queue() {
         assert!(item.unsettled_receipt.is_none());
     }
 }
+
+/// Remembers the file name each source it is asked about carries.
+#[derive(Default)]
+struct NameReader {
+    names: Mutex<Vec<Option<String>>>,
+}
+
+impl AnalyzerBoundary for NameReader {
+    fn analyze(
+        &self,
+        source: &DocumentSource,
+        extension: &str,
+        existing_names: &[&str],
+    ) -> Result<DocumentAnalysis, ModelFailure> {
+        self.names.lock().unwrap().push(source.file_name.clone());
+        Ok(analyze_locally(
+            source,
+            proposal(0.94, false),
+            extension,
+            existing_names,
+        ))
+    }
+}
+
+/// The engine is handed the name the file has where the queue found it,
+/// which it may show the model as orientation. The worker reads bytes, not
+/// a name.
+#[test]
+fn the_analyzer_is_told_the_files_name() {
+    let temp = tempdir().unwrap();
+    let document = source(temp.path(), "Host Chair SOW John Smith.pdf");
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(
+        "Employment Agreement signed April 12, 2024 by John Smith and Acme Corporation.",
+    ))]));
+    let model = Arc::new(NameReader::default());
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&document, "named-hash");
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings.save(&AppSettings::default()).unwrap();
+    let pipeline = Pipeline::open(
+        temp.path().join("queue.sqlite3"),
+        worker,
+        Arc::clone(&model) as Arc<dyn AnalyzerBoundary>,
+        files,
+        Arc::new(RecordingEvents::default()),
+        settings,
+    )
+    .unwrap();
+
+    pipeline.enqueue_files(&[document]).unwrap();
+    pipeline.run_until_idle().unwrap();
+
+    assert_eq!(
+        *model.names.lock().unwrap(),
+        vec![Some("Host Chair SOW John Smith.pdf".to_owned())]
+    );
+    assert_eq!(pipeline.list().unwrap()[0].status, QueueStatus::Ready);
+}
