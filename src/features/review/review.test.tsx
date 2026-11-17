@@ -803,7 +803,7 @@ describe('review actions', () => {
     render(<App bridge={{ ...base, saveSettings }} />);
     fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
 
-    fireEvent.click(await screen.findByText('Naming and filing', { selector: 'summary' }));
+    fireEvent.click(await screen.findByText('How Intern names files', { selector: 'summary' }));
     const layout = await screen.findByLabelText('Arrange filed documents');
     expect(layout).toHaveValue('flat');
     fireEvent.change(layout, { target: { value: 'year_type' } });
