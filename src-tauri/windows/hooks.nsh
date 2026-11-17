@@ -12,7 +12,7 @@
 ; product name stays Intern (tauri.conf.json), because the template takes
 ; the install folder, the Start menu entry and the uninstall key from it,
 ; and an update has to land on those; so the shortcut's names are written
-; out here rather than taken from ${PRODUCTNAME}.
+; out here rather than taken from the product name.
 ;
 ; The template's own uninstall already removes the autostart value from the
 ; HKCU Run key, so nothing here touches it.
