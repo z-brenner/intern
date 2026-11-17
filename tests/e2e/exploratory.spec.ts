@@ -13,7 +13,7 @@
  */
 import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
-import { detailsToggle, openDetails, queueCell, untilSettled } from './grid';
+import { detailsToggle, moreAction, openDetails, queueCell, untilSettled } from './grid';
 
 const SHOTS = process.env.INTERN_SHOTS;
 if (SHOTS) mkdirSync(SHOTS, { recursive: true });
@@ -212,12 +212,16 @@ test('pause, resume, apply all ready, and discard waiting all report what they d
   await shot(page, 'completed-after-apply-all');
 
   await page.getByRole('button', { name: /^Queue/ }).click();
-  const more = page.getByRole('button', { name: 'More queue actions' });
+  const more = page.getByRole('button', { name: 'More actions' });
   if (await more.isVisible()) {
     await more.click();
-    await page.getByRole('menuitem', { name: /Discard waiting/i }).click();
-    await expect(page.getByRole('status', { name: 'Action status' })).toHaveText(/^Discarded \d+ waiting items?\.$/);
-    await shot(page, 'discard-waiting');
+    await page.getByRole('menuitem', { name: 'Clear queue…' }).click();
+    const question = page.getByRole('alertdialog', { name: 'Clear the queue?' });
+    await expect(question).toContainText('Your files stay where they are');
+    await shot(page, 'clear-queue-question');
+    await question.getByRole('button', { name: 'Clear queue' }).click();
+    await expect(page.getByRole('status', { name: 'Action status' })).toHaveText(/^Cleared \d+ documents? from the queue\./);
+    await shot(page, 'clear-queue');
   }
 });
 
@@ -340,7 +344,7 @@ test('keyboard_only_review_of_five_items', async ({ page }) => {
 
 test('history lists finished operations newest first', async ({ page }) => {
   await page.goto('/');
-  // History lives under Completed, beside Clear history.
+  // History lives under Completed, beside More and its Clear completed.
   await page.getByRole('button', { name: /^Completed/ }).click();
   const history = page.getByRole('button', { name: /^History$/ });
   await expect(history).toBeVisible();
@@ -403,7 +407,7 @@ test('no console errors or failed requests during an ordinary session', async ({
   await openDetails(page, 'Employment Agreement - John Smith.pdf');
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: /need(s)? review$/ }).click();
-  await page.getByRole('button', { name: 'Copy selection' }).click();
+  await (await moreAction(page, 'Copy selection')).click();
   await page.getByRole('button', { name: /^Completed/ }).click();
   await page.getByRole('button', { name: /^Queue/ }).click();
   await page.getByRole('button', { name: /Settings/i }).click();

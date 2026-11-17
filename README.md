@@ -225,15 +225,27 @@ first seconds after opening (5 seconds, measured in the browser build; no
 longer at 9), and Intern killed at once. Look at a name that came back
 before you file it. The cursor is put in no field for what comes back. What
 was typed for a document that is no longer in the queue is dropped, and
-**Discard waiting** and **Clear history** drop it at once for the documents
+**Clear queue** and **Clear completed** drop it at once for the documents
 they remove. A name longer than 1,000 characters or a description longer
 than 5,000 is not stored, and lasts only while Intern is open.
 In a window narrower than 1100 pixels the panel is a drawer over the queue,
-and it opens only when you ask for it there. Everything still in progress is
-in **Queue**, with a count of what needs review in its toolbar. The table selects cells like a
-spreadsheet (click, Shift+click, drag, Ctrl+A), and Ctrl+C or **Copy** puts
-them on the clipboard as both tab-separated text and an HTML table, so they
-paste into Excel or Google Sheets one value to a cell. Status is never copied.
+and it opens only when you ask for it there. A double-click on a row, or
+Enter on it, opens the panel for that row at its name. Everything still in
+progress is in **Queue**, with a count of what needs review in its toolbar. The table selects cells like a
+spreadsheet (click, Shift+click, drag, Ctrl+A), and Ctrl+C or **Copy** in the
+**More** (…) menu puts them on the clipboard as both tab-separated text and an
+HTML table, so they paste into Excel or Google Sheets one value to a cell.
+Status is never copied.
+
+To start from scratch, **More › Clear queue** takes every document that is not
+filed out of the queue - waiting, being read, ready, in review or failed - after
+asking; **More › Clear completed** does the same for the Completed list and its
+rename history. Neither deletes or moves a file. A document Intern had renamed
+`NEEDS REVIEW - <name>` gets its own name back. Cleared documents stay in the
+Queue folder and are not picked up again unless they change, or you add them
+again with **Add files**. A document whose earlier rename did not finish, or
+whose own name cannot be given back because a program has it open, is kept,
+and Intern says how many and why.
 
 Every rename carries a date. A name that does not start with the document's
 date as `YYYY-MM-DD` is refused, in the inspector and again in the queue, so

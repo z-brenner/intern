@@ -2,6 +2,7 @@ import { CircleCheck, ClipboardCopy, Ellipsis, Info, PanelRight, Trash2, X } fro
 import { useDeferredValue, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { AppHeader } from './components/AppHeader';
+import { ClearDialog } from './components/ClearDialog';
 import { DropZone } from './components/DropZone';
 import { FolderSetupFlow } from './components/FolderSetupFlow';
 import { HistoryDialog } from './components/HistoryDialog';
@@ -24,7 +25,7 @@ import { installingLabel } from './lib/format';
 import { isTextField } from './lib/textField';
 import { useUndoOnlyWhereFocused } from './lib/undoWhereFocused';
 import { describeQueueStop } from './lib/reasons';
-import type { DesktopBridge, LaunchReportSource, SelectionBoundary, SelectionResult, UpdateProgressListener, UpdateStatus } from './lib/bridge';
+import type { ClearQueueReport, DesktopBridge, LaunchReportSource, SelectionBoundary, SelectionResult, UpdateProgressListener, UpdateStatus } from './lib/bridge';
 import { createInMemoryBridge } from './lib/inMemoryBridge';
 import type { DragState, TauriSelectionBoundary } from './lib/tauriBridge';
 import { useMediaQuery } from './lib/useMediaQuery';
@@ -490,9 +491,6 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // while a person is watching the file move. Install waits for it instead:
   // here, before the click, and in installUpdateBetweenRenames after it.
   const renameApplying = items.some(applyingRename);
-  // Only items that have not started. Anything mid-flight, awaiting a decision,
-  // or already renamed is deliberately out of reach of the discard action.
-  const waitingItems = items.filter((item) => item.status === 'waiting');
   const queueStatus = queueStatusAnnouncement(items, paused);
   // The run as a whole, for the strip above the table and the taskbar
   // button; a run of several that ends with the window in the background
@@ -1026,6 +1024,39 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   const closeSettings = () => { flushSync(() => setSettingsOpen(false)); settingsTrigger.current?.focus(); };
   const openHistory = (trigger: HTMLButtonElement) => { focusRestoreVersion.current += 1; historyTrigger.current = trigger; setHistoryOpen(true); };
   const closeHistory = () => { flushSync(() => setHistoryOpen(false)); historyTrigger.current?.focus(); };
+  // An entry of the More menu that is done at once: the menu closes, and the
+  // focus goes back to the More button rather than with the entry to nothing.
+  const closeMoreTo = (entry: HTMLElement) => {
+    entry.closest('.more-menu')?.querySelector<HTMLButtonElement>('button')?.focus();
+    setMoreOpen(false);
+  };
+  // Clear queue and Clear completed ask first, in a dialog that says how
+  // many documents go and what becomes of their files (ClearDialog).
+  const [clearing, setClearing] = useState<QueueView>();
+  const clearTrigger = useRef<HTMLElement | null>(null);
+  const askToClear = (which: QueueView, trigger: HTMLElement) => {
+    setMoreOpen(false);
+    focusRestoreVersion.current += 1;
+    // The menu entry goes with its menu; the More button it was under takes the focus back.
+    clearTrigger.current = trigger.closest('.more-menu')?.querySelector<HTMLButtonElement>('button') ?? null;
+    setClearing(which);
+  };
+  const cancelClear = () => { flushSync(() => setClearing(undefined)); clearTrigger.current?.focus(); };
+  // Both say what they did where every action does, and in a toast, and
+  // put the focus on the view's own button: the More button can be gone with
+  // the rows it was for.
+  const clearView = async (which: QueueView) => {
+    flushSync(() => setClearing(undefined));
+    const before = items;
+    let report: ClearQueueReport | undefined;
+    const done = which === 'queue'
+      ? await runQueueAction(async () => { report = await bridge.clearQueue(); }, () => clearedQueueText(report!))
+      : await runQueueAction(() => bridge.clearHistory(), `Cleared ${completedCount} completed ${completedCount === 1 ? 'document' : 'documents'}. The files are where they were.`);
+    if (!done) { clearTrigger.current?.focus(); return; }
+    forgetTypedForGone(before, done.read);
+    showToast('done', which === 'queue' ? clearedQueueText(report!) : `Cleared ${completedCount} completed ${completedCount === 1 ? 'document' : 'documents'}.`);
+    queueMicrotask(() => document.querySelector<HTMLButtonElement>(`.view-switch button[data-view="${which}"]`)?.focus());
+  };
   // While Settings or Rename history is open, nothing behind it can take the
   // focus: not Tab or Shift+Tab after a press on the dialog's heading or its
   // backdrop, not the queue putting the focus back on Rename all ready when
@@ -1036,7 +1067,10 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // documents with the dialog still open. Inert, the window behind is out of
   // reach of the focus, the keys and a screen reader, as the dialog says it
   // is (aria-modal).
-  const behindADialog = settingsOpen || historyOpen;
+  const behindADialog = settingsOpen || historyOpen || clearing !== undefined;
+  // What Clear completed takes: the filed documents, and - as it always has - the failed ones.
+  const completedCount = items.filter((item) => item.status === 'completed').length;
+  const failedCount = items.filter((item) => item.status === 'failed').length;
   // Keep picker, drop resolution, import, and refresh in the same error and
   // busy boundary. A state-only lock misses two events before React rerenders.
   // Every add - the pickers, a drop, the drop zone - copies into the input
@@ -1118,7 +1152,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // selected item is the only one left.
   const goToNextUndecided = nextToDecide && nextToDecide.id !== selected?.id ? () => openItem(nextToDecide) : undefined;
   useReviewShortcuts({
-    enabled: modelReady(model.setup) && !folderSetupOpen && !settingsOpen && !historyOpen,
+    enabled: modelReady(model.setup) && !folderSetupOpen && !settingsOpen && !historyOpen && clearing === undefined,
     rows: visible,
     selected,
     inspector: inspectorHandle,
@@ -1269,37 +1303,40 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
           </button>}
         </div>
         <div className="queue-actions">
-          {/*
-            Copies what Ctrl+C copies: the selected cells, or with none
-            selected, the whole table as shown with its headings. The label
-            says which, so nobody pastes four hundred rows expecting three.
-          */}
-          <button type="button" disabled={visible.length === 0} onClick={clipboard.copy}><Icon icon={ClipboardCopy} />{clipboard.hasSelection ? 'Copy selection' : 'Copy table'}</button>
           <button ref={detailsButton} type="button" className="details-toggle" aria-expanded={panelOpen || detailsEmpty} aria-controls={panelOpen || detailsEmpty ? REVIEW_PANEL_ID : undefined} disabled={!selected && !detailsEmpty}
             title={selected ? 'Show or hide details for the selected row. Enter, F2 or a double-click on a row opens them at its name.' : 'Double-click a row to see its details'} onClick={() => panelOpen || detailsEmpty ? closeDetails(true) : rememberDetails(true)}><Icon icon={PanelRight} />Details</button>
           {/*
-            The way out of a folder chosen by mistake. Pointing the queue at a
-            large directory used to be unrecoverable from inside the app:
-            pausing stops it taking new work but leaves the backlog, Clear
-            history only touches finished items, and dropping a waiting item
-            was one click each. Four hundred items meant four hundred clicks,
-            so the count is shown here to make the scale of what is being
-            dropped explicit. It cannot be undone, so it sits behind More,
-            away from the primary button it used to stand beside.
+            What is done to the table now and then, in both views, behind one
+            button: Copy, and the view's Clear, last and set apart. The
+            toolbar holds the view's own action and the panel's toggle, and
+            nothing in it changes width as cells are selected - "Copy table"
+            becoming "Copy selection" under the first click of a double-click
+            wrapped the toolbar by a line at some widths and moved every row
+            down under the second.
           */}
-          {view === 'queue' && waitingItems.length > 0 && <div className="more-menu" onKeyDown={(event) => { if (event.key === 'Escape' && moreOpen) { event.stopPropagation(); setMoreOpen(false); event.currentTarget.querySelector<HTMLButtonElement>('button')?.focus(); } }}>
-            <button type="button" className="icon-button" aria-label="More queue actions" aria-haspopup="menu" aria-expanded={moreOpen} title="More queue actions" onClick={() => setMoreOpen(!moreOpen)}><Icon icon={Ellipsis} /></button>
-            {moreOpen && <div role="menu" aria-label="More queue actions">
-              <button type="button" data-acts role="menuitem" aria-label="Discard waiting items" disabled={actionPending} onClick={() => void (async () => { setMoreOpen(false); const before = items; const dropped = waitingItems.length; const done = await runQueueAction(() => bridge.discardWaiting(), `Discarded ${dropped} waiting ${dropped === 1 ? 'item' : 'items'}.`); if (done) forgetTypedForGone(before, done.read); })()}><Icon icon={Trash2} />Discard waiting <span>{waitingItems.length}</span></button>
+          {filtered.length > 0 && <div className="more-menu" onKeyDown={(event) => { if (event.key === 'Escape' && moreOpen) { event.stopPropagation(); setMoreOpen(false); event.currentTarget.querySelector<HTMLButtonElement>('button')?.focus(); } }}>
+            <button type="button" className="icon-button" aria-label="More actions" aria-haspopup="menu" aria-expanded={moreOpen} title="More actions" onClick={() => setMoreOpen(!moreOpen)}><Icon icon={Ellipsis} /></button>
+            {moreOpen && <div role="menu" aria-label="More actions">
+              {/*
+                Copies what Ctrl+C copies: the selected cells, or with none
+                selected, the whole table as shown with its headings. The label
+                says which, so nobody pastes four hundred rows expecting three.
+              */}
+              <button type="button" role="menuitem" disabled={visible.length === 0} onClick={(event) => { closeMoreTo(event.currentTarget); clipboard.copy(); }}><Icon icon={ClipboardCopy} />{clipboard.hasSelection ? 'Copy selection' : 'Copy table'}<kbd className="shortcut" aria-hidden="true">Ctrl+C</kbd></button>
+              <hr role="separator" />
+              {/*
+                The way to start again: every document out of the view, after
+                a question that says how many and what becomes of their files.
+                Discard waiting, for a folder chosen by mistake, was one more
+                entry here doing part of the same; Clear queue does it all.
+              */}
+              <button type="button" role="menuitem" className="danger" disabled={actionPending} onClick={(event) => askToClear(view, event.currentTarget)}><Icon icon={Trash2} />{view === 'queue' ? 'Clear queue…' : 'Clear completed…'}</button>
             </div>}
           </div>}
           {view === 'queue' && readyItems.length > 0 && <button type="button" data-acts className="primary" aria-label="Rename all ready" disabled={actionPending}
             title={readyUntyped.length < readyItems.length ? `Renames the ${readyUntyped.length} ready ${readyUntyped.length === 1 ? 'document' : 'documents'} as Intern proposed. ${readyItems.length - readyUntyped.length} with a name or a description you typed ${readyItems.length - readyUntyped.length === 1 ? 'is' : 'are'} left for you to file.` : undefined}
             onClick={() => void applyAllReady()}>Rename all ready <span>{readyUntyped.length}</span></button>}
-          {view === 'completed' && filtered.length > 0 && <>
-            <button type="button" disabled={actionPending} onClick={(event) => openHistory(event.currentTarget)}>History</button>
-            <button type="button" data-acts disabled={actionPending} onClick={() => void (async () => { const before = items; const done = await runQueueAction(() => bridge.clearHistory(), 'History cleared.'); if (!done) return; forgetTypedForGone(before, done.read); queueMicrotask(() => document.querySelector<HTMLButtonElement>('.view-switch button[data-view="completed"]')?.focus()); })()}>Clear history</button>
-          </>}
+          {view === 'completed' && filtered.length > 0 && <button type="button" disabled={actionPending} onClick={(event) => openHistory(event.currentTarget)}>History</button>}
         </div>
       </div>
       {/* A stopped queue says why in its own note above; "Reading…" would contradict it. */}
@@ -1350,6 +1387,16 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     </div>
     {historyOpen && <HistoryDialog bridge={bridge} selection={selection} filedItems={new Set(items.filter((item) => item.status === 'completed').map((item) => item.id))}
       notes={new Map(renamedWithNotes.map((item) => [item.id, { label: checkText(item), text: itemNote(item)?.text ?? '' }]))} onClose={closeHistory} />}
+    {clearing === 'queue' && <ClearDialog title="Clear the queue?" confirm="Clear queue" busy={actionPending} onConfirm={() => void clearView('queue')} onCancel={cancelClear}>
+      <p>This takes {queueCountText(items.filter((item) => item.status !== 'completed').length)} out of Intern's queue, including any being read or waiting for your review. Completed documents stay as they are.</p>
+      <p>Your files stay where they are{inputName ? <>, in <strong>{inputName}</strong></> : ''}. Intern won't pick them up again unless they change, or you add them again with Add files.</p>
+      <p><strong>This can't be undone.</strong></p>
+    </ClearDialog>}
+    {clearing === 'completed' && <ClearDialog title="Clear completed?" confirm="Clear completed" busy={actionPending} onConfirm={() => void clearView('completed')} onCancel={cancelClear}>
+      <p>This takes {queueCountText(completedCount)} off the Completed list, with {completedCount === 1 ? 'its' : 'their'} rename history{failedCount > 0 ? `, and the ${failedCount === 1 ? 'one' : failedCount} in the queue that failed` : ''}.</p>
+      <p>Your files stay where they are: filed documents keep their new names. You won't be able to undo these renames from Intern.</p>
+      <p><strong>This can't be undone.</strong></p>
+    </ClearDialog>}
     {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={saveFromSettings} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} typed={typedNotFiled} />}
   </main>;
 }
@@ -1432,6 +1479,27 @@ const RENAME_SETTLE_POLL_MS = 250;
 function matchesQuery(item: QueueItem, query: string) {
   return [item.originalFilename, item.proposedFilename, item.description]
     .some((text) => text !== undefined && text.toLowerCase().includes(query));
+}
+
+/** "all 8 documents", "the 1 document". */
+function queueCountText(count: number) {
+  return count === 1 ? 'the 1 document' : `all ${count} documents`;
+}
+
+/**
+ * What Clear queue did: how many went, that their files stayed, and - only
+ * when some were kept - how many stay in the queue and why.
+ */
+function clearedQueueText({ cleared, unsettled, busy, stillMarked }: ClearQueueReport) {
+  const went = cleared === 0 ? 'Nothing was cleared.' : `Cleared ${cleared} ${cleared === 1 ? 'document' : 'documents'} from the queue. The files are where they were.`;
+  const kept = unsettled + busy + stillMarked;
+  if (!kept) return went;
+  const why = [
+    unsettled ? `${unsettled} ${unsettled === 1 ? 'needs its' : 'need their'} files checked first` : '',
+    busy ? `${busy} ${busy === 1 ? 'was' : 'were'} being renamed` : '',
+    stillMarked ? `${stillMarked} ${stillMarked === 1 ? 'is' : 'are'} open in another program, so ${stillMarked === 1 ? 'its' : 'their'} own name could not be given back` : '',
+  ].filter(Boolean).join('; ');
+  return `${went} ${kept} ${kept === 1 ? 'stays' : 'stay'} in the queue: ${why}.`;
 }
 
 /** "Renamed 3 documents." */
