@@ -105,7 +105,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .product { position: relative; display: flex; align-items: center; gap: 16px; min-width: 0; }
 .product strong { font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: -.2px; line-height: 1; color: var(--brand-ink); white-space: nowrap; }
 .brand { display: flex; align-items: baseline; min-width: 0; }
-.brand-tag { font-size: 13px; font-weight: 400; color: var(--text-muted); margin-left: 10px; white-space: nowrap; }
+/* The acronym, spelled out beside the name. Where the header is short of
+   room it ends in an ellipsis rather than run under the privacy badge, and
+   at 1100px or less it goes (narrow, below), so the buttons keep their
+   one-line labels. */
+.brand-tag { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 13px; font-weight: 400; color: var(--text-muted); margin-left: 10px; white-space: nowrap; }
 /* The privacy posture is a standing fact about the app, not a second
    headline. Set as a badge it stays legible without competing with the mark,
    and it is a button: what it promises can be looked into. */
@@ -743,6 +747,7 @@ button.reason-chip:hover { border-color: var(--review-edge-hover); background: v
   .inspector { position: fixed; z-index: 3; right: 0; top: 48px; bottom: 0; width: 370px; background: var(--surface); box-shadow: -16px 0 40px color-mix(in srgb, black 16%, transparent); }
   .header-actions button { padding: 0 9px; }
   .header-note { display: none; }
+  .brand-tag { display: none; }
 }
 
 @media (max-width: 800px) {
