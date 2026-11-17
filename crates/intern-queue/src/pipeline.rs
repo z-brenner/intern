@@ -6369,13 +6369,13 @@ impl Pipeline {
     ///
     /// The documents stay in the Queue folder, and the intake watcher is not
     /// to hand them over again as they are: the claim each was handed over by
-    /// is marked set aside, durably, so even a watcher started after this
-    /// - which never saw them in the queue - closes the claim as kept,
-    /// as Keep original's is (see `QueueStore::intake_claim_set_aside`). A
-    /// document that changes - saved again, renamed, put back under another
-    /// name - is a new document to the watcher and comes in as one; and
-    /// adding the folder's documents on purpose (Add files, or the Queue
-    /// folder's own add) takes them in again.
+    /// is marked set aside, durably, so even a watcher started after this,
+    /// which never saw them in the queue, closes the claim as kept, as Keep
+    /// original's is (see `QueueStore::intake_claim_set_aside`). A document
+    /// that changes (saved again, renamed, put back under another name) is a
+    /// new document to the watcher and comes in as one; and adding the
+    /// folder's documents on purpose (Add files, or the Queue folder's own
+    /// add) takes them in again.
     pub fn clear_queue(&self) -> PipelineResult<ClearedQueue> {
         let mut outcome = ClearedQueue::default();
         // What waits goes first, so the queue has nothing left to start on
