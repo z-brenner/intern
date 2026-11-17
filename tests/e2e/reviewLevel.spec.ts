@@ -18,7 +18,7 @@ const LEASE = 'Lease Agreement - 123 Main St.pdf';
 async function levelInSettings(page: Page) {
   await page.getByRole('button', { name: 'Settings' }).click();
   const dialog = page.getByRole('dialog', { name: 'Settings' });
-  await dialog.locator('summary', { hasText: 'Naming and filing' }).click();
+  await dialog.locator('summary', { hasText: 'How Intern names files' }).click();
   const level = dialog.getByRole('group', { name: 'Which documents are ready' });
   await expect(level).toBeVisible();
   return { dialog, level, strict: level.getByRole('radio', { name: /^Strict/ }), balanced: level.getByRole('radio', { name: /^Balanced/ }) };

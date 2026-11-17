@@ -13289,3 +13289,223 @@ fn an_organization_the_name_leads_with_is_respelled_as_its_party_is() {
         "the firm's name is Settings' to give"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Clear queue
+// ---------------------------------------------------------------------------
+
+/// Clear queue takes every document that is not filed out of the queue -
+/// waiting, ready, canceled - and touches no file: each is where it was. The
+/// filed document stays filed, in Completed.
+#[test]
+fn clear_queue_takes_out_everything_not_filed_and_leaves_every_file_where_it_is() {
+    let temp = tempdir().unwrap();
+    let paths = ["filed.pdf", "ready.pdf", "canceled.pdf", "waiting.pdf"]
+        .map(|name| source(temp.path(), name));
+    let pipeline = reviewed_queue(temp.path(), Arc::new(StdFileSystem), 3);
+    let filed = ready_document(&pipeline, &paths[0]);
+    pipeline
+        .approve(filed, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    let ready = ready_document(&pipeline, &paths[1]);
+    let canceled = ready_document(&pipeline, &paths[2]);
+    pipeline.cancel(canceled).unwrap();
+    let waiting = pipeline
+        .enqueue_files(std::slice::from_ref(&paths[3]))
+        .unwrap()
+        .remove(0)
+        .id;
+    assert_eq!(status_of(&pipeline, waiting), QueueStatus::Queued);
+
+    let outcome = pipeline.clear_queue().unwrap();
+
+    assert_eq!(outcome.cleared, 3);
+    assert_eq!(outcome.kept(), 0);
+    let left = pipeline.list().unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].id, filed);
+    assert_eq!(left[0].status, QueueStatus::Completed);
+    assert!(!paths[0].exists(), "the filed document stays filed");
+    for path in &paths[1..] {
+        assert!(path.exists(), "{} is where it was", path.display());
+    }
+    assert!(
+        ![ready, canceled, waiting]
+            .iter()
+            .any(|id| left.iter().any(|item| item.id == *id))
+    );
+    // Nothing to clear is no error.
+    assert_eq!(pipeline.clear_queue().unwrap().cleared, 0);
+}
+
+/// A document whose filing did not finish - its copy published, its
+/// original left undeleted - has files that need checking, and Remove asks
+/// to be confirmed for it. Clear queue keeps it and says so; the rest go.
+#[test]
+fn clear_queue_keeps_a_document_whose_files_need_checking() {
+    let temp = tempdir().unwrap();
+    let folders = ["a", "b"].map(|folder| {
+        let folder = temp.path().join(folder);
+        fs::create_dir_all(&folder).unwrap();
+        folder
+    });
+    let parked_path = source(&folders[0], "scan.pdf");
+    let ready_path = source(&folders[1], "letter.pdf");
+    let filesystem = Arc::new(UndeletableOriginalFileSystem::default());
+    let pipeline = reviewed_queue(temp.path(), filesystem.clone(), 2);
+    let parked = ready_document(&pipeline, &parked_path);
+    let ready = ready_document(&pipeline, &ready_path);
+    filesystem.refuse.store(true, Ordering::SeqCst);
+    pipeline
+        .approve(parked, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap_err();
+    assert_eq!(
+        item_of(&pipeline, parked).error_code,
+        Some(ErrorCode::SourceDeleteFailed)
+    );
+
+    let outcome = pipeline.clear_queue().unwrap();
+
+    assert_eq!(outcome.cleared, 1);
+    assert_eq!(outcome.unsettled, 1);
+    assert_eq!(outcome.kept(), 1);
+    let left = pipeline.list().unwrap();
+    assert_eq!(
+        left.iter().map(|item| item.id).collect::<Vec<_>>(),
+        vec![parked]
+    );
+    assert!(!left.iter().any(|item| item.id == ready));
+    assert!(ready_path.exists());
+}
+
+/// The document being read when the queue is cleared is stopped, as Cancel
+/// stops it, and goes with the rest.
+#[test]
+fn clear_queue_stops_the_document_being_read() {
+    let temp = tempdir().unwrap();
+    let reading = source(temp.path(), "reading.pdf");
+    let next = source(temp.path(), "next.pdf");
+    let worker = Arc::new(FakeWorker::blocking(Ok(parsed("unused"))));
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&reading, "reading-hash");
+    files.trust(&next, "next-hash");
+    let pipeline = Arc::new(pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        Arc::new(FakeModel::new(vec![])),
+        files,
+        AppSettings::default(),
+    ));
+    pipeline.enqueue_files(&[reading, next]).unwrap();
+    let running = Arc::clone(&pipeline);
+    let join = thread::spawn(move || running.run_next());
+    while worker.active.load(Ordering::SeqCst) == 0 {
+        thread::yield_now();
+    }
+
+    let outcome = pipeline.clear_queue().unwrap();
+    let _ = join.join().unwrap();
+
+    assert_eq!(worker.cancellations.load(Ordering::SeqCst), 1);
+    assert_eq!(outcome.cleared, 2, "{outcome:?}");
+    assert!(pipeline.list().unwrap().is_empty());
+    // Nothing is left to start on.
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 1);
+}
+
+/// What the intake watcher asks of a claim whose document was cleared: it
+/// was set aside by a person, so the watcher closes the claim as kept - even
+/// one started since, which never saw the document in the queue - and does
+/// not hand the document over again as it is. Removed one at a time, or
+/// still in the queue, a claim is not set aside.
+#[test]
+fn a_cleared_documents_claim_is_set_aside_for_the_intake_watcher() {
+    let temp = tempdir().unwrap();
+    let paths = ["cleared.pdf", "removed.pdf", "filed.pdf"].map(|name| source(temp.path(), name));
+    let pipeline = reviewed_queue(temp.path(), Arc::new(StdFileSystem), 3);
+    let cleared = ready_document(&pipeline, &paths[0]);
+    let removed = ready_document(&pipeline, &paths[1]);
+    let filed = ready_document(&pipeline, &paths[2]);
+    pipeline
+        .approve(filed, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    for (key, id) in [("cleared", cleared), ("removed", removed), ("filed", filed)] {
+        pipeline.record_intake_claim(key, id).unwrap();
+    }
+    pipeline.remove(removed, false).unwrap();
+
+    pipeline.clear_queue().unwrap();
+
+    assert!(matches!(
+        pipeline.find_by_intake_claim("cleared").unwrap(),
+        Some(None)
+    ));
+    assert!(pipeline.intake_claim_set_aside("cleared").unwrap());
+    assert!(!pipeline.intake_claim_set_aside("removed").unwrap());
+    assert!(!pipeline.intake_claim_set_aside("filed").unwrap());
+    assert!(!pipeline.intake_claim_set_aside("never-recorded").unwrap());
+    // It outlives a restart: it is in the queue's own database.
+    drop(pipeline);
+    let store = QueueStore::open(temp.path().join("queue.sqlite3")).unwrap();
+    assert!(store.intake_claim_set_aside("cleared").unwrap());
+}
+
+/// A document Intern could not read was renamed `NEEDS REVIEW - <name>`
+/// where it lies. Cleared, it gets its own name back first, as Keep original
+/// gives it - a file left under that name with no row behind it would be
+/// skipped by every scan for good. One whose name cannot be given back now
+/// (a program has it open) is kept, under the mark, and said so.
+#[test]
+fn clear_queue_gives_an_unreadable_document_its_own_name_back_or_keeps_it() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("Inbox");
+    fs::create_dir_all(&inbox).unwrap();
+    let inbox = inbox.canonicalize().unwrap();
+    let path = source(&inbox, "locked.pdf");
+    let worker = Arc::new(FakeWorker::new(vec![Err(WorkerFailure::reported(
+        "PASSWORD_PROTECTED",
+        "encrypted",
+        false,
+    ))]));
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings
+        .save(&AppSettings {
+            intake_folder: inbox.to_string_lossy().into_owned(),
+            intake_enabled: true,
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let filesystem = Arc::new(HeldOpenFileSystem::default());
+    let pipeline = Pipeline::with_file_system(
+        temp.path().join("queue.sqlite3"),
+        worker,
+        Arc::new(FakeModel::new(vec![])),
+        Arc::new(RecordingEvents::default()),
+        settings,
+        filesystem.clone(),
+    )
+    .unwrap();
+    let id = pipeline
+        .enqueue_files(std::slice::from_ref(&path))
+        .unwrap()
+        .remove(0)
+        .id;
+    pipeline.run_until_idle().unwrap();
+    let marked = inbox.join("NEEDS REVIEW - locked.pdf");
+    assert_eq!(item_of(&pipeline, id).status, QueueStatus::NeedsReview);
+    assert!(marked.exists() && !path.exists());
+
+    filesystem.held.store(true, Ordering::SeqCst);
+    let kept = pipeline.clear_queue().unwrap();
+    assert_eq!((kept.cleared, kept.still_marked), (0, 1));
+    assert_eq!(item_of(&pipeline, id).status, QueueStatus::NeedsReview);
+    assert!(marked.exists());
+
+    filesystem.held.store(false, Ordering::SeqCst);
+    let cleared = pipeline.clear_queue().unwrap();
+    assert_eq!((cleared.cleared, cleared.kept()), (1, 0));
+    assert!(pipeline.list().unwrap().is_empty());
+    assert!(path.exists(), "its own name back");
+    assert!(!marked.exists());
+}

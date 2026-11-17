@@ -22,8 +22,8 @@ import { openDetails } from './grid';
   behind it.
 */
 
-const CONTOSO = 'Use on its own: Contoso Worldwide, Inc. written as Contoso';
-const RIDGELINE = 'Use on its own: Ridgeline Cartography LLC written as Ridgeline Cartography';
+const CONTOSO = 'Always use: Contoso Worldwide, Inc. written as Contoso';
+const RIDGELINE = 'Always use: Ridgeline Cartography LLC written as Ridgeline Cartography';
 
 type Point = { x: number; y: number };
 type Surface = {
@@ -88,7 +88,7 @@ const seenWhole = (part: Locator) => part.evaluate((element) => {
 async function outOfSight(question: Locator) {
   const parts: [string, Locator][] = [
     ['the sentence', question.locator('p')], ['the field', question.getByRole('textbox')],
-    ['the yes', question.getByRole('button', { name: 'Use on its own' })], ['Cancel', question.getByRole('button', { name: 'Cancel' })],
+    ['the yes', question.getByRole('button', { name: 'Always use' })], ['Cancel', question.getByRole('button', { name: 'Cancel' })],
   ];
   const hidden: string[] = [];
   for (const [name, part] of parts) if (!await seenWhole(part)) hidden.push(name);
@@ -119,7 +119,7 @@ for (const size of sizes) {
     const before = await surface.checked();
     const question = root.getByRole('group', { name: CONTOSO });
     const field = question.getByRole('textbox');
-    const yes = question.getByRole('button', { name: 'Use on its own' });
+    const yes = question.getByRole('button', { name: 'Always use' });
     const takenBack = async (what: string) => {
       await page.waitForTimeout(150);
       expect(await surface.checked(), what).toBe(before);
@@ -205,7 +205,7 @@ for (const size of sizes) {
 const offTheField: [string, (page: Page, surface: Surface, question: Locator) => Promise<void>][] = [
   ['a press on its waiting yes', async (page, surface, question) => {
     await (await actionInSight(surface, CONTOSO)).click();
-    const at = await centre(question.getByRole('button', { name: 'Use on its own' }));
+    const at = await centre(question.getByRole('button', { name: 'Always use' }));
     expect(await under(page, at)).toBe('the yes');
     await page.mouse.click(at.x, at.y);
   }],
@@ -403,7 +403,7 @@ test('a paste puts nothing in the field', async ({ page, context }) => {
   await page.keyboard.press('Control+V');
   await page.keyboard.press('Shift+Insert');
   await expect(field).toHaveValue('');
-  await expect(root.getByRole('group', { name: CONTOSO }).getByRole('button', { name: 'Use on its own' })).toBeDisabled();
+  await expect(root.getByRole('group', { name: CONTOSO }).getByRole('button', { name: 'Always use' })).toBeDisabled();
   await page.keyboard.press('Escape');
   const machine = await editedBehind(root);
   await machine.focus();
@@ -430,7 +430,7 @@ test('a word put in at once with no keys for it puts nothing in the field, and a
   };
   const question = root.getByRole('group', { name: CONTOSO });
   const field = question.getByRole('textbox');
-  const yes = question.getByRole('button', { name: 'Use on its own' });
+  const yes = question.getByRole('button', { name: 'Always use' });
 
   await (await actionInSight(surface, CONTOSO)).click();
   await expect(field).toBeFocused();
@@ -478,7 +478,7 @@ test.describe('with a touch screen', () => {
       const surface = await settings(page);
       const before = await surface.checked();
       const question = surface.root.getByRole('group', { name: CONTOSO });
-      const yes = question.getByRole('button', { name: 'Use on its own' });
+      const yes = question.getByRole('button', { name: 'Always use' });
       for (const gap of [100, 650]) {
         const at = await centre(await actionInSight(surface, CONTOSO));
         await page.touchscreen.tap(at.x, at.y);
@@ -566,7 +566,7 @@ for (const size of [{ width: 1280, height: 720 }, { width: 800, height: 600 }]) 
   test(`a press on "Use on its own" in Settings moves nothing, at ${size.width}x${size.height}`, async ({ page }) => {
     await page.setViewportSize(size);
     const { root, scroller } = await settings(page);
-    const labels = await root.getByRole('button', { name: /^Use on its own:/ }).evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label') ?? ''));
+    const labels = await root.getByRole('button', { name: /^Always use:/ }).evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label') ?? ''));
     expect(labels).toHaveLength(2);
     let reaching = 0;
     for (const label of labels) {
@@ -591,9 +591,9 @@ for (const size of sizes) {
     const panel = await openDetails(page, 'SOW final v3.pdf');
     const why = panel.getByRole('note', { name: 'Why the name waits' });
     await expect(why).toBeVisible();
-    await expect(why).toHaveText('This name waits for you because Intern has not been told to use every one of these spellings on its own: Use on its own is in Settings, under Learned spellings.');
-    await expect(panel.getByRole('button', { name: /Use on its own/ })).toHaveCount(0);
-    await expect(panel.getByRole('group', { name: /Use on its own/ })).toHaveCount(0);
+    await expect(why).toHaveText('This name waits for you because Intern has not been told to use every one of these spellings on its own: Always use is in Settings, under Learned spellings.');
+    await expect(panel.getByRole('button', { name: /Always use|Use on its own/ })).toHaveCount(0);
+    await expect(panel.getByRole('group', { name: /Always use|Use on its own/ })).toHaveCount(0);
     await expect(panel.getByRole('textbox')).toHaveCount(2);
     // The spelling typed on the panel's heading, and Enter: it goes to the name, and nothing is checked.
     const name = panel.getByRole('textbox', { name: 'Filename' });

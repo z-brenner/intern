@@ -23,6 +23,9 @@ interface Props {
   onOpen(item: QueueItem, cell: HTMLElement): void;
 }
 
+/** The first press of a run of quick clicks on the table: the row and column it was aimed at. */
+interface FirstPress { id: string; column: ColumnKey }
+
 /** Rows that Page Up and Page Down move by. */
 const PAGE_ROWS = 10;
 
@@ -52,6 +55,10 @@ export function QueueTable({ items, selectedId, store, onSelectRow, onOpen }: Pr
   const tableRef = useRef<HTMLTableElement>(null);
   const idPrefix = useId();
   const dragging = useRef(false);
+  // The double-click being made: where its first press landed, and whether
+  // its second press has opened that row already (see onCellMouseDown).
+  const firstPress = useRef<FirstPress | null>(null);
+  const openedByPress = useRef(false);
   const state = useSyncExternalStore(store.subscribe, store.get);
   const selection = selectionOf(state);
   const bounds = selectionBounds(selection, items);
@@ -76,6 +83,23 @@ export function QueueTable({ items, selectedId, store, onSelectRow, onOpen }: Pr
     return () => document.removeEventListener('mouseup', stop);
   }, []);
 
+  // A press anywhere but this table, or a key, ends the run of clicks the
+  // table was counting: a second press the browser counts as the second of a
+  // double-click is then not the second of one made on a row. Heard before
+  // the table's own handlers, which record a press that does land here.
+  useEffect(() => {
+    const elsewhere = (event: Event) => {
+      if (!(event.target instanceof Node) || !tableRef.current?.contains(event.target)) firstPress.current = null;
+    };
+    const keyed = () => { firstPress.current = null; };
+    document.addEventListener('mousedown', elsewhere, true);
+    document.addEventListener('keydown', keyed, true);
+    return () => {
+      document.removeEventListener('mousedown', elsewhere, true);
+      document.removeEventListener('keydown', keyed, true);
+    };
+  }, []);
+
   const cellElement = (cell: CellRef) => findCell(tableRef.current, cell);
   const focusCell = (cell: CellRef, options?: FocusOptions) => cellElement(cell)?.focus(options);
   // Every change of the active cell goes through here, so keyboard focus is
@@ -92,6 +116,39 @@ export function QueueTable({ items, selectedId, store, onSelectRow, onOpen }: Pr
     // The table draws its own selection; the browser's text selection would
     // be a second, different one on top of it.
     event.preventDefault();
+    const modified = event.shiftKey || event.ctrlKey || event.metaKey || event.altKey;
+    // The second press of a double-click opens the Details panel - for the
+    // row its first press was on. The browser counts the presses of a run
+    // (`detail`) as they come, whatever the page does meanwhile; its
+    // `dblclick` does not survive the page moving. That is sent after the
+    // second release, to what the second press and its release have in
+    // common: when the rows moved between the two (a document filed or read
+    // above, the toolbar or the progress strip growing by a line) that was
+    // the table body, which opens nothing; when they moved between the two
+    // presses, it was the row that had come under the pointer, and the
+    // double-click opened a document the person never aimed at, at its
+    // name, where Enter files it. So the run's first press says which row,
+    // and its second opens it; a row that has left the view since opens
+    // nothing, and the press only selects where it landed.
+    if (event.detail === 2 && !modified) {
+      const first = firstPress.current;
+      firstPress.current = null;
+      const aimed = first && items.find((entry) => entry.id === first.id);
+      if (first && aimed) {
+        openedByPress.current = true;
+        dragging.current = false;
+        const cell = { id: aimed.id, column: copyableColumn(first.column, active?.column) };
+        moveTo({ anchor: cell, focus: cell }, { preventScroll: true });
+        onOpen(aimed, cellElement(cell) ?? event.currentTarget);
+        return;
+      }
+    }
+    // A run begins. One made with Shift or Ctrl held extends a selection,
+    // and begins no double-click.
+    if (event.detail <= 1) {
+      firstPress.current = modified ? null : { id: item.id, column };
+      openedByPress.current = false;
+    }
     const target = { id: item.id, column: copyableColumn(column, active?.column) };
     if (event.shiftKey && active) {
       moveTo({ anchor: bounds ? state.anchor : active, focus: target }, { preventScroll: true });
@@ -117,12 +174,22 @@ export function QueueTable({ items, selectedId, store, onSelectRow, onOpen }: Pr
   };
 
   // A double-click is the mouse's Enter: it opens the Details panel for the
-  // row at its name, as it opens a cell for editing in a spreadsheet. Its two
-  // clicks have already selected the cell. With Shift or Ctrl held the clicks
-  // were extending a selection, and that is all they do.
-  const onCellDoubleClick = (event: MouseEvent<HTMLElement>, item: QueueItem) => {
+  // row at its name, as it opens a cell for editing in a spreadsheet. Its
+  // second press has done so already (onCellMouseDown); the browser's
+  // `dblclick` that follows is heard only where no press did, from anything
+  // that sends one without counting its presses - and then, too, for the row
+  // the first press was on. With Shift or Ctrl held the clicks were
+  // extending a selection, and that is all they do.
+  const onTableDoubleClick = (event: MouseEvent<HTMLTableElement>) => {
+    if (openedByPress.current) { openedByPress.current = false; return; }
     if (event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
-    onOpen(item, event.currentTarget);
+    const first = firstPress.current;
+    firstPress.current = null;
+    const landed = (event.target as Element).closest<HTMLElement>('[data-item-id][data-column]');
+    const id = first?.id ?? landed?.dataset.itemId;
+    const item = items.find((entry) => entry.id === id);
+    if (!item) return;
+    onOpen(item, cellElement({ id: item.id, column: first?.column ?? (landed!.dataset.column as ColumnKey) }) ?? event.currentTarget);
   };
 
   // A heading selects its column, or with Shift extends the selection across
@@ -136,12 +203,11 @@ export function QueueTable({ items, selectedId, store, onSelectRow, onOpen }: Pr
     moveTo({ anchor: { id: last.id, column: from }, focus: { id: first.id, column } }, { preventScroll: true });
   };
 
-  const handlers = useRef({ onCellMouseDown, onCellMouseEnter, onCellDoubleClick });
-  useLayoutEffect(() => { handlers.current = { onCellMouseDown, onCellMouseEnter, onCellDoubleClick }; });
+  const handlers = useRef({ onCellMouseDown, onCellMouseEnter });
+  useLayoutEffect(() => { handlers.current = { onCellMouseDown, onCellMouseEnter }; });
   const stableHandlers = useMemo<RowHandlers>(() => ({
     mouseDown: (event, item, column) => handlers.current.onCellMouseDown(event, item, column),
     mouseEnter: (event, item, column) => handlers.current.onCellMouseEnter(event, item, column),
-    doubleClick: (event, item) => handlers.current.onCellDoubleClick(event, item),
   }), []);
 
   const onKeyDown = (event: KeyboardEvent<HTMLTableElement>) => {
@@ -216,7 +282,7 @@ export function QueueTable({ items, selectedId, store, onSelectRow, onOpen }: Pr
   const summary = multiple ? `${selectedRows} ${selectedRows === 1 ? 'row' : 'rows'} by ${selectedColumns} ${selectedColumns === 1 ? 'column' : 'columns'} selected` : '';
 
   return <div className="table-wrap">
-    <table ref={tableRef} className="queue-grid" role="grid" aria-label="Queue" aria-multiselectable="true" aria-readonly="true" onKeyDown={onKeyDown}>
+    <table ref={tableRef} className="queue-grid" role="grid" aria-label="Queue" aria-multiselectable="true" aria-readonly="true" onKeyDown={onKeyDown} onDoubleClick={onTableDoubleClick}>
       <thead><tr role="row">{COLUMNS.map((column) => <th key={column.key} role="columnheader" scope="col" className={`col-${column.key}`}
         onMouseDown={column.copyable ? (event) => { if (event.button === 0) { event.preventDefault(); selectColumn(column.key, event.shiftKey); } } : undefined}
         title={column.copyable ? `Select the ${column.label} column` : undefined}>{column.label}</th>)}</tr></thead>
@@ -235,7 +301,6 @@ export function QueueTable({ items, selectedId, store, onSelectRow, onOpen }: Pr
 interface RowHandlers {
   mouseDown(event: MouseEvent<HTMLElement>, item: QueueItem, column: ColumnKey): void;
   mouseEnter(event: MouseEvent<HTMLElement>, item: QueueItem, column: ColumnKey): void;
-  doubleClick(event: MouseEvent<HTMLElement>, item: QueueItem): void;
 }
 
 interface RowProps {
@@ -284,8 +349,7 @@ const QueueRow = memo(function QueueRow({ item, statusId, current, left, right, 
         aria-selected={column.copyable ? selected : undefined}
         title={column.key === 'description' && item.status !== 'waiting' ? item.description : column.key === 'check' ? checkCell(item)?.title : undefined}
         onMouseDown={(event) => handlers.mouseDown(event, item, column.key)}
-        onMouseEnter={(event) => handlers.mouseEnter(event, item, column.key)}
-        onDoubleClick={(event) => handlers.doubleClick(event, item)}>
+        onMouseEnter={(event) => handlers.mouseEnter(event, item, column.key)}>
         {cellContent(item, column.key)}
       </td>;
     })}

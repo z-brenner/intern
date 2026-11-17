@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { App } from '../App';
 import { createInMemoryBridge } from '../lib/inMemoryBridge';
 import { ViewSwitch } from './ViewSwitch';
+import { moreAction } from '../features/queue/gridTesting';
 
 const items = [
   { status: 'review' }, { status: 'review' }, { status: 'review' }, { status: 'review' }, { status: 'review' },
@@ -37,11 +38,12 @@ describe('queue navigation', () => {
 
   // The view's button is found by data-view, not by its name: the name now
   // changes with the count, and the lookup by aria-label="Completed" stopped
-  // finding anything, leaving focus nowhere after Clear history.
-  it('returns focus to the Completed view after Clear history', async () => {
+  // finding anything, leaving focus nowhere after Clear completed.
+  it('returns focus to the Completed view after Clear completed', async () => {
     render(<App bridge={createInMemoryBridge()} />);
     fireEvent.click(await screen.findByRole('button', { name: /^Completed, / }));
-    fireEvent.click(screen.getByRole('button', { name: 'Clear history' }));
+    fireEvent.click(moreAction('Clear completed…'));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear completed' }));
 
     await waitFor(() => expect(screen.getByRole('button', { name: /^Completed, / })).toHaveFocus());
   });

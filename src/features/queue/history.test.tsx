@@ -77,8 +77,10 @@ describe('rename history', () => {
     render(<App bridge={bridge} />);
     const dialog = await openHistory();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Clear history' }));
-    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('History cleared.'));
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Clear completed…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear completed' }));
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Cleared 1 completed document.'));
 
     // Clearing removed the completed rows, so reopen from a reseeded queue but
     // the same (now empty) history.

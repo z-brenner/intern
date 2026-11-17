@@ -18,7 +18,7 @@ const SHOTS = process.env.R23_OUT;
 async function openSettings(page: Page) {
   await page.getByRole('button', { name: 'Settings' }).click();
   const dialog = page.getByRole('dialog', { name: 'Settings' });
-  await dialog.locator('summary', { hasText: 'Naming and filing' }).click();
+  await dialog.locator('summary', { hasText: 'How Intern names files' }).click();
   const level = dialog.getByRole('group', { name: 'Which documents are ready' });
   return {
     dialog,

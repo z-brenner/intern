@@ -481,8 +481,19 @@ fn claim_item_state(pipeline: &Pipeline, key: &str, path: &Path) -> ItemState {
             Ok(None) => ItemState::Unknown,
             Err(state) => state,
         },
-        // Tied to an item that is gone: removed, or cleared with the history.
-        Ok(Some(None)) => ItemState::Unknown,
+        // Tied to an item that is gone. Taken out by Clear queue, it is a
+        // person's word to leave the document where it is, kept as Keep
+        // original's is - by the watcher that saw it in the queue and by one
+        // started since, which never did. Removed one at a time, or cleared
+        // with the history, it is what it always was.
+        Ok(Some(None)) => match pipeline.intake_claim_set_aside(key) {
+            Ok(true) => ItemState::Done {
+                outcome: DoneOutcome::KeptOriginal,
+                result_filename: None,
+            },
+            Ok(false) => ItemState::Unknown,
+            Err(_) => ItemState::Unavailable,
+        },
         Ok(None) => intake_item_state(pipeline, path),
         Err(_) => ItemState::Unavailable,
     }
@@ -1597,6 +1608,51 @@ mod watcher_host_tests {
         );
 
         drop(pipeline);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// Clear queue sets a document aside: its claim reads as kept, as Keep
+    /// original's does, so the watcher - even one started after the clear,
+    /// that never saw the document in the queue - closes it rather than
+    /// handing the document over again as it is. The document Clear queue
+    /// gave its own name back is the one the claim names again.
+    #[test]
+    fn a_claim_on_a_cleared_document_reads_as_kept() {
+        let (dir, _) = queue("claim-cleared");
+        let open = || {
+            Pipeline::with_local_files(
+                dir.join("queue.sqlite3"),
+                Arc::new(Locked),
+                Arc::new(NeverAnalyze),
+                Arc::new(NoEvents),
+                settings_watching(&dir),
+            )
+            .unwrap()
+        };
+        let pipeline = open();
+        let locked = dir.join("locked.pdf");
+        fs::write(&locked, b"an encrypted document").unwrap();
+        let waiting = dir.join("waiting.pdf");
+        fs::write(&waiting, b"a document still waiting").unwrap();
+        enqueue_claimed_for_intake(&pipeline, "locked", &locked).unwrap();
+        pipeline.run_next().unwrap();
+        assert!(dir.join("NEEDS REVIEW - locked.pdf").exists());
+        enqueue_claimed_for_intake(&pipeline, "waiting", &waiting).unwrap();
+
+        let cleared = pipeline.clear_queue().unwrap();
+        assert_eq!(cleared.cleared, 2);
+        assert!(locked.exists(), "its own name back");
+        let kept = ItemState::Done {
+            outcome: DoneOutcome::KeptOriginal,
+            result_filename: None,
+        };
+        assert_eq!(claim_item_state(&pipeline, "locked", &locked), kept);
+        assert_eq!(claim_item_state(&pipeline, "waiting", &waiting), kept);
+
+        drop(pipeline);
+        let restarted = open();
+        assert_eq!(claim_item_state(&restarted, "waiting", &waiting), kept);
+        drop(restarted);
         let _ = fs::remove_dir_all(dir);
     }
 

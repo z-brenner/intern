@@ -74,6 +74,18 @@ export const SUPPORT_LINKS: Readonly<Record<SupportLinkTarget, string>> = {
   'description-flow': `${GUIDE_URL}#sharepoint-descriptions`,
 };
 
+/** What Clear queue did: how many documents went, and how many it kept, by why. */
+export interface ClearQueueReport {
+  /** Taken out of the queue; their files are where they were. */
+  cleared: number;
+  /** Kept: an earlier rename or copy of theirs did not finish, and their files need checking first. */
+  unsettled: number;
+  /** Kept: being renamed at that moment, which cannot be stopped part-way. */
+  busy: number;
+  /** Kept: still named `NEEDS REVIEW - …`, their own names could not be given back (a program has the file open). */
+  stillMarked: number;
+}
+
 export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
   listItems(): Promise<QueueItem[]>;
   /**
@@ -167,6 +179,20 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
    * decision, or already renamed are untouched.
    */
   discardWaiting(): Promise<number>;
+  /**
+   * Clear queue: take every document that is not filed out of the queue -
+   * waiting, being read (stopped first), ready, in review, failed - to start
+   * again from nothing. No file is deleted or moved, and Completed is left
+   * as it is. A document Intern renamed `NEEDS REVIEW - <name>` gets its own
+   * name back. The documents stay in the Queue folder and are not taken in
+   * again until they change, or are added again on purpose
+   * (`queueInputFolder`, Add files).
+   *
+   * Some are kept, and the report says how many and why: a document whose
+   * files need checking first, one being renamed at that moment, and one
+   * whose own name could not be given back.
+   */
+  clearQueue(): Promise<ClearQueueReport>;
   /**
    * Ask GitHub whether a newer signed release exists.
    *

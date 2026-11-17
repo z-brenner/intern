@@ -1,7 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
-import { detailsToggle, openDetails, queueCell, untilSettled } from './grid';
+import { detailsToggle, moreAction, openDetails, queueCell, untilSettled } from './grid';
 
 test.describe('whole-product browser QA', () => {
   test.use({ viewport: { width: 1536, height: 1024 } });
@@ -98,7 +98,8 @@ test.describe('whole-product browser QA', () => {
     await openDetails(page, 'Q1 Financials.pdf');
     await expect(page.getByRole('button', { name: 'Cancel processing' })).toBeVisible();
     await page.getByRole('button', { name: /^Completed, / }).click();
-    await expect(page.getByRole('button', { name: 'Clear history' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'History', exact: true })).toBeVisible();
+    await expect(await moreAction(page, 'Clear completed…')).toBeVisible();
   });
 
   // The Tauri window opens at 1200x800. The shell used to grow with its

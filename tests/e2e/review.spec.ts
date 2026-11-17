@@ -259,7 +259,7 @@ for (const size of [{ width: 1400, height: 900 }, { width: 800, height: 600 }]) 
   queue's row and to Rename all ready.
 */
 const HELD = 'SOW final v3.pdf';
-const CONTOSO = 'Use on its own: Contoso Worldwide, Inc. written as Contoso';
+const CONTOSO = 'Always use: Contoso Worldwide, Inc. written as Contoso';
 const focusInSettings = (page: Page) => page.evaluate(() => Boolean(document.activeElement?.closest('[role="dialog"][aria-label="Settings"]')));
 
 for (const size of [{ width: 1400, height: 900 }, { width: 800, height: 600 }]) {

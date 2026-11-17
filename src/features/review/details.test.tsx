@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
-import { createReviewBatchBridge } from '../../lib/inMemoryBridge';
+import { createInMemoryBridge, createReviewBatchBridge } from '../../lib/inMemoryBridge';
+import type { QueueByItself } from '../../lib/inMemoryBridge';
 import { clickCell, detailsToggle, queueCell } from '../queue/gridTesting';
 
 /*
@@ -93,11 +94,13 @@ describe('the Details panel', () => {
   it('opens from a double-click on a row, at the name, and a single click still only selects', async () => {
     await start();
     const cell = queueCell('Scan 0102.pdf', 'proposed');
-    // A double-click as the browser delivers it: two presses, then dblclick.
+    // A double-click as the browser delivers it: two presses, the second
+    // counted second, then dblclick. The second press opens it.
     clickCell(cell, { detail: 1 });
     expect(panel()).not.toBeInTheDocument();
     clickCell(cell, { detail: 2 });
-    expect(panel()).not.toBeInTheDocument();
+    expect(panel()).toHaveTextContent('Scan 0102.pdf');
+    // The dblclick that follows opens nothing more.
     fireEvent.doubleClick(cell, { button: 0, detail: 2 });
 
     expect(panel()).toHaveTextContent('Scan 0102.pdf');
@@ -121,6 +124,92 @@ describe('the Details panel', () => {
     fireEvent.doubleClick(waiting, { button: 0, detail: 2 });
     await waitFor(() => expect(within(panel()!).getByRole('heading', { name: 'Review item' })).toHaveFocus());
     expect(panel()).toHaveTextContent('Scan 0107.pdf');
+  });
+
+  // A double-click is two presses at one place, and the queue can move under
+  // it: a document filed or read above, a toolbar or a progress strip that
+  // grows by a line. The browser's dblclick goes where the rows are by then -
+  // another row, or, when they moved under the second press, the table body.
+  // The row the first press was on is the one opened.
+  it('opens the row its first press was on when the rows move under the second', async () => {
+    await start();
+    clickCell(queueCell('Scan 0103.pdf', 'description'), { detail: 1 });
+    // The rows moved: the second press lands on the row below.
+    clickCell(queueCell('Scan 0104.pdf', 'description'), { detail: 2 });
+    expect(panel()).toHaveTextContent('Scan 0103.pdf');
+    expect(queueCell('Scan 0103.pdf').closest('tr')).toHaveAttribute('aria-current', 'true');
+    expect(queueCell('Scan 0104.pdf').closest('tr')).not.toHaveAttribute('aria-current');
+    expect(document.querySelectorAll('.queue-grid [aria-selected="true"]')).toHaveLength(1);
+    expect(queueCell('Scan 0103.pdf', 'description')).toHaveAttribute('aria-selected', 'true');
+    // The dblclick, sent to the row that had come under the pointer, opens nothing else.
+    fireEvent.doubleClick(queueCell('Scan 0104.pdf', 'description'), { button: 0, detail: 2 });
+    expect(panel()).toHaveTextContent('Scan 0103.pdf');
+  });
+
+  it('opens from a dblclick that reached only the table body, for the row first pressed', async () => {
+    await start();
+    // Something that sends dblclick without counting its presses, the
+    // release having landed on another row: only the body hears it.
+    clickCell(queueCell('Scan 0105.pdf', 'check'), { detail: 1 });
+    fireEvent.doubleClick(queueCell('Scan 0105.pdf').closest('tbody')!, { button: 0 });
+    expect(panel()).toHaveTextContent('Scan 0105.pdf');
+  });
+
+  it('opens nothing when the row first pressed has left the queue before the second press', async () => {
+    let queue: QueueByItself | undefined;
+    render(<App bridge={createReviewBatchBridge({ liveEvents: true, byItself: (changes) => { queue = changes; } })} />);
+    await waitFor(() => expect(queueCell('Scan 0101.pdf').closest('tr')).toHaveAttribute('aria-current', 'true'), { timeout: 5000 });
+    clickCell(queueCell('Scan 0106.pdf'), { detail: 1 });
+    // Filed from another machine between the presses: the second lands on the row that took its place.
+    queue!.leave('scan-0106');
+    await waitFor(() => expect(screen.queryByRole('gridcell', { name: 'Scan 0106.pdf' })).not.toBeInTheDocument());
+    clickCell(queueCell('Scan 0107.pdf'), { detail: 2 });
+    expect(panel()).not.toBeInTheDocument();
+    // That press only selected where it landed.
+    expect(queueCell('Scan 0107.pdf').closest('tr')).toHaveAttribute('aria-current', 'true');
+  });
+
+  it('opens nothing from a second press when the first was somewhere else', async () => {
+    await start();
+    clickCell(queueCell('Scan 0103.pdf'), { detail: 1 });
+    fireEvent.mouseDown(document.body, { button: 0, detail: 1 });
+    clickCell(queueCell('Scan 0105.pdf'), { detail: 2 });
+    expect(panel()).not.toBeInTheDocument();
+  });
+
+  // With nothing selected the toggle cannot open anything, and says how a row's details are opened.
+  it('says how to open a row from the Details toggle while nothing is selected', async () => {
+    render(<App bridge={createInMemoryBridge()} />);
+    await screen.findByRole('grid', { name: 'Queue' });
+    fireEvent.click(screen.getByRole('button', { name: /^Completed/ }));
+    expect(detailsToggle()).toBeDisabled();
+    expect(detailsToggle()).toHaveAttribute('title', 'Double-click a row to see its details');
+    const filed = queueCell('Completed lease.pdf', 'proposed');
+    clickCell(filed, { detail: 1 });
+    clickCell(filed, { detail: 2 });
+    expect(panel()).toHaveTextContent('Completed lease.pdf');
+  });
+
+  // How to open a row is said below the table until a row has been opened from it once.
+  it('says how to open a row until one has been opened that way', async () => {
+    const first = await start();
+    const hint = () => screen.queryByText('Double-click a row to see its details');
+    expect(hint()).toBeInTheDocument();
+    // Opening from the toggle teaches nothing about the rows.
+    fireEvent.click(detailsToggle());
+    expect(hint()).not.toBeInTheDocument();
+    fireEvent.click(detailsToggle());
+    expect(hint()).toBeInTheDocument();
+
+    const cell = queueCell('Scan 0103.pdf');
+    clickCell(cell, { detail: 1 });
+    clickCell(cell, { detail: 2 });
+    fireEvent.click(within(panel()!).getByRole('button', { name: 'Close review' }));
+    expect(hint()).not.toBeInTheDocument();
+    first.view.unmount();
+
+    await start();
+    expect(hint()).not.toBeInTheDocument();
   });
 
   it('does not open from a double-click that was extending a selection, or one of another button', async () => {

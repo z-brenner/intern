@@ -45,7 +45,7 @@ function inSettings(page: Page) {
   const level = dialog.getByRole('group', { name: 'Which documents are ready' });
   return {
     dialog,
-    naming: dialog.locator('summary', { hasText: 'Naming and filing' }),
+    naming: dialog.locator('summary', { hasText: 'How Intern names files' }),
     strict: level.getByRole('radio', { name: /^Strict/ }),
     balanced: level.getByRole('radio', { name: /^Balanced/ }),
     automatic: dialog.getByRole('checkbox', { name: 'Automatically rename ready documents' }),

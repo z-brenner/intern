@@ -192,24 +192,32 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .queue-actions button { min-height: 34px; }
 .queue-actions button svg { width: 16px; height: 16px; flex: none; }
 .queue-actions .details-toggle[aria-expanded='true'] { background: var(--brand-tint); border-color: var(--selected-border); color: var(--brand-ink); }
+/* The counts beside the view switch are ways into the table - the next
+   document to review, only the ready ones, only those with a note - not
+   buttons that act, so they are words in the colour of their status until
+   pointed at or pressed, rather than three more boxes beside the toolbar's
+   own. */
+.need-review, .ready-filter, .note-filter { min-height: 30px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid transparent; border-radius: 15px; background: transparent; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ready-filter svg, .note-filter svg { width: 15px; height: 15px; }
 /* The count the Needs Review page's badge used to carry, in the review amber
    the Status column uses for the same state. */
-.need-review { min-height: 30px; padding: 0 12px; border: 1px solid var(--review-edge); border-radius: 15px; background: var(--review-surface); color: var(--review-strong); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.need-review:hover { background: var(--review-surface-hover); border-color: var(--review-edge-hover); }
+.need-review { color: var(--review-strong); }
+.need-review:hover { background: var(--review-surface); border-color: var(--review-edge); }
 /* Show only what Rename all ready will rename: a toggle, so its pressed
    state is the filter's. */
-.ready-filter { min-height: 30px; padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border-strong); border-radius: 15px; background: var(--surface); color: var(--ready); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.ready-filter svg { width: 15px; height: 15px; }
+.ready-filter { color: var(--ready); }
 .ready-filter:hover { background: var(--surface-subtle); }
 .ready-filter[aria-pressed='true'] { border-color: var(--ready); background: color-mix(in srgb, var(--ready) 12%, var(--surface)); color: var(--ready-strong); }
 /* The same switch in Completed, for the documents renamed with a note. */
-.note-filter { min-height: 30px; padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border-strong); border-radius: 15px; background: var(--surface); color: var(--text-soft); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.note-filter svg { width: 15px; height: 15px; }
+.note-filter { color: var(--text-soft); }
 .note-filter:hover { background: var(--surface-subtle); }
 .note-filter[aria-pressed='true'] { border-color: var(--accent); background: var(--surface-selected); color: var(--text); }
-/* Things done to the queue rarely: behind a More button, away from the
-   one primary command, so Discard is never a slip from Rename. */
+/* Things done to the table now and then: behind a More button, away from
+   the one primary command, so Clear is never a slip from Rename. */
 .more-menu { position: relative; }
+.more-menu [role='menu'] hr { margin: 3px 4px; border: 0; border-top: 1px solid var(--border); }
+.queue-actions .more-menu [role='menu'] button .shortcut { margin-left: auto; padding-left: 16px; border: 0; color: var(--text-muted); opacity: 1; background: none; }
+.queue-actions .more-menu [role='menu'] button.danger { color: var(--failed); }
 .more-menu [role='menu'] { position: absolute; z-index: 5; top: calc(100% + 6px); right: 0; min-width: 220px; display: grid; gap: 2px; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-popover); }
 .queue-actions .more-menu [role='menu'] button { min-height: 34px; justify-content: flex-start; border-color: transparent; background: transparent; }
 .queue-actions .more-menu [role='menu'] button:hover:not(:disabled) { background: var(--surface-subtle); border-color: transparent; }
@@ -279,13 +287,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 }
 /* Hover and selection used to be the same tint, so the row under the pointer
    claimed to be the row the inspector was describing. */
+/* A row opens with a double-click, so the pointer over it is a hand, as it is
+   over anything that opens; the plus of a spreadsheet's cell said only "select". */
 .table-wrap tbody tr:hover { background: var(--surface-subtle); }
 .table-wrap tr.selected { background: var(--surface-selected); }
 .table-wrap tr.selected td { border-top: 1px solid var(--selected-border); border-bottom: 1px solid var(--selected-border); }
 .table-wrap tr.selected td:first-child { --row-bar: inset 3px 0 0 var(--accent); }
-/* Three lines at most; the whole sentence is the cell's tooltip, is in the
-   Details panel, and is what a copy of the cell carries. */
-.row-description { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; color: var(--text-muted); font-size: 12px; line-height: 1.35; }
+/* One line; the whole sentence is the cell's tooltip, is in the Details
+   panel, and is what a copy of the cell carries. At three lines every row
+   with a description stood half as tall again as the rest, and the queue
+   read as a wall of grey text. */
+.row-description { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; line-clamp: 1; overflow: hidden; overflow-wrap: anywhere; color: var(--text-muted); font-size: 12px; line-height: 1.35; }
 
 /* Cells select like a spreadsheet's: a tinted fill, and a rule round the
    edge of the selected rectangle. The browser's own text selection would be
@@ -293,8 +305,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
    never text; a cell's text is copied whole with Ctrl+C. Status is never
    selected: inside a selection it keeps its own background, so the gap
    shows it will not be copied. */
-.queue-grid td { -webkit-user-select: none; user-select: none; cursor: cell; box-shadow: var(--row-bar, 0 0 transparent), var(--edge-top, 0 0 transparent), var(--edge-bottom, 0 0 transparent), var(--edge-left, 0 0 transparent), var(--edge-right, 0 0 transparent), var(--active-ring, 0 0 transparent); }
-.queue-grid td.col-status { cursor: default; }
+.queue-grid td { -webkit-user-select: none; user-select: none; cursor: pointer; box-shadow: var(--row-bar, 0 0 transparent), var(--edge-top, 0 0 transparent), var(--edge-bottom, 0 0 transparent), var(--edge-left, 0 0 transparent), var(--edge-right, 0 0 transparent), var(--active-ring, 0 0 transparent); }
 .queue-grid th.col-original, .queue-grid th.col-proposed, .queue-grid th.col-description, .queue-grid th.col-check { cursor: pointer; -webkit-user-select: none; user-select: none; }
 .queue-grid td.cell-selected { background: var(--cell-selected); }
 /* The active cell of a selection of several, as a spreadsheet marks it:
@@ -339,7 +350,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .check-label { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; font-size: 13px; line-height: 1.35; }
 .check-label.review { color: var(--review); font-weight: 500; }
 .check-label.failed { color: var(--failed); font-weight: 500; }
-.check-label.ready { color: var(--ready); }
+/* Nothing to check is said quietly: the Status column already says Ready in
+   green, and a second green phrase on every such row only competed with the
+   rows that do need a look. */
+.check-label.ready { color: var(--text-muted); }
 .check-label.quiet { color: var(--text-muted); }
 /* A note on a ready or a renamed row: neither the green of every check
    passed nor the amber of a review. */
@@ -357,11 +371,18 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
 .confidence-meter--panel .confidence-value { order: 2; font-size: 15px; }
 
 .item-count { color: var(--text-muted); padding: 14px 10px; font-size: 12px; font-variant-numeric: tabular-nums; margin-top: auto; }
+.item-count .open-hint::before { content: '·'; margin: 0 8px; }
 
 /* ---------- review inspector ---------- */
 /* min-height: 0 lets the inspector be shorter than its content, so it scrolls
    by itself and the sticky actions below have a scrollport to stick to. */
-.inspector { flex: 0 0 370px; min-height: 0; border-left: 1px solid var(--border); box-shadow: var(--shadow-inspector); padding: 22px 24px 0; overflow-y: auto; font-size: 14px; background: var(--surface); }
+.inspector { flex: 0 0 370px; min-height: 0; border-left: 1px solid var(--border); box-shadow: var(--shadow-inspector); padding: 22px 24px 0; overflow-y: auto; font-size: 14px; background: var(--surface); animation: inspector-in .18s ease-out; }
+/* The panel comes into view rather than being there all at once. Its
+   opacity only: a panel that slid in would move its buttons under the
+   pointer, and a press on a button that has just moved there is refused
+   (src/lib/aimedPress.ts). */
+@keyframes inspector-in { from { opacity: 0; } }
+
 .inspector-title, .dialog-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .inspector h2, .dialog-head h2 { margin: 0; font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: -.2px; }
 .inspector h3 { font-family: var(--font-display); font-size: 14px; font-weight: 600; margin: 0 0 10px; }
@@ -624,6 +645,11 @@ button.reason-chip:hover { border-color: var(--review-edge-hover); background: v
 .update-note { color: var(--text-muted); font-size: 12px; line-height: 1.5; margin: 0 0 10px; }
 
 .history-dialog { width: min(680px, calc(100vw - 32px)); }
+/* Clear queue and Clear completed: the question, what goes, what stays. */
+.clear-dialog-body p { margin: 12px 0 0; font-size: 13.5px; line-height: 1.5; color: var(--text); }
+.clear-dialog .history-actions { margin-top: 20px; }
+.clear-dialog .history-actions .danger { background: var(--failed); border-color: var(--failed); }
+.clear-dialog .history-actions .danger:hover:not(:disabled) { background: var(--failed-text); border-color: var(--failed-text); }
 .history-dialog .dialog-head { margin-bottom: 10px; }
 .history-empty { color: var(--text-muted); margin: 18px 0; }
 .history-table-wrap { overflow: auto; max-height: min(420px, 55vh); border: 1px solid var(--border); border-radius: var(--radius-sm); margin: 14px 0; }

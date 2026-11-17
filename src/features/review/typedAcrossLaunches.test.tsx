@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
-import { detailsToggle, openDetails, queueCell, selectRow } from '../queue/gridTesting';
+import { detailsToggle, moreAction, openDetails, queueCell, selectRow } from '../queue/gridTesting';
 import type { QueueItem } from '../../types';
 import { TYPED_KEY } from './typedStore';
 
@@ -140,7 +140,7 @@ describe('what was typed in review and not filed, after Intern is closed and ope
     await waitFor(() => expect(third.bridge.approve).toHaveBeenCalledWith('lease', `${PROPOSED}.pdf`, PROPOSED_DESCRIPTION));
   });
 
-  it('goes from storage with a document that Discard waiting or Clear history takes out of the queue, and with no other', async () => {
+  it('goes from storage with a document that Clear queue or Clear completed takes out of the queue, and with no other', async () => {
     windowOf(false);
     type Changing = { change(id: string, change: Partial<QueueItem>): void };
     const EMPLOYMENT_TYPED = '2024-01-15 Employment Agreement, signed copy';
@@ -161,26 +161,34 @@ describe('what was typed in review and not filed, after Intern is closed and ope
       expect(window.localStorage.getItem(TYPED_KEY)).toContain(TYPED);
       return view;
     };
-    const discardWaiting = async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'More queue actions' }));
-      fireEvent.click(screen.getByRole('menuitem', { name: 'Discard waiting items' }));
-      await waitFor(() => expect(said()).toHaveTextContent(/^Discarded \d+ waiting items\.$/));
+    // Clear queue, here taking the Lease and keeping the rest - as it keeps
+    // a document whose files need checking - so the Employment Agreement is
+    // a document still in the queue.
+    const clearQueue = async () => {
+      fireEvent.click(moreAction('Clear queue…'));
+      fireEvent.click(screen.getByRole('button', { name: 'Clear queue' }));
+      await waitFor(() => expect(said()).toHaveTextContent(/^Cleared 1 document from the queue\./));
+    };
+    const keepingEmployment = (base: ReturnType<typeof createInMemoryBridge>) => async () => {
+      await base.remove('lease');
+      return { cleared: 1, unsettled: 0, busy: 0, stillMarked: 0 };
     };
 
-    // The Lease went back to waiting by itself, with what was typed for it set aside; Discard waiting takes it out of the queue.
-    let view = await typedThenChanged({ status: 'waiting', proposedFilename: undefined, description: undefined });
-    await discardWaiting();
+    // The Lease went back to waiting by itself, with what was typed for it set aside; Clear queue takes it out of the queue.
+    let view = await typedThenChanged({ status: 'waiting', proposedFilename: undefined, description: undefined }, (base) => ({ clearQueue: keepingEmployment(base) }));
+    await clearQueue();
     expect(screen.queryByText(LEASE)).not.toBeInTheDocument();
     // What was typed for it is out of storage now, not at the next start; what was typed for a document still in the queue stays.
     expect(window.localStorage.getItem(TYPED_KEY)).not.toContain(TYPED);
     expect(window.localStorage.getItem(TYPED_KEY)).toContain(EMPLOYMENT_TYPED);
     view.unmount();
 
-    // Filed from somewhere else, it is in the history; Clear history takes it out.
+    // Filed from somewhere else, it is in the history; Clear completed takes it out.
     view = await typedThenChanged({ status: 'completed', filedName: `${PROPOSED}.pdf` });
     fireEvent.click(screen.getByRole('button', { name: /^Completed, / }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Clear history' }));
-    await waitFor(() => expect(said()).toHaveTextContent('History cleared.'));
+    fireEvent.click(moreAction('Clear completed…'));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear completed' }));
+    await waitFor(() => expect(said()).toHaveTextContent(/^Cleared \d+ completed documents?\./));
     expect(window.localStorage.getItem(TYPED_KEY)).not.toContain(TYPED);
     expect(window.localStorage.getItem(TYPED_KEY)).toContain(EMPLOYMENT_TYPED);
     view.unmount();
@@ -188,10 +196,10 @@ describe('what was typed in review and not filed, after Intern is closed and ope
     // The queue could not be read after the command: nothing says the Lease is gone, and what was typed for it stays where it was.
     let unreadable = false;
     view = await typedThenChanged({ status: 'waiting', proposedFilename: undefined, description: undefined }, (base) => ({
-      discardWaiting: async () => { const count = await base.discardWaiting(); unreadable = true; return count; },
+      clearQueue: async () => { const report = await keepingEmployment(base)(); unreadable = true; return report; },
       listItems: async () => { if (unreadable) throw new Error('The queue could not be read.'); return base.listItems(); },
     }));
-    await discardWaiting();
+    await clearQueue();
     expect(window.localStorage.getItem(TYPED_KEY)).toContain(TYPED);
     expect(window.localStorage.getItem(TYPED_KEY)).toContain(EMPLOYMENT_TYPED);
     view.unmount();

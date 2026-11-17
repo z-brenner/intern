@@ -1,11 +1,11 @@
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
-import { openDetails, queueCell } from './grid';
+import { moreAction, openDetails, queueCell } from './grid';
 
 /*
   The queue table copies like a spreadsheet, through the real clipboard of a
   real Chromium (the engine of the desktop app's WebView2): what Ctrl+C and
-  the Copy button leave there is read back as both formats a spreadsheet
+  the More menu's Copy leave there is read back as both formats a spreadsheet
   pastes from.
 */
 
@@ -60,7 +60,6 @@ test('a dragged range copies with Ctrl+C into separate cells, without Status', a
   await page.mouse.up();
 
   await expect(page.getByRole('gridcell', { selected: true })).toHaveCount(6);
-  await expect(page.getByRole('button', { name: 'Copy selection' })).toBeVisible();
   // Selecting is not opening.
   await expect(page.getByRole('complementary', { name: 'Review item' })).toHaveCount(0);
 
@@ -77,6 +76,8 @@ test('a dragged range copies with Ctrl+C into separate cells, without Status', a
     ['Scan 0103.pdf', '2024-03-14 Notice of Termination to Contoso Ltd.pdf'],
   ]);
   await expect(page.getByRole('status', { name: 'Action status' })).toHaveText('Copied 3 rows, 2 columns.');
+  // The menu's Copy says it copies the selection.
+  await expect(await moreAction(page, /^Copy/)).toHaveAccessibleName('Copy selection');
 });
 
 test('Shift+click, Ctrl+A and the keyboard select cells; Escape clears', async ({ page }) => {
@@ -92,7 +93,10 @@ test('Shift+click, Ctrl+A and the keyboard select cells; Escape clears', async (
   await expect(page.getByRole('gridcell', { selected: true })).toHaveCount(6);
   await page.keyboard.press('Escape');
   await expect(page.getByRole('gridcell', { selected: true })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Copy table' })).toBeVisible();
+  await expect(await moreAction(page, /^Copy/)).toHaveAccessibleName('Copy table');
+  // The menu closes with Escape, back to its button; a click puts the focus in the table again.
+  await page.keyboard.press('Escape');
+  await queueCell(page, 'Scan 0101.pdf').click();
 
   await page.keyboard.press('ControlOrMeta+A');
   await expect(page.getByRole('gridcell', { selected: true })).toHaveCount(28);
@@ -102,8 +106,8 @@ test('Shift+click, Ctrl+A and the keyboard select cells; Escape clears', async (
   expect(all.text.split('\r\n')[6]).toBe('Scan 0107.pdf\t\t\t');
 });
 
-test('the Copy button copies the whole table with headings when nothing is selected', async ({ page }) => {
-  await page.getByRole('button', { name: 'Copy table' }).click();
+test('Copy in the More menu copies the whole table with headings when nothing is selected', async ({ page }) => {
+  await (await moreAction(page, 'Copy table')).click();
   const copied = await readClipboard(page);
   const lines = copied.text.split('\r\n');
   expect(lines[0]).toBe('Original filename\tProposed filename\tDescription\tCheck');
@@ -114,11 +118,11 @@ test('the Copy button copies the whole table with headings when nothing is selec
   await expect(page.getByRole('status', { name: 'Action status' })).toHaveText('Copied the table, 7 rows.');
 });
 
-test('the Copy button copies a selection, and leaves the Details panel as it was', async ({ page }) => {
+test('Copy in the More menu copies a selection, and leaves the Details panel as it was', async ({ page }) => {
   const panel = await openDetails(page);
   await queueCell(page, 'Scan 0104.pdf', 'check').click();
   await expect(panel).toContainText('Scan 0104.pdf');
-  await page.getByRole('button', { name: 'Copy selection' }).click();
+  await (await moreAction(page, 'Copy selection')).click();
   expect((await readClipboard(page)).text).toBe('Model unsure');
   await expect(panel).toBeVisible();
 });
@@ -158,3 +162,53 @@ test('a double-click on a row opens its details at the name', async ({ page }) =
   await expect(panel).toContainText('Scan 0106.pdf');
   await expect(disclosure).toHaveAttribute('open', '');
 });
+
+/*
+  A double-click is two presses at one place, and a working queue moves under
+  it: a document filed above, the toolbar or the progress strip growing by a
+  line. The browser's dblclick goes to wherever the rows are by then - the
+  row that has come under the pointer, or the table body when they moved
+  under the second press, which opened nothing. The row the first press was
+  on is the one opened, from the second press.
+*/
+test('a double-click opens the row it began on when the rows move between its presses', async ({ page }) => {
+  await page.goto('/?queue=changes');
+  const nda = queueCell(page, 'NDA - Acme Corp.docx', 'proposed');
+  const box = (await nda.boundingBox())!;
+  const at = { x: box.x + 30, y: box.y + box.height / 2 };
+  await page.mouse.move(at.x, at.y);
+  await page.mouse.down();
+  await page.mouse.up();
+  // A document above is filed from another machine: every row below moves up one.
+  await page.evaluate(() => (window as unknown as { internQueue: { leave(id: string): void } }).internQueue.leave('employment'));
+  await expect(page.getByRole('gridcell', { name: 'Employment Agreement - John Smith.pdf' })).toHaveCount(0);
+  expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('tr')?.textContent ?? '', at)).not.toContain('NDA - Acme Corp.docx');
+  await page.mouse.down({ clickCount: 2 });
+  await page.mouse.up({ clickCount: 2 });
+
+  const panel = page.getByRole('complementary', { name: 'Review item' });
+  await expect(panel).toContainText('NDA - Acme Corp.docx');
+  await expect(panel.getByLabel('Filename')).toBeFocused();
+  await expect(page.getByRole('row', { name: /NDA - Acme Corp\.docx/ })).toHaveAttribute('aria-current', 'true');
+  await expect(page.locator('.queue-grid [aria-selected="true"]')).toHaveCount(1);
+});
+
+/*
+  Nothing a single click does moves the rows: the first click of a
+  double-click selects a cell, and the toolbar used to answer it by turning
+  "Copy table" into "Copy selection" - at some window widths a line more of
+  toolbar, which moved every row 42 px down under the second click.
+*/
+test('a click on a cell moves no row, at any window width', async ({ page }) => {
+  for (let width = 800; width <= 1440; width += 20) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.keyboard.press('Escape');
+    const cell = queueCell(page, 'Scan 0103.pdf', 'proposed');
+    const before = (await cell.boundingBox())!;
+    await page.mouse.click(before.x + 20, before.y + before.height / 2);
+    await expect(cell).toHaveAttribute('aria-selected', 'true');
+    const after = (await cell.boundingBox())!;
+    expect(after.y, `at ${width} px`).toBe(before.y);
+  }
+});
+
