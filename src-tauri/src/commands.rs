@@ -6973,6 +6973,23 @@ pub fn queue_discard_waiting(state: State<'_, AppState>) -> Result<usize, Comman
     Ok(state.pipeline.discard_waiting()?)
 }
 
+/// Clear queue: every document not filed out of the queue, its file left
+/// where it is, and not taken in again until it changes or is added again
+/// (see `Pipeline::clear_queue`). Resolves with how many went and how many
+/// were kept, by why. Off the command thread: it can cancel the reading
+/// under way and give files their own names back.
+#[tauri::command]
+pub async fn queue_clear(
+    state: State<'_, AppState>,
+) -> Result<intern_queue::ClearedQueue, CommandError> {
+    let pipeline = Arc::clone(&state.pipeline);
+    Ok(
+        tauri::async_runtime::spawn_blocking(move || pipeline.clear_queue())
+            .await
+            .map_err(|_| background_task_failed("clearing the queue"))??,
+    )
+}
+
 fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
     let waiting = waiting_in_doubt(&item);
     let proposal = item.proposal.as_ref();

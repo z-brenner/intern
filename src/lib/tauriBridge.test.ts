@@ -238,6 +238,18 @@ describe('TauriBridge', () => {
     ]);
   });
 
+  // Clear queue says what it did; a count the backend leaves out is none,
+  // so nothing is said to have been kept that was not.
+  it('clears the queue with queue_clear and reads what it did', async () => {
+    const fake = fakeTransport({ queue_clear: { cleared: 12, unsettled: 1, busy: 0, stillMarked: 2 } });
+    const bridge = new TauriBridge(fake.transport);
+    expect(await bridge.clearQueue()).toEqual({ cleared: 12, unsettled: 1, busy: 0, stillMarked: 2 });
+    expect(fake.calls).toEqual([{ command: 'queue_clear', args: undefined }]);
+
+    const sparse = new TauriBridge(fakeTransport({ queue_clear: { cleared: 3 } }).transport);
+    expect(await sparse.clearQueue()).toEqual({ cleared: 3, unsettled: 0, busy: 0, stillMarked: 0 });
+  });
+
   // The review menu, Open and Show in folder name an item by id and nothing
   // else; which file that is stays the backend's decision.
   it('reanalyze_open_reveal_invoke_expected_commands', async () => {

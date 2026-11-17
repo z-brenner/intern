@@ -7,6 +7,7 @@ import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, 
 import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import { SUPPORTED_EXTENSIONS } from './formats';
 import type {
+  ClearQueueReport,
   DescriptionsEventSource,
   DesktopBridge,
   ExistingModelFiles,
@@ -241,6 +242,13 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
   }
 
   discardWaiting(): Promise<number> { return this.transport.invoke('queue_discard_waiting'); }
+
+  async clearQueue(): Promise<ClearQueueReport> {
+    const report = await this.transport.invoke<Partial<ClearQueueReport> | undefined>('queue_clear');
+    // A count the backend did not send is none: what is kept is said only when it is so.
+    const count = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : 0;
+    return { cleared: count(report?.cleared), unsettled: count(report?.unsettled), busy: count(report?.busy), stillMarked: count(report?.stillMarked) };
+  }
 
   intakeStatus(): Promise<IntakeStatus> { return this.transport.invoke('intake_status'); }
   scanIntakeNow(): Promise<void> { return this.transport.invoke('intake_scan_now'); }

@@ -730,6 +730,9 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   // folder, as the backend leaves them for the watcher, and "Process them
   // too" finds them there and holds them again.
   const heldCopies = new Map<string, string>();
+  // What Clear queue took out of the queue, by path, with the name it is
+  // there under: still in the input folder, not taken in again until added.
+  const setAside = new Map<string, string>();
   const inputFolder = () => {
     if (!settings.intakeEnabled || !settings.intakeFolder.trim()) throw { code: 'INPUT_FOLDER_NOT_SET', message: 'no Queue folder is set up; choose one in Settings' };
     return settings.intakeFolder.replace(/[\\/]+$/, '');
@@ -807,10 +810,17 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
         inputNames.add(fileNameKey(name));
         queueAt(`${input}\\${name}`, name);
       }
+      // Added on purpose, what Clear queue set aside comes in again.
+      const again = [...setAside].filter(([path]) => within(input, path));
+      for (const [path, name] of again) {
+        setAside.delete(path);
+        queueAt(path, name);
+      }
+      const added = count + again.length;
       const held = [...heldCopies.keys()].filter((path) => within(input, path)).length;
       return held > 0
-        ? { added: count, alreadyQueued: 0, skipped: [], held, heldReason: 'AWAITING_MICROSOFT' }
-        : { added: count, alreadyQueued: 0, skipped: [] };
+        ? { added, alreadyQueued: 0, skipped: [], held, heldReason: 'AWAITING_MICROSOFT' }
+        : { added, alreadyQueued: 0, skipped: [] };
     },
     pauseQueue: async () => { paused = true; items = items.map((item) => item.status === 'processing' ? { ...item, status: 'waiting' as const, stage: undefined, progress: undefined } : item); },
     resumeQueue: async () => { paused = false; fileStagedCopies(); const item = items.find((entry) => entry.status === 'waiting'); if (item) update(item.id, { status: 'processing', stage: 'reading' }); },
@@ -1034,6 +1044,27 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       const waiting = items.filter((item) => item.status === 'waiting');
       items = items.filter((item) => item.status !== 'waiting');
       return waiting.length;
+    },
+    // Pipeline::clear_queue: everything not filed goes, its file left where
+    // it is (and given its own name back from NEEDS REVIEW), but a parked
+    // document - whose files need checking - and one being renamed now. What
+    // went waits in the input folder until it is added again.
+    clearQueue: async () => {
+      const report = { cleared: 0, unsettled: 0, busy: 0, stillMarked: 0 };
+      const folder = settings.intakeFolder.replace(/[\\/]+$/, '');
+      items = items.filter((item) => {
+        if (item.status === 'completed') return true;
+        if (isParked(item)) { report.unsettled += 1; return true; }
+        if (item.status === 'processing' && item.cancelable === false) { report.busy += 1; return true; }
+        const name = withoutReviewPrefix(item.originalFilename);
+        const path = pathById.get(item.id) ?? `${folder}\\${name}`;
+        idByPath.delete(path);
+        pathById.delete(item.id);
+        setAside.set(path, name);
+        report.cleared += 1;
+        return false;
+      });
+      return report;
     },
     // The browser build has no Tauri runtime and nothing to replace, so it says
     // so rather than pretending to be up to date.

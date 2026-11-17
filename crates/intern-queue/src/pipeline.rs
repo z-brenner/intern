@@ -311,6 +311,32 @@ impl ModelFailure {
     }
 }
 
+/// What Clear queue did ([`Pipeline::clear_queue`]): how many documents
+/// it took out of the queue, and how many it kept, by why.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearedQueue {
+    /// Taken out of the queue. Their files are where they were.
+    pub cleared: usize,
+    /// Kept: a rename or copy of theirs did not finish, and their files need
+    /// checking first - what Remove asks to be confirmed for one document.
+    pub unsettled: usize,
+    /// Kept: being renamed or read at that moment, which cannot be stopped
+    /// part-way.
+    pub busy: usize,
+    /// Kept: Intern had renamed the file `NEEDS REVIEW - ...` and could not
+    /// give it its own name back (a program has it open). Taken out with
+    /// that name, it would be left for every scan to skip.
+    pub still_marked: usize,
+}
+
+impl ClearedQueue {
+    /// How many it kept, for whatever reason.
+    pub fn kept(&self) -> usize {
+        self.unsettled + self.busy + self.still_marked
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PipelineProgress {
@@ -6324,6 +6350,103 @@ impl Pipeline {
         Ok(removed)
     }
 
+    /// Clear queue: takes every document that is not filed out of Intern's
+    /// queue - waiting, being read, ready, in review, failed or canceled -
+    /// to start again from nothing. No file is deleted or moved. The
+    /// Completed view, with its history and undo, is left as it is.
+    ///
+    /// What is being read is stopped first, as Cancel stops it. A document
+    /// Intern renamed `NEEDS REVIEW - <name>` where it lies, because it could
+    /// not read it, gets its own name back in the journaled step Keep
+    /// original takes - or, failed or canceled, the one Clear completed
+    /// takes - before its row goes: a file left under that name with no row
+    /// behind it would be skipped by every scan for good. Some are kept
+    /// rather than cleared, and counted by why ([`ClearedQueue`]): one whose
+    /// earlier rename or copy did not finish (its files need checking, and
+    /// Remove asks to be confirmed for it), one being renamed or read that
+    /// cannot be stopped part-way, and one whose name could not be given
+    /// back.
+    ///
+    /// The documents stay in the Queue folder, and the intake watcher is not
+    /// to hand them over again as they are: the claim each was handed over by
+    /// is marked set aside, durably, so even a watcher started after this
+    /// - which never saw them in the queue - closes the claim as kept,
+    /// as Keep original's is (see `QueueStore::intake_claim_set_aside`). A
+    /// document that changes - saved again, renamed, put back under another
+    /// name - is a new document to the watcher and comes in as one; and
+    /// adding the folder's documents on purpose (Add files, or the Queue
+    /// folder's own add) takes them in again.
+    pub fn clear_queue(&self) -> PipelineResult<ClearedQueue> {
+        let mut outcome = ClearedQueue::default();
+        // What waits goes first, so the queue has nothing left to start on
+        // while the rest is stopped and cleared.
+        let waiting = self
+            .store
+            .list()?
+            .into_iter()
+            .filter(|item| item.status == QueueStatus::Queued)
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+        outcome.cleared += self.store.clear_items(&waiting)?;
+        let mut restored = std::collections::HashSet::new();
+        for item in self.store.list()? {
+            match item.status {
+                // Stopped as Cancel stops it; one that ended meanwhile is judged below.
+                QueueStatus::Extracting | QueueStatus::Analyzing => {
+                    let _ = self.cancel(item.id);
+                }
+                // Names back, as Keep original gives one: completed as kept,
+                // and cleared below with the rest.
+                QueueStatus::NeedsReview if self.store.current_review_mark(item.id)?.is_some() => {
+                    if unsettled_files(&item, self.unsettled_receipt(&item)?.as_ref()).is_none() {
+                        let _files = self.hold_file_ops();
+                        if let Ok(true) = self.files.restore_from_review(item.id) {
+                            restored.insert(item.id);
+                        }
+                    }
+                }
+                QueueStatus::Failed | QueueStatus::Canceled => self.unmark_if_marked(item.id),
+                _ => {}
+            }
+        }
+        let cleared = {
+            // Under the hold every rename runs under, so no filing starts on
+            // a row while it is being taken out.
+            let _files = self.hold_file_ops();
+            let mut clear = Vec::new();
+            for item in self.store.list()? {
+                match item.status {
+                    // Ready or in review a moment ago, kept by its own name:
+                    // done with the mark, and cleared. A filed document
+                    // stays filed.
+                    QueueStatus::Completed => {
+                        if restored.contains(&item.id) {
+                            clear.push(item.id);
+                        }
+                        continue;
+                    }
+                    QueueStatus::Applying | QueueStatus::Extracting | QueueStatus::Analyzing => {
+                        outcome.busy += 1;
+                        continue;
+                    }
+                    _ => {}
+                }
+                if unsettled_files(&item, self.unsettled_receipt(&item)?.as_ref()).is_some() {
+                    outcome.unsettled += 1;
+                } else if self.store.current_review_mark(item.id)?.is_some() {
+                    outcome.still_marked += 1;
+                } else {
+                    clear.push(item.id);
+                }
+            }
+            self.store.clear_items(&clear)?
+        };
+        outcome.cleared += cleared;
+        self.forget_removed();
+        self.events.queue_changed();
+        Ok(outcome)
+    }
+
     /// Drops what the extraction memo holds for every document no longer in
     /// the queue, as [`Self::remove`] does for one: Discard waiting and Clear
     /// history delete rows without naming them. An item id is never used
@@ -6448,6 +6571,13 @@ impl Pipeline {
     /// The item a claim handed over, with its proposal and receipts:
     /// `None` for a claim never recorded, `Some(None)` for one whose item is
     /// gone.
+    /// Whether the item a claim handed over was taken out by Clear queue,
+    /// which keeps the document out of the queue as it is (see
+    /// [`Self::clear_queue`]).
+    pub fn intake_claim_set_aside(&self, claim_key: &str) -> PipelineResult<bool> {
+        Ok(self.store.intake_claim_set_aside(claim_key)?)
+    }
+
     pub fn find_by_intake_claim(
         &self,
         claim_key: &str,

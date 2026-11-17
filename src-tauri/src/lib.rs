@@ -179,6 +179,7 @@ pub fn run() {
             commands::history_count,
             commands::history_export,
             commands::queue_discard_waiting,
+            commands::queue_clear,
             commands::intake_status,
             commands::intake_scan_now,
             commands::folder_classify,
