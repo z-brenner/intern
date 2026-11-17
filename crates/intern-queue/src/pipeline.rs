@@ -21,7 +21,9 @@ use intern_engine::{
     evidence::is_valid_iso_date,
     fingerprint::{self, NEAR_DUPLICATE_DISTANCE},
     is_a_spelling, is_own_name, lesson_from_edit, named_parties, party_and_more, party_as_named,
-    proposed_party, readiness, respelled_party, same_stem, sanitize_folder_name,
+    proposed_party, readiness, respelled_party,
+    review_level::name_confidence,
+    same_stem, sanitize_folder_name,
     setup::{semantic_probes, validate_semantic_probe},
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -808,6 +810,26 @@ impl ProposalRecord {
     /// its name from, and no confidence or evidence to show.
     pub fn is_synthetic(&self) -> bool {
         self.manual || self.copy_of.is_some()
+    }
+
+    /// How sure Intern is of this record's name, for the window, when the
+    /// row `waits` for a person or not
+    /// ([`intern_engine::review_level::name_confidence`]): every reason on
+    /// the record counts as a doubt, a hold of the queue's own as much as
+    /// the reading's, and so does a date taken from the file. Only
+    /// [`ALREADY_NAMED`], which says the file had the name already, is no
+    /// doubt about it. `None` for a name with no reading behind it: a copy's,
+    /// or one a person typed for a document that could not be read.
+    pub fn name_confidence(&self, waits: bool) -> Option<f32> {
+        if self.is_synthetic() {
+            return None;
+        }
+        let doubts = self
+            .reasons
+            .iter()
+            .filter(|reason| *reason != ALREADY_NAMED)
+            .count();
+        Some(name_confidence(&self.analysis, doubts, waits))
     }
 
     /// The validated facts as the name carries them: the document's words,

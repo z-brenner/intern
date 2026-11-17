@@ -582,6 +582,29 @@ names nobody approved: those Intern renamed by itself while their reading
 had a note. A name Intern gave by itself to a reading with no note, every
 one at strict among them, is not marked.
 
+**The confidence a person is shown** is how sure Intern is of the name, not
+the model's own rating (the local model gives none, and the engine writes
+1.0, which is how a document in review used to read 100%). It is worked out
+in one place, `review_level::name_confidence`, and sent as the queue item's
+`confidence` (`ProposalRecord::name_confidence`):
+
+1. The lower of the model's two figures: its rating of the reading, and the
+   least probable token of its date and its parties' names. A reading with
+   no token probabilities - a hosted model's, or one stored before they were
+   kept - has its rating alone.
+2. A document waiting for a person shows no more than 50%
+   (`WAITING_CEILING`).
+3. Each reason on the record, a hold or a note, the queue's own included,
+   leaves nine tenths of what is left (`DOUBT_FACTOR`); only
+   `ALREADY_NAMED`, which says the file had the name already, is no doubt.
+
+So a ready document with nothing on it shows the model's figure, at least
+70% for the local model by the token gate; one ready with a note a little
+less; and one in review 45% at most with one reason on it, less with each
+further reason. The window colors the figure by the document's status,
+never by its size: green for ready or renamed, amber for review
+(`confidenceTone` in `src/lib/format.ts`).
+
 What a level does not decide:
 
 * The queue's own holds stand at both levels: a near duplicate, a learned

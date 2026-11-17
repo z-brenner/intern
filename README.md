@@ -496,6 +496,12 @@ reading had a note, so they can be found and checked later. A name Intern
 gave by itself with no note, every one at Strict among them, is not listed.
 Approving a name, one at a time or with Rename all ready, clears its notes.
 
+The percentage beside a name is how sure Intern is of that name: the lower of
+the model's own rating and how probable it found the words of the date and
+the parties, never more than 50% for a document waiting for you, and a little
+less for every note or reason on it. It is green when the document is ready
+and amber when it waits, whatever the number.
+
 Changing the level judges the documents waiting in the queue again from what
 Intern has already read; nothing is read again. To Balanced: a document only
 Balanced calls ready becomes ready, and with automatic renaming on Intern

@@ -15,6 +15,10 @@
 //! A level never takes a reason off a reading. At the balanced level a ready
 //! reading can carry reasons: there they are notes for whoever looks, not
 //! holds.
+//!
+//! [`name_confidence`] is the figure a person is shown beside a reading's
+//! name. It is written here, beside the rule, so that the two cannot
+//! disagree: a reading in review never shows as surer than a ready one.
 
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -192,6 +196,51 @@ fn dated(analysis: &DocumentAnalysis) -> bool {
         .as_deref()
         .map(str::trim)
         .is_some_and(|date| !date.is_empty() && analysis.filename.starts_with(date))
+}
+
+/// What each doubt on a record leaves of how sure Intern is of its name:
+/// nine tenths ([`name_confidence`]).
+pub const DOUBT_FACTOR: f32 = 0.9;
+
+/// The most a reading that waits for a person is shown as: one in two
+/// ([`name_confidence`]). Below any ready reading's figure unless the model
+/// itself put that one lower.
+pub const WAITING_CEILING: f32 = 0.5;
+
+/// How sure Intern is of a reading's name, from 0 to 1: the figure a person
+/// is shown beside it, and the one place it is worked out.
+///
+/// 1. The lower of the model's two figures: its own rating of the reading
+///    (the proposal's confidence; the evidence pipeline's reply carries no
+///    rating and reads as sure), and the least probable token of its date
+///    and its parties' names ([`crate::TokenConfidence::min`]). A reading
+///    with no token probabilities - a hosted model's, or one stored before
+///    they were kept - has its rating alone.
+/// 2. A reading that `waits` for a person is shown no surer than
+///    [`WAITING_CEILING`], whatever the model's figures say: the model was
+///    sure of something a check then doubted, and the window says the
+///    check's word.
+/// 3. Each of the record's `doubts` - its review reasons, those that hold
+///    it and those that are only notes - leaves [`DOUBT_FACTOR`] of what
+///    is left.
+///
+/// So a ready reading with nothing on it shows the model's own figure, a
+/// ready one with a note a little less, and one in review at most 45%
+/// with a reason on it, less with each further reason. A figure that is
+/// not a number reads as 0.
+pub fn name_confidence(analysis: &DocumentAnalysis, doubts: usize, waits: bool) -> f32 {
+    let rating = analysis.proposal.confidence;
+    let tokens = analysis.token_confidence.map_or(1.0, |tokens| tokens.min);
+    let mut sure = if rating.is_finite() && tokens.is_finite() {
+        rating.min(tokens).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    if waits {
+        sure = sure.min(WAITING_CEILING);
+    }
+    let doubts = i32::try_from(doubts).unwrap_or(i32::MAX);
+    sure * DOUBT_FACTOR.powi(doubts)
 }
 
 /// Whether the reading has a document type a name can say: one that is
@@ -745,6 +794,87 @@ mod tests {
         for level in ReviewLevel::ALL {
             assert_eq!(readiness(&analysis, level), waits(&[]), "{level:?}");
         }
+    }
+
+    fn close(left: f32, right: f32) -> bool {
+        (left - right).abs() < 1e-6
+    }
+
+    /// A reading `rated` by the model, with `tokens` as its least probable
+    /// date or party token when the model reported any.
+    fn rated(rating: f32, tokens: Option<f32>) -> DocumentAnalysis {
+        let mut analysis = reading(&[]);
+        analysis.proposal.confidence = rating;
+        analysis.token_confidence = tokens.map(|min| crate::domain::TokenConfidence {
+            min,
+            mean: min,
+            tokens: 12,
+        });
+        analysis
+    }
+
+    /// The figure shown is the lower of the model's rating and its least
+    /// token probability. The evidence pipeline's reply has no rating and
+    /// reads as sure, so its token figure is what shows; a reading with no
+    /// token figures, a hosted model's or one stored before they were
+    /// kept, shows its rating.
+    #[test]
+    fn the_figure_shown_is_the_lower_of_the_models_two() {
+        assert!(close(
+            name_confidence(&rated(1.0, Some(0.83)), 0, false),
+            0.83
+        ));
+        assert!(close(
+            name_confidence(&rated(0.7, Some(0.95)), 0, false),
+            0.7
+        ));
+        assert!(close(name_confidence(&rated(0.9, None), 0, false), 0.9));
+        // What is not a figure counts for nothing, and what is out of
+        // range is brought into it.
+        assert!(close(
+            name_confidence(&rated(f32::NAN, Some(0.9)), 0, false),
+            0.0
+        ));
+        assert!(close(
+            name_confidence(&rated(1.0, Some(f32::NAN)), 0, false),
+            0.0
+        ));
+        assert!(close(name_confidence(&rated(1.7, None), 0, false), 1.0));
+        assert!(close(name_confidence(&rated(-0.2, None), 0, false), 0.0));
+    }
+
+    /// A reading in review never shows above one in two, and each reason
+    /// on the record takes a tenth of what is left: so a reading the model
+    /// was sure of, held for a party, reads 45% where it used to read
+    /// 100%. A ready reading with nothing on it shows its figure exactly,
+    /// and one with a note a little less.
+    #[test]
+    fn every_doubt_pulls_the_figure_down_and_review_never_reads_as_sure() {
+        let sure = rated(1.0, Some(1.0));
+        assert!(close(name_confidence(&sure, 0, false), 1.0));
+        assert!(close(name_confidence(&sure, 1, false), 0.9));
+        assert!(close(name_confidence(&sure, 0, true), WAITING_CEILING));
+        assert!(close(name_confidence(&sure, 1, true), 0.45));
+        assert!(close(name_confidence(&sure, 2, true), 0.405));
+        // Below the ceiling already, review takes off only the reasons.
+        let unsure = rated(1.0, Some(0.3));
+        assert!(close(name_confidence(&unsure, 1, true), 0.27));
+        // However sure the model and however few the reasons, a reading in
+        // review shows below every ready reading the model was as sure of.
+        for doubts in 0..6 {
+            for figure in [0.5, 0.75, 0.9, 1.0] {
+                let analysis = rated(1.0, Some(figure));
+                let waiting = name_confidence(&analysis, doubts, true);
+                assert!(waiting <= WAITING_CEILING, "{doubts} {figure}");
+                assert!(waiting <= name_confidence(&analysis, doubts, false));
+                assert!(
+                    name_confidence(&analysis, doubts + 1, false)
+                        < name_confidence(&analysis, doubts, false)
+                );
+            }
+        }
+        // An absurd count of reasons is no overflow.
+        assert!(name_confidence(&sure, usize::MAX, true) >= 0.0);
     }
 
     /// The level is stored as a lowercase word, strict is the default, and
