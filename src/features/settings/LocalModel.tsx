@@ -51,7 +51,7 @@ function TierLine({ tier, busy, onStart, onPause }: { tier: TierSetup; busy: boo
     <span>{tier.displayName}{size} · {tierStatus(tier)}</span>
     {tier.state === 'downloading' && <DownloadProgress setup={tier} label={`${tier.displayName} download`} />}
     {tier.state === 'failed' && tier.error && <p className="form-error">{tier.error === 'MODEL_SELF_TEST_FAILED'
-      ? 'This model did not pass its check on this computer, so Intern does not use it.'
+      ? 'This model did not pass its check on this computer, so ATLAS does not use it.'
       : describeSetupError(tier.error)}</p>}
     {tier.state === 'downloading' && <button type="button" disabled={busy} onClick={onPause}>Pause download</button>}
     {tier.state === 'required' && <button type="button" disabled={busy} onClick={onStart}>{started ? 'Resume download' : downloadLabel(tier)}</button>}

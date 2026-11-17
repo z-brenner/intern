@@ -7,7 +7,7 @@ import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 async function openSettings() {
   fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
   const dialog = await screen.findByRole('dialog', { name: 'Settings' });
-  fireEvent.click(within(dialog).getByText('How Intern names files', { selector: 'summary' }));
+  fireEvent.click(within(dialog).getByText('How ATLAS names files', { selector: 'summary' }));
   return dialog;
 }
 
@@ -19,7 +19,7 @@ describe('your organization\'s names', () => {
     let dialog = await openSettings();
     const names = within(dialog).getByLabelText('Your organizations');
     expect(names).toHaveValue('Contoso Worldwide, Inc.');
-    expect(names).toHaveAccessibleDescription('List each of your company names, one per line. Intern puts the matching name right after the date: 2025-03-26 Vistage Malaysia - Termination Letter for Johnny Appleseed.');
+    expect(names).toHaveAccessibleDescription('List each of your company names, one per line. ATLAS puts the matching name right after the date: 2025-03-26 Vistage Malaysia - Termination Letter for Johnny Appleseed.');
 
     // A list typed one name per line picks up padding and blank lines; the
     // box shows them as typed, or the caret would jump while typing.
@@ -61,7 +61,7 @@ describe('your organization\'s names', () => {
 
     fireEvent.change(names, { target: { value: 'KPMG' } });
     expect(within(dialog).queryByText(/too short to match/)).not.toBeInTheDocument();
-    expect(names).toHaveAccessibleDescription('List each of your company names, one per line. Intern puts the matching name right after the date: 2025-03-26 Vistage Malaysia - Termination Letter for Johnny Appleseed.');
+    expect(names).toHaveAccessibleDescription('List each of your company names, one per line. ATLAS puts the matching name right after the date: 2025-03-26 Vistage Malaysia - Termination Letter for Johnny Appleseed.');
   });
 
   /*

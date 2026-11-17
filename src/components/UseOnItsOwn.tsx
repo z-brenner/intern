@@ -12,8 +12,8 @@ import type { HouseRule, LearnedRule } from '../types';
  */
 export function onItsOwnConsequence(rule: HouseRule): ReactNode {
   return rule.kind === 'party'
-    ? <>From now on Intern will write <q>{rule.from}</q> as <q>{rule.to}</q>, and may file the name without asking you.</>
-    : <>From now on Intern will call <q>{rule.from}</q> documents <q>{rule.to}</q>, and may file the name without asking you.</>;
+    ? <>From now on ATLAS will write <q>{rule.from}</q> as <q>{rule.to}</q>, and may file the name without asking you.</>
+    : <>From now on ATLAS will call <q>{rule.from}</q> documents <q>{rule.to}</q>, and may file the name without asking you.</>;
 }
 
 /** How a learned spelling is named to a screen reader: "Acme written as Acme Corp". */

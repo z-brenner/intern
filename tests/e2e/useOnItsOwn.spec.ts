@@ -591,7 +591,7 @@ for (const size of sizes) {
     const panel = await openDetails(page, 'SOW final v3.pdf');
     const why = panel.getByRole('note', { name: 'Why the name waits' });
     await expect(why).toBeVisible();
-    await expect(why).toHaveText('This name waits for you because Intern has not been told to use every one of these spellings on its own: Always use is in Settings, under Learned spellings.');
+    await expect(why).toHaveText('This name waits for you because ATLAS has not been told to use every one of these spellings on its own: Always use is in Settings, under Learned spellings.');
     await expect(panel.getByRole('button', { name: /Always use|Use on its own/ })).toHaveCount(0);
     await expect(panel.getByRole('group', { name: /Always use|Use on its own/ })).toHaveCount(0);
     await expect(panel.getByRole('textbox')).toHaveCount(2);

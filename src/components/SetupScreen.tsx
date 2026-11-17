@@ -15,7 +15,7 @@ interface SetupScreenProps {
 }
 
 export function SetupScreen({ setup, busy, canChooseExisting, operationError, onStart, onCancel, onChooseExisting }: SetupScreenProps) {
-  if (!setup) return <main className="setup-screen" aria-label="Intern setup"><section><p role="status" aria-label="Loading setup" aria-live="polite">Loading setup</p></section></main>;
+  if (!setup) return <main className="setup-screen" aria-label="ATLAS setup"><section><p role="status" aria-label="Loading setup" aria-live="polite">Loading setup</p></section></main>;
   const failed = setup.state === 'failed';
   const downloading = setup.state === 'downloading';
   const canceled = setup.state === 'required' && setup.error === 'MODEL_DOWNLOAD_CANCELED';
@@ -34,8 +34,8 @@ export function SetupScreen({ setup, busy, canChooseExisting, operationError, on
     'Check the files against their published checksums',
     'Start naming documents',
   ];
-  return <main className="setup-screen" aria-label="Intern setup"><section>
-    <Icon icon={failed ? TriangleAlert : Download} /><h1>{failed ? 'Model setup needs attention' : 'Set up Intern'}</h1>
+  return <main className="setup-screen" aria-label="ATLAS setup"><section>
+    <Icon icon={failed ? TriangleAlert : Download} /><h1>{failed ? 'Model setup needs attention' : 'Set up ATLAS'}</h1>
     {/*
       The size comes from the setup state, which the backend fills from
       model-manifest.json before the first byte is fetched, so it cannot drift
@@ -47,7 +47,7 @@ export function SetupScreen({ setup, busy, canChooseExisting, operationError, on
       The screen leads with what the download is for, in plain words; which
       models, by name, is a detail for the few who want it, below.
     */}
-    <p className="setup-lead">Intern reads your documents with a model that runs on this computer. It needs a one-time download{size ? ` of ${size}` : ''} first. After that, naming documents works without an internet connection.</p>
+    <p className="setup-lead">ATLAS reads your documents with a model that runs on this computer. It needs a one-time download{size ? ` of ${size}` : ''} first. After that, naming documents works without an internet connection.</p>
     <ol className="setup-steps" aria-label="Model setup steps">
       {steps.map((text, index) => <li key={text} className={index < step ? 'done' : index === step && downloading ? 'current' : undefined} aria-current={index === step && downloading ? 'step' : undefined}>
         <span className="setup-step-mark" aria-hidden="true">{index + 1}</span>{text}{index === 1 && checking ? '…' : ''}

@@ -41,12 +41,12 @@ export function PrivacyBadge({ facts, onOpenSettings, onOpenGuide }: { facts: Pr
   const label = 'Private · On this device';
   return <>
     <button ref={buttonRef} type="button" className="private" aria-expanded={open} aria-controls={open ? panelId : undefined}
-      title="What Intern sends, and what it keeps on this computer"
+      title="What ATLAS sends, and what it keeps on this computer"
       onClick={() => open ? close() : setOpen(true)}><i /><span className="private-label">{label}</span><Icon icon={ChevronDown} /></button>
-    {open && <div ref={panelRef} id={panelId} className="privacy-popover" role="dialog" aria-label="What Intern sends"
+    {open && <div ref={panelRef} id={panelId} className="privacy-popover" role="dialog" aria-label="What ATLAS sends"
       onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); } }}>
       <h2 ref={headingRef} tabIndex={-1}>Your documents stay on this computer</h2>
-      <p>Intern reads documents locally. If you use Ask Claude, you choose what to share in your browser.</p>
+      <p>ATLAS reads documents locally. If you use Ask Claude, you choose what to share in your browser.</p>
       <dl>
         <div><dt>Model download</dt><dd>{facts.modelDownloaded ? 'Done' : 'Not finished'}</dd>
           <dd className="privacy-detail">Once, at setup. Fetches the model's files and carries nothing about your documents.</dd></div>

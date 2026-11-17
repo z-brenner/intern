@@ -45,7 +45,7 @@ export function intakeActivity(status: IntakeStatus): string[] {
   const arriving = status.arriving ?? 0;
   if (arriving > 0) lines.push(`${documents(arriving)} arriving…`);
   const unreadable = status.unreadableDocuments ?? 0;
-  if (unreadable > 0) lines.push(`${documents(unreadable)} could not be read. Intern keeps trying; check that ${unreadable === 1 ? 'it opens' : 'they open'} on this computer.`);
+  if (unreadable > 0) lines.push(`${documents(unreadable)} could not be read. ATLAS keeps trying; check that ${unreadable === 1 ? 'it opens' : 'they open'} on this computer.`);
   return lines;
 }
 

@@ -29,7 +29,7 @@ test.describe.configure({ mode: 'serial' });
 
 test('the queue, the drawer, and the filter behave as a person drives them', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+  await expect(page.getByRole('main', { name: 'ATLAS' })).toBeVisible();
   await shot(page, 'initial');
 
   // The seeded queue is eight rows: three ready, one review, one processing,
@@ -237,7 +237,7 @@ test('settings keeps optional choices collapsed, preserves typing, and discards 
   await expect(dialog.getByLabel('API address', { exact: true })).toHaveCount(0);
   await expect(dialog.getByRole('radio', { name: /Hosted model/i })).toHaveCount(0);
 
-  const naming = dialog.locator('summary', { hasText: 'How Intern names files' });
+  const naming = dialog.locator('summary', { hasText: 'How ATLAS names files' });
   const names = dialog.getByLabel("Your organization's names");
   await expect(names).toBeHidden();
   // Keyboard navigation skips controls inside closed sections.
@@ -359,7 +359,7 @@ test('history lists finished operations newest first', async ({ page }) => {
 test('the window stays usable at 1024 pixels and the drawer does not overflow', async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 768 });
   await page.goto('/');
-  await page.getByRole('main', { name: 'Intern' }).waitFor();
+  await page.getByRole('main', { name: 'ATLAS' }).waitFor();
 
   // 1024 is the narrowest supported window, and 1100 and below is where the
   // inspector becomes a modal drawer. Nothing but the Details button opens

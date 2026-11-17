@@ -93,7 +93,7 @@ describe('rename history', () => {
   it('opens a filed document still in the queue from its newest history row', async () => {
     const bridge = createInMemoryBridge();
     const openItem = vi.fn(async () => undefined);
-    const revealItem = vi.fn(async () => { throw { code: 'PATH_UNAVAILABLE', message: 'the document is not where Intern last saw it' }; });
+    const revealItem = vi.fn(async () => { throw { code: 'PATH_UNAVAILABLE', message: 'the document is not where ATLAS last saw it' }; });
     render(<App bridge={{ ...bridge, openItem, revealItem }} />);
     const dialog = await openHistory();
 
@@ -102,7 +102,7 @@ describe('rename history', () => {
     await waitFor(() => expect(openItem).toHaveBeenCalledWith('completed'));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Show 2024-01-22 Lease Agreement.pdf in its folder' }));
 
-    expect(await within(dialog).findByRole('alert', { name: 'Open error' })).toHaveTextContent('The document is not where Intern last saw it.');
+    expect(await within(dialog).findByRole('alert', { name: 'Open error' })).toHaveTextContent('The document is not where ATLAS last saw it.');
     expect(revealItem).toHaveBeenCalledWith('completed');
   });
 

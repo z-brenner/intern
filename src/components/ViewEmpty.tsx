@@ -14,7 +14,7 @@ const states: Record<QueueView, { icon: LucideIcon; title: string; body: string 
   queue: {
     icon: Inbox,
     title: 'The queue is clear',
-    body: 'Everything Intern has read has been dealt with. Drop more documents above to keep going.',
+    body: 'Everything ATLAS has read has been dealt with. Drop more documents above to keep going.',
   },
   completed: {
     icon: FileCheck2,

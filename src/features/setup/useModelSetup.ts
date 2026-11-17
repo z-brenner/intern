@@ -123,11 +123,11 @@ export function describeSetupError(error: unknown) {
     // vision projector, so the advice sent people looking for something that
     // does not exist. Name the files the manifest actually pins instead.
     case 'MODEL_FILE_INVALID':
-    case 'MODEL_MANIFEST_INVALID': return 'The selected file did not match a model Intern pins. Choose the exact Qwen3.5-4B-Q4_K_M.gguf or Qwen3.5-9B-Q4_K_M.gguf file, or let Intern download them. (MODEL_FILE_INVALID)';
+    case 'MODEL_MANIFEST_INVALID': return 'The selected file did not match a model ATLAS pins. Choose the exact Qwen3.5-4B-Q4_K_M.gguf or Qwen3.5-9B-Q4_K_M.gguf file, or let ATLAS download them. (MODEL_FILE_INVALID)';
     // The runtime failures below happen after the model file has passed its
     // checksum, so a fresh download re-hashes the same file and fails the
     // same way. They point at the runtime's own log instead.
-    case 'MODEL_SELF_TEST_FAILED': return `Intern installed the model, but its local self-test failed. The model file itself checked out, so downloading it again will not help; what the model runtime reported is in llama-server.log in ${LOG_FOLDER}. (MODEL_SELF_TEST_FAILED)`;
+    case 'MODEL_SELF_TEST_FAILED': return `ATLAS installed the model, but its local self-test failed. The model file itself checked out, so downloading it again will not help; what the model runtime reported is in llama-server.log in ${LOG_FOLDER}. (MODEL_SELF_TEST_FAILED)`;
     case 'MODEL_SERVER_START_FAILED': return `The local model is installed, but its runtime would not start on this computer. Security software blocking one of its files is a common cause; the reason is in llama-server.log in ${LOG_FOLDER}. Downloading the model again will not fix this. (MODEL_SERVER_START_FAILED)`;
     case 'MODEL_SERVER_UNHEALTHY': return `The local model's runtime started but did not become ready in time. Close other heavy programs and try again; if it keeps happening, llama-server.log in ${LOG_FOLDER} says why. (MODEL_SERVER_UNHEALTHY)`;
     case 'INSUFFICIENT_DISK': return 'There is not enough free disk space to install the local model. Free space and try again. (INSUFFICIENT_DISK)';

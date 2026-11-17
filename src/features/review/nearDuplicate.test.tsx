@@ -26,17 +26,17 @@ describe('a document waiting to be read again', () => {
       id: 'doubted',
       originalFilename: 'Slow scan.pdf',
       status: 'waiting',
-      reason: 'Waiting to be read again once Intern has shown it can read another document.',
+      reason: 'Waiting to be read again once ATLAS has shown it can read another document.',
     };
     render(<App bridge={createInMemoryBridge({ items: [doubted] })} />);
     await selectRow(await screen.findByRole('row', { name: /Slow scan.pdf/i }));
 
     const why = screen.getByRole('heading', { name: 'Why it is waiting' }).closest('section')!;
-    expect(why).toHaveTextContent('Waiting to be read again once Intern has shown it can read another document.');
+    expect(why).toHaveTextContent('Waiting to be read again once ATLAS has shown it can read another document.');
     expect(screen.queryByRole('heading', { name: 'Reason for review' })).not.toBeInTheDocument();
     // The grid says so too, with the reason on hover.
     const status = within(screen.getByRole('row', { name: /Slow scan.pdf/i })).getByText('Waiting to read again');
-    expect(status.closest('[title]')).toHaveAttribute('title', 'Waiting to be read again once Intern has shown it can read another document.');
+    expect(status.closest('[title]')).toHaveAttribute('title', 'Waiting to be read again once ATLAS has shown it can read another document.');
   });
 });
 
@@ -44,7 +44,7 @@ describe('a copy staged while the queue is paused', () => {
   it('shows the copy name it is filed under and needs no one', async () => {
     const staged: QueueItem = {
       id: 'staged', originalFilename: 'lease scan.pdf', status: 'ready', proposedFilename: 'COPY - 2026-01-02 Lease.pdf',
-      approved: true, copyOf: '2026-01-02 Lease.pdf', reason: 'Intern has filed this exact file before, so it filed it as a copy.',
+      approved: true, copyOf: '2026-01-02 Lease.pdf', reason: 'ATLAS has filed this exact file before, so it filed it as a copy.',
     };
     render(<App bridge={createInMemoryBridge({ items: [staged] })} />);
     const row = await screen.findByRole('row', { name: /lease scan.pdf/i });

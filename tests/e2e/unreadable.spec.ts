@@ -7,7 +7,7 @@ import { openDetails } from './grid';
 // name says it is password-protected in for one.
 test('an unreadable document is renamed for review, named by hand, and filed', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+  await expect(page.getByRole('main', { name: 'ATLAS' })).toBeVisible();
 
   await page.getByRole('region', { name: 'Drag files or folders here to copy them into Input' }).evaluate((dropZone) => {
     const transfer = new DataTransfer();

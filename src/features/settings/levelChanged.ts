@@ -92,8 +92,8 @@ export function levelChangedText({ to, count, typed }: LevelChange, renamed: Rea
   }
   if (count === 0) return 'The review level is now Balanced. No document that needed review became ready.';
   const them = one ? 'it' : 'them';
-  const how = renamed === 'automatic' ? `With automatic renaming on, Intern renames ${them} by itself.`
-    : renamed === 'paused' ? 'The queue is paused, so Intern renames nothing by itself until it is resumed.'
+  const how = renamed === 'automatic' ? `With automatic renaming on, ATLAS renames ${them} by itself.`
+    : renamed === 'paused' ? 'The queue is paused, so ATLAS renames nothing by itself until it is resumed.'
       : byRenameAllReady(count, typed);
   return [
     'The review level is now Balanced.',

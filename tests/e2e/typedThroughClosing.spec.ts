@@ -59,7 +59,7 @@ const queueByItself = (page: Page, how: 'read again' | 'new reading') => page.ev
 }, how);
 
 for (const size of [WIDE, NARROW]) {
-  test(`a name and a description typed and not filed are in their fields after Intern is closed and opened, and nothing has the focus for them, at ${size.width}x${size.height}`, async ({ page }) => {
+  test(`a name and a description typed and not filed are in their fields after ATLAS is closed and opened, and nothing has the focus for them, at ${size.width}x${size.height}`, async ({ page }) => {
     await page.setViewportSize(size);
     await page.goto('/');
     await typeInTheLease(page);
@@ -85,7 +85,7 @@ for (const size of [WIDE, NARROW]) {
 
     // Back to Intern's proposal drops it, here as in the window it was typed in: closed and opened again, it is the proposal.
     await untilSettled(page);
-    await panel.getByRole('button', { name: 'Back to Intern\'s proposal' }).click();
+    await panel.getByRole('button', { name: 'Back to ATLAS\'s proposal' }).click();
     await expect(panel.getByRole('textbox', { name: 'Filename' })).toHaveValue(PROPOSED);
     expect(await stored(page)).toBeNull();
     await page.reload();
@@ -149,7 +149,7 @@ test('what was typed is set aside, not in its fields, after a window that went w
   await expect(queueCell(page, LEASE, 'proposed')).not.toContainText('v2 signed');
 });
 
-test('what was typed for a document that then changed by itself is still set aside beside it after Intern is closed and opened', async ({ page }) => {
+test('what was typed for a document that then changed by itself is still set aside beside it after ATLAS is closed and opened', async ({ page }) => {
   await page.setViewportSize(WIDE);
   await page.goto('/?queue=changes');
   const panel = await typeInTheLease(page);
@@ -182,7 +182,7 @@ test('what was typed for a document that then changed by itself is still set asi
   await expect(kept).toHaveCount(0);
 });
 
-test('what was typed over one reading is set aside, not put in the fields, when Intern starts with the document under another', async ({ page }) => {
+test('what was typed over one reading is set aside, not put in the fields, when ATLAS starts with the document under another', async ({ page }) => {
   await page.setViewportSize(WIDE);
   await page.goto('/?queue=changes');
   // The Lease is read again before anything is typed, and the name is typed over that reading.
@@ -212,7 +212,7 @@ test('what was typed over one reading is set aside, not put in the fields, when 
   await expect(queueCell(page, LEASE, 'proposed')).toHaveText(`${PROPOSED}.pdf`);
 });
 
-test('a name typed and then filed is not there after Intern is closed and opened', async ({ page }) => {
+test('a name typed and then filed is not there after ATLAS is closed and opened', async ({ page }) => {
   await page.setViewportSize(WIDE);
   await page.goto('/');
   const panel = await typeInTheLease(page);
@@ -228,10 +228,10 @@ test('a name typed and then filed is not there after Intern is closed and opened
   await expect(again.getByRole('textbox', { name: 'Filename' })).toHaveValue(PROPOSED);
   await expect(again.getByRole('textbox', { name: 'Description' })).toHaveValue(PROPOSED_DESCRIPTION);
   await expect(page.getByRole('textbox', { name: 'What you had typed' })).toHaveCount(0);
-  await expect(again.getByRole('button', { name: 'Back to Intern\'s proposal' })).toHaveCount(0);
+  await expect(again.getByRole('button', { name: 'Back to ATLAS\'s proposal' })).toHaveCount(0);
 });
 
-test('Rename all ready leaves out a ready document whose name was typed before Intern was closed, and says so', async ({ page }) => {
+test('Rename all ready leaves out a ready document whose name was typed before ATLAS was closed, and says so', async ({ page }) => {
   await page.setViewportSize(WIDE);
   await page.goto('/');
   const panel = await openDetails(page, EMPLOYMENT);
@@ -246,7 +246,7 @@ test('Rename all ready leaves out a ready document whose name was typed before I
 
   await expect(all).toHaveText('Rename all ready 2');
   expect(await all.getAttribute('title')).toBe(title);
-  expect(title).toBe('Renames the 2 ready documents as Intern proposed. 1 with a name or a description you typed is left for you to file.');
+  expect(title).toBe('Renames the 2 ready documents as ATLAS proposed. 1 with a name or a description you typed is left for you to file.');
   await expect(page.getByRole('button', { name: '3 ready' })).toBeVisible();
   // The button has only just come with the window (untilSettled).
   await untilSettled(page);

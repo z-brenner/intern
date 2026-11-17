@@ -29,16 +29,16 @@ describe('BrowserApp', () => {
 
     render(<BrowserApp />);
 
-    expect(await screen.findByRole('button', { name: 'Set up Intern' })).toBeVisible();
-    expect(screen.queryByRole('main', { name: 'Intern' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Set up ATLAS' })).toBeVisible();
+    expect(screen.queryByRole('main', { name: 'ATLAS' })).not.toBeInTheDocument();
     window.history.replaceState({}, '', '/');
   });
 
   it('opens the ordinary demo app by default, with no onboarding', async () => {
     render(<BrowserApp />);
 
-    expect(await screen.findByRole('main', { name: 'Intern' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Set up Intern' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('main', { name: 'ATLAS' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set up ATLAS' })).not.toBeInTheDocument();
   });
 
   it('injects the browser selection boundary into the platform-neutral App', async () => {

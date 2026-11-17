@@ -99,14 +99,14 @@ describe('queue interactions', () => {
 
   // "Send to > Intern" adds outside the window. What it left out used to be
   // said nowhere at all; it is the same note as an add made here.
-  it('names what documents sent to Intern left out', async () => {
+  it('names what documents sent to ATLAS left out', async () => {
     const base = createInMemoryBridge({ items: [] });
     let deliver: ((report: AddReport) => void) | undefined;
     const stop = vi.fn();
     const subscribeLaunchReports = vi.fn((handler: (report: AddReport) => void) => { deliver = handler; return stop; });
     const bridge: DesktopBridge & LaunchReportSource = { ...base, subscribeLaunchReports };
     const view = render(<App bridge={bridge} />);
-    await screen.findByRole('main', { name: 'Intern' });
+    await screen.findByRole('main', { name: 'ATLAS' });
     await waitFor(() => expect(deliver).toBeDefined());
 
     act(() => deliver!({ added: 1, alreadyQueued: 0, copied: 1, inputFolder: 'C:\\Intern\\Input', skipped: [{ name: 'Contract.doc', code: 'UNSUPPORTED_FORMAT' }, { name: 'blank.pdf', code: 'EMPTY_FILE' }] }));
@@ -161,8 +161,8 @@ describe('queue interactions', () => {
     // It cannot be undone, so it is behind More, away from Rename all ready.
     fireEvent.click(moreAction('Clear queue…'));
     const dialog = screen.getByRole('alertdialog', { name: 'Clear the queue?' });
-    expect(dialog).toHaveTextContent("This takes all 8 documents out of Intern's queue, including any being read or waiting for your review. Completed documents stay as they are.");
-    expect(dialog).toHaveTextContent("Your files stay where they are, in Input. Intern won't pick them up again unless they change, or you add them again with Add files.");
+    expect(dialog).toHaveTextContent("This takes all 8 documents out of ATLAS's queue, including any being read or waiting for your review. Completed documents stay as they are.");
+    expect(dialog).toHaveTextContent("Your files stay where they are, in Input. ATLAS won't pick them up again unless they change, or you add them again with Add files.");
     expect(dialog).toHaveTextContent("This can't be undone.");
     // Cancel has the focus: a key pressed on the way in clears nothing.
     expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus();
@@ -481,7 +481,7 @@ describe('queue interactions', () => {
     fireEvent.click(moreAction('Clear completed…'));
     const dialog = screen.getByRole('alertdialog', { name: 'Clear completed?' });
     expect(dialog).toHaveTextContent('This takes the 1 document off the Completed list, with its rename history.');
-    expect(dialog).toHaveTextContent("Your files stay where they are: filed documents keep their new names. You won't be able to undo these renames from Intern.");
+    expect(dialog).toHaveTextContent("Your files stay where they are: filed documents keep their new names. You won't be able to undo these renames from ATLAS.");
     expect(dialog).toHaveTextContent("This can't be undone.");
     expect(clearHistory).not.toHaveBeenCalled();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Clear completed' }));

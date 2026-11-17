@@ -43,12 +43,12 @@ export function keepsDescriptionColumn(location: CloudLocation | null | undefine
  */
 export function folderSaveProblem(code: string | undefined): string | undefined {
   switch (code?.trim()) {
-    case 'INTAKE_FOLDER_MISSING': return 'Intern could not find the Queue folder. Choose a folder that exists. (INTAKE_FOLDER_MISSING)';
-    case 'INTAKE_NEEDS_DESTINATION': return 'Choose a Completed folder too. Intern needs both: a Queue folder for files to process, and a Completed folder outside it for processed files. (INTAKE_NEEDS_DESTINATION)';
+    case 'INTAKE_FOLDER_MISSING': return 'ATLAS could not find the Queue folder. Choose a folder that exists. (INTAKE_FOLDER_MISSING)';
+    case 'INTAKE_NEEDS_DESTINATION': return 'Choose a Completed folder too. ATLAS needs both: a Queue folder for files to process, and a Completed folder outside it for processed files. (INTAKE_NEEDS_DESTINATION)';
     case 'DESTINATION_INSIDE_INTAKE': return 'The Completed folder is inside the Queue folder (or is the same folder), so processed files would be picked up and processed again. Choose a Completed folder outside it. (DESTINATION_INSIDE_INTAKE)';
     case 'INTAKE_INSIDE_DESTINATION': return 'The Queue folder is inside the Completed folder. Choose folders where neither holds the other. (INTAKE_INSIDE_DESTINATION)';
-    case 'FILED_FOLDER_UNAVAILABLE': return 'Intern could not make a Completed folder there. Choose another folder for processed files. (FILED_FOLDER_UNAVAILABLE)';
-    case 'INBOX_FOLDER_UNAVAILABLE': return 'Intern could not make a Queue folder there. Choose another folder. (INBOX_FOLDER_UNAVAILABLE)';
+    case 'FILED_FOLDER_UNAVAILABLE': return 'ATLAS could not make a Completed folder there. Choose another folder for processed files. (FILED_FOLDER_UNAVAILABLE)';
+    case 'INBOX_FOLDER_UNAVAILABLE': return 'ATLAS could not make a Queue folder there. Choose another folder. (INBOX_FOLDER_UNAVAILABLE)';
     default: return undefined;
   }
 }

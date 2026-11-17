@@ -138,7 +138,7 @@ export function HistoryDialog({ bridge, selection, filedItems, notes, onClose }:
 
   return <div className="dialog-backdrop" role="presentation"><section ref={dialog} className="settings-dialog history-dialog" role="dialog" aria-modal="true" aria-label="Rename history">
     <div className="dialog-head"><h2>Rename history</h2><button type="button" className="icon-button" onClick={onClose} aria-label="Close history"><Icon icon={X} /></button></div>
-    <p className="update-note">Every rename and undo Intern has applied, newest first. The CSV export carries each document's description in its last column.</p>
+    <p className="update-note">Every rename and undo ATLAS has applied, newest first. The CSV export carries each document's description in its last column.</p>
     {loadError && <p className="form-error" role="alert">{loadError}</p>}
     {entries && entries.length === 0 && !loadError && <p className="history-empty">No renames yet.</p>}
     {entries && entries.length > 0 && <div className="history-table-wrap"><table>
@@ -148,7 +148,7 @@ export function HistoryDialog({ bridge, selection, filedItems, notes, onClose }:
         <td>{actionLabel(entry)}</td>
         <td title={entry.originalPath}>{pathLeaf(entry.originalPath)}</td>
         <td title={entry.newPath}>{pathLeaf(entry.newPath)}{entry.description && <span className="row-description">{entry.description}</span>}
-          {noted.has(entry.receiptId) && <span className="history-note" role="note" aria-label={`Intern's note on ${pathLeaf(entry.newPath)}`} title={noted.get(entry.receiptId)!.text}>{noted.get(entry.receiptId)!.label}</span>}
+          {noted.has(entry.receiptId) && <span className="history-note" role="note" aria-label={`ATLAS's note on ${pathLeaf(entry.newPath)}`} title={noted.get(entry.receiptId)!.text}>{noted.get(entry.receiptId)!.label}</span>}
           {openable.has(entry.receiptId) && <span className="history-document-actions">
             <button type="button" className="link-button" aria-label={`Open ${pathLeaf(entry.newPath)}`} onClick={() => void openDocument(entry.queueItemId, false)}><Icon icon={ExternalLink} />Open</button>
             <button type="button" className="link-button" aria-label={`Show ${pathLeaf(entry.newPath)} in its folder`} onClick={() => void openDocument(entry.queueItemId, true)}><Icon icon={FolderOpen} />Show in folder</button>

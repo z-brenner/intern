@@ -19,7 +19,7 @@ function setupSentence(setup: SharePointSetupStatus | undefined, failure: ShareP
   if (failure) return `Needs attention. ${failure.action}`;
   if (!setup) return 'Checking the SharePoint connection…';
   switch (setup.phase) {
-    case 'active': return `Active. Intern watches ${INBOX} and files into ${FILED}.`;
+    case 'active': return `Active. ATLAS watches ${INBOX} and files into ${FILED}.`;
     case 'ready_to_activate': return 'Needs attention. Filing is not on for this computer and Microsoft account. Turn on filing to finish setup.';
     case 'enrollment_pending': return `Needs attention. The ${LIBRARY} library is not synced on this computer yet. Sync it with OneDrive, keep OneDrive running while it syncs, then check again.`;
   }
@@ -126,7 +126,7 @@ export function SharePointConnection({ bridge, settings }: { bridge: DesktopBrid
 
   return <section className="settings-group sharepoint-connection" aria-labelledby="sharepoint-connection-heading">
     <h3 id="sharepoint-connection-heading">SharePoint connection</h3>
-    <p className="section-lead">Intern files documents for this organization's SharePoint library. The location is set for you and cannot be changed here.</p>
+    <p className="section-lead">ATLAS files documents for this organization's SharePoint library. The location is set for you and cannot be changed here.</p>
     <dl className="connection-facts">
       <div><dt>Site</dt><dd>{SITE}</dd></div>
       <div><dt>Library</dt><dd>{LIBRARY}</dd></div>

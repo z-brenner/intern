@@ -19,14 +19,14 @@ const learned: LearnedRule[] = [
   { id: '2', kind: 'document_type', from: 'Quarterly Operations Review', to: 'Meeting Minutes', seen: 2, active: true, confirmed: 1, learnedAt: 1716196500 },
 ];
 
-describe('the spellings Intern has learned', () => {
+describe('the spellings ATLAS has learned', () => {
   it('says there is nothing to show until review has taught something', async () => {
     render(<App bridge={createInMemoryBridge()} />);
     const dialog = await openSettings();
     expect(await within(dialog).findByText(/Nothing yet\. Correct a name in review/)).toBeVisible();
     expect(within(dialog).queryByRole('list', { name: 'Learned spellings' })).not.toBeInTheDocument();
     // What the section offers, and no more: Settings has no way to change a spelling.
-    expect(within(dialog).getByText(/^When you correct a name, Intern remembers/)).toHaveTextContent('When you correct a name, Intern remembers the spelling (for example “Contoso Worldwide, Inc.” → “Contoso”). New spellings wait for your OK before Intern applies them by itself.');
+    expect(within(dialog).getByText(/^When you correct a name, ATLAS remembers/)).toHaveTextContent('When you correct a name, ATLAS remembers the spelling (for example “Contoso Worldwide, Inc.” → “Contoso”). New spellings wait for your OK before ATLAS applies them by itself.');
   });
 
   it('lists each spelling with its state, uses one at once, and forgets one', async () => {
@@ -114,7 +114,7 @@ describe('the spellings Intern has learned', () => {
 
     fireEvent.click(action());
     const question = within(rows()[2]).getByRole('group', { name: 'Always use: Acme written as Acme Widgets International, Inc.' });
-    expect(question).toHaveAccessibleDescription('From now on Intern will write Acme as Acme Widgets International, Inc., and may file the name without asking you. Only do this if it is right every time.');
+    expect(question).toHaveAccessibleDescription('From now on ATLAS will write Acme as Acme Widgets International, Inc., and may file the name without asking you. Only do this if it is right every time.');
     expect(within(question).getByRole('textbox', { name: 'Type Acme Widgets International, Inc. to always use it' })).toHaveFocus();
     expect(within(question).getByRole('button', { name: 'Always use' })).toBeDisabled();
     expect(houseRuleCheck).not.toHaveBeenCalled();
@@ -566,7 +566,7 @@ describe('the spellings Intern has learned', () => {
     const dialog = await openSettings();
     const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
     fireEvent.click(within(list).getByRole('button', { name: /Always use/ }));
-    expect(within(list).getByRole('group')).toHaveAccessibleDescription(/^From now on Intern will call Quarterly Operations Review documents Meeting Minutes, and may file the name without asking you\./);
+    expect(within(list).getByRole('group')).toHaveAccessibleDescription(/^From now on ATLAS will call Quarterly Operations Review documents Meeting Minutes, and may file the name without asking you\./);
   });
 
   // The list can be older than the spelling: an approval in the queue can

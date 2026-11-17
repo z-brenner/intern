@@ -129,7 +129,7 @@ describe('a document held for a spelling nobody has checked', () => {
     expect(document.getElementById(chip.getAttribute('aria-controls')!)).toBeVisible();
     // And beside the name, where "Always use" is.
     const why = screen.getByRole('note', { name: 'Why the name waits' });
-    expect(why).toHaveTextContent('This name waits for you because Intern has not been told to use every one of these spellings on its own: Always use is in Settings, under Learned spellings.');
+    expect(why).toHaveTextContent('This name waits for you because ATLAS has not been told to use every one of these spellings on its own: Always use is in Settings, under Learned spellings.');
     // It does not say that approving the name would do instead.
     expect(why.textContent).not.toMatch(/approv/i);
     const applied = screen.getByRole('note', { name: 'Learned spellings applied' });
@@ -139,7 +139,7 @@ describe('a document held for a spelling nobody has checked', () => {
 
   it('says "this spelling" under a note of one', () => {
     render(<ReviewInspector item={{ ...held, houseRules: [held.houseRules![0]] }} drawer={false} {...handlers()} />);
-    expect(screen.getByRole('note', { name: 'Why the name waits' })).toHaveTextContent('This name waits for you because Intern has not been told to use this spelling on its own: Always use is in Settings, under Learned spellings.');
+    expect(screen.getByRole('note', { name: 'Why the name waits' })).toHaveTextContent('This name waits for you because ATLAS has not been told to use this spelling on its own: Always use is in Settings, under Learned spellings.');
   });
 
   it('says nothing of it for a name in your spelling that is not held for it', () => {

@@ -25,7 +25,7 @@ function statusLine(status: DescriptionsStatus): string {
   return [
     'On',
     status.folder ? `writing to ${status.folder}` : 'no Completed folder yet',
-    `${plural(status.recordedThisSession, 'record', 'records')} written since Intern started`,
+    `${plural(status.recordedThisSession, 'record', 'records')} written since ATLAS started`,
     `Last recorded: ${formatRecordedTime(status.lastRecordedAt)}`,
   ].join(' · ');
 }
@@ -108,9 +108,9 @@ export function SharePointDescriptions({ bridge, savedEnabled, draftEnabled, onD
   return (
     <section className="settings-group" aria-labelledby="sharepoint-descriptions-heading">
       <h3 id="sharepoint-descriptions-heading">Descriptions for SharePoint</h3>
-      <p className="section-lead">Puts Intern's one-sentence description of each filed document in your SharePoint library's Description column.</p>
+      <p className="section-lead">Puts ATLAS's one-sentence description of each filed document in your SharePoint library's Description column.</p>
       <label className="check-label"><input type="checkbox" checked={draftEnabled} onChange={(event) => onDraftEnabledChange(event.target.checked)} />Write a description record for each filed document</label>
-      <p className="check-hint">Each record is a small file in <code>.intern\descriptions</code> inside the Completed folder. OneDrive uploads it with the document; Intern itself sends nothing.</p>
+      <p className="check-hint">Each record is a small file in <code>.intern\descriptions</code> inside the Completed folder. OneDrive uploads it with the document; ATLAS itself sends nothing.</p>
       {status && <div className="descriptions-status">
         <p role="status" aria-label="Description records status" aria-live="polite">{statusLine(status)}</p>
         {status.lastError && <p className="form-error" role="alert">{describeDescriptionsError(status.lastError)}</p>}
@@ -121,10 +121,10 @@ export function SharePointDescriptions({ bridge, savedEnabled, draftEnabled, onD
         <li>
           Get the flow.{' '}
           <button type="button" onClick={() => flowLink.open('description-flow')}>Open the flow download</button>
-          <span className="check-hint">Opens the Intern guide in your browser; the flow is a small .zip file there.</span>
+          <span className="check-hint">Opens the ATLAS guide in your browser; the flow is a small .zip file there.</span>
           {flowLink.error && <span className="form-error" role="alert">{flowLink.error}</span>}
         </li>
-        <li>In Power Automate, choose <strong>My flows → Import → Import Package (Legacy)</strong>, upload it, and pick your SharePoint connection. Then open the flow, choose your site and library in its steps, and save. It runs in your Microsoft 365 account, not in Intern.</li>
+        <li>In Power Automate, choose <strong>My flows → Import → Import Package (Legacy)</strong>, upload it, and pick your SharePoint connection. Then open the flow, choose your site and library in its steps, and save. It runs in your Microsoft 365 account, not in ATLAS.</li>
         <li>
           Fill in documents filed before records were on.{' '}
           {/*

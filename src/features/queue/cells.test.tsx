@@ -394,7 +394,7 @@ describe('queue cells', () => {
     vi.stubGlobal('navigator', { ...navigator, clipboard: undefined });
     await start(tricky);
     fireEvent.click(moreAction('Copy table'));
-    expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('Intern could not copy to the clipboard.');
+    expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('ATLAS could not copy to the clipboard.');
   });
 
   it('counts what needs review where the Needs Review page used to, and steps through them from the count', async () => {

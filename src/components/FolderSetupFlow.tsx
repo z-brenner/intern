@@ -18,7 +18,7 @@ interface Props {
 }
 
 /** What the Queue folder is for, said the same way everywhere. */
-export const INPUT_FOLDER_HINT = 'Put files here that you want Intern to process.';
+export const INPUT_FOLDER_HINT = 'Put files here that you want ATLAS to process.';
 /** What the Completed folder is for, said the same way everywhere. */
 export const OUTPUT_FOLDER_HINT = 'Processed files end up here, renamed.';
 
@@ -182,9 +182,9 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
   const label = (path: string) => folderLabel(known, path);
   const noSuggestions = roots !== undefined && roots.length === 0 && !previousInput;
 
-  return <main className="onboarding" aria-label="Intern setup">
+  return <main className="onboarding" aria-label="ATLAS setup">
     <aside className="onboarding-rail">
-      <p className="onboarding-wordmark">Intern</p>
+      <p className="onboarding-wordmark">ATLAS</p>
       <ol aria-label="Setup steps">
         {steps.map(([id, text], index) => <li key={id} className={index < current ? 'done' : index === current ? 'current' : undefined} aria-current={index === current ? 'step' : undefined}>
           <span className="onboarding-rail-mark" aria-hidden="true">{index + 1}</span>{text}{index < current && <span className="sr-only"> (done)</span>}
@@ -194,7 +194,7 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
     <section className="onboarding-panel">
       {step === 'welcome' && <>
         <h1 ref={heading} tabIndex={-1}>Your documents, renamed and filed</h1>
-        <p>Intern works with two folders. Choose them now; you can change them later in Settings.</p>
+        <p>ATLAS works with two folders. Choose them now; you can change them later in Settings.</p>
         <dl className="setup-folders">
           <div><dt>Queue folder</dt><dd><span>{INPUT_FOLDER_HINT}</span></dd></div>
           <div><dt>Completed folder</dt><dd><span>{OUTPUT_FOLDER_HINT}</span></dd></div>
@@ -206,7 +206,7 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
       </>}
       {step === 'pick' && <>
         <h1 ref={heading} tabIndex={-1}>Choose your Queue folder</h1>
-        <p><strong>{INPUT_FOLDER_HINT}</strong> Pick a folder only you add files to. Files you drop on Intern’s window are copied into it too.</p>
+        <p><strong>{INPUT_FOLDER_HINT}</strong> Pick a folder only you add files to. Files you drop on ATLAS’s window are copied into it too.</p>
         {!roots && <p role="status" aria-live="polite">Looking for OneDrive folders on this computer…</p>}
         {roots && (roots.length > 0 || previousInput) && <ul className="folder-choices" aria-label="Suggested folders">
           {previousInput && <li>
@@ -232,7 +232,7 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
         <h1 ref={heading} tabIndex={-1}>Choose your Completed folder</h1>
         <p><strong>{OUTPUT_FOLDER_HINT}</strong> Neither folder may be inside the other.</p>
         {besideLeavesSync
-          ? <p>You chose all of <strong>{label(intake)}</strong>. Intern will make two folders in it: <strong>Input</strong>, for files to process, and <strong>Output</strong>, where processed files end up.</p>
+          ? <p>You chose all of <strong>{label(intake)}</strong>. ATLAS will make two folders in it: <strong>Input</strong>, for files to process, and <strong>Output</strong>, where processed files end up.</p>
           : <>
             <p>Queue folder: <strong>{label(intake)}</strong></p>
             {keep && <p>Your Completed folder until now: <strong>{label(keep)}</strong></p>}
@@ -253,7 +253,7 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
       </>}
       {step === 'existing' && <>
         <h1 ref={heading} tabIndex={-1}>Process what is already there?</h1>
-        <p>Your Queue folder already has {existing === 1 ? '1 file' : `${existing} files`} in it. Should Intern process {existing === 1 ? 'it' : 'them'} too, or only files you add from now on?</p>
+        <p>Your Queue folder already has {existing === 1 ? '1 file' : `${existing} files`} in it. Should ATLAS process {existing === 1 ? 'it' : 'them'} too, or only files you add from now on?</p>
         {alert}
         <div className="onboarding-actions">
           <button type="button" disabled={busy} onClick={() => void run(() => save(intake, destination, true))}>Process {existing === 1 ? 'it' : 'them'} too</button>
@@ -263,15 +263,15 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
       {step === 'ready' && <>
         <h1 ref={heading} tabIndex={-1} className="onboarding-finished">You’re all set</h1>
         <dl className="setup-folders">
-          <div><dt>Queue folder</dt><dd><strong>{label(intake)}</strong><span>{INPUT_FOLDER_HINT} You can also drop them on Intern’s window.</span></dd></div>
+          <div><dt>Queue folder</dt><dd><strong>{label(intake)}</strong><span>{INPUT_FOLDER_HINT} You can also drop them on ATLAS’s window.</span></dd></div>
           <div><dt>Completed folder</dt><dd><strong>{label(destination)}</strong><span>{OUTPUT_FOLDER_HINT}</span></dd></div>
         </dl>
         <p>You can change either folder any time in Settings.</p>
-        {background === 'on' && <p>Intern keeps running in the system tray and starts when you sign in, so files are processed while its window is closed. You can change this in Settings.</p>}
+        {background === 'on' && <p>ATLAS keeps running in the system tray and starts when you sign in, so files are processed while its window is closed. You can change this in Settings.</p>}
         {background === 'failed' && <div className="note note--review" role="note" aria-label="Start at sign-in">
-          <p>Your folders are saved, but Windows would not let Intern start when you sign in, so it works only while it is open. You can try again in Settings, under This computer.</p>
+          <p>Your folders are saved, but Windows would not let ATLAS start when you sign in, so it works only while it is open. You can try again in Settings, under This computer.</p>
         </div>}
-        {describesForSharePoint && <p>Your Completed folder is in SharePoint, so Intern also leaves a short description of each document there for SharePoint’s Description column. Settings shows how to fill that column.</p>}
+        {describesForSharePoint && <p>Your Completed folder is in SharePoint, so ATLAS also leaves a short description of each document there for SharePoint’s Description column. Settings shows how to fill that column.</p>}
         {leftOut && <div className="note note--review" role="note" aria-label="Files not added">
           <p>{describeAddReport(leftOut)} They stay in your Queue folder.</p>
         </div>}

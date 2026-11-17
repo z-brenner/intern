@@ -104,7 +104,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .app-header { grid-area: header; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 12px 0 20px; background: var(--surface); }
 .product { position: relative; display: flex; align-items: center; gap: 16px; min-width: 0; }
 .product strong { font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: -.2px; line-height: 1; color: var(--brand-ink); white-space: nowrap; }
-.brand-tag { font-size: 13px; font-weight: 400; color: var(--text-muted); margin-left: 10px; }
+.brand { display: flex; align-items: baseline; min-width: 0; }
+.brand-tag { font-size: 13px; font-weight: 400; color: var(--text-muted); margin-left: 10px; white-space: nowrap; }
 /* The privacy posture is a standing fact about the app, not a second
    headline. Set as a badge it stays legible without competing with the mark,
    and it is a button: what it promises can be looked into. */

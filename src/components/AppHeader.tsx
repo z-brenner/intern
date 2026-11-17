@@ -26,7 +26,12 @@ export function AppHeader({ paused, inert, busy, privacy, inputFolder = '', onAd
   */
   const into = inputFolder || 'your Queue folder';
   return <header className="app-header" inert={inert || undefined}>
-    <div className="product"><strong>Intern</strong>
+    {/*
+      The name is an acronym. It is spelled out once, here, beside the name
+      and quieter than it: what the app does, in the order it does it. A
+      narrow window drops the line and keeps the name (app.css).
+    */}
+    <div className="product"><span className="brand"><strong>ATLAS</strong><span className="brand-tag">Analyze · Title · Label · Approve · Store</span></span>
       <PrivacyBadge facts={privacy} onOpenSettings={onSettings} onOpenGuide={onHelp} /></div>
     {/*
       Adding is copying into the input folder, and the buttons say where to,

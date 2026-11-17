@@ -97,11 +97,11 @@ describe('the document viewer', () => {
     expect(actions.onClose).not.toHaveBeenCalled();
   });
 
-  it('shows the text Intern read, page by page, with what the name rests on marked', async () => {
+  it('shows the text ATLAS read, page by page, with what the name rests on marked', async () => {
     const preview = source();
     openPanel(invoice, preview);
     fireEvent.click(viewButton());
-    fireEvent.click(within(viewer()).getByRole('tab', { name: 'Text Intern read' }));
+    fireEvent.click(within(viewer()).getByRole('tab', { name: 'Text ATLAS read' }));
 
     const first = await within(viewer()).findByRole('region', { name: 'Page 1' });
     expect(preview.documentText).toHaveBeenCalledOnce();
@@ -123,13 +123,13 @@ describe('the document viewer', () => {
     const original = within(viewer()).getByRole('tab', { name: 'Original' });
     original.focus();
     fireEvent.keyDown(original, { key: 'ArrowRight' });
-    const text = within(viewer()).getByRole('tab', { name: 'Text Intern read' });
+    const text = within(viewer()).getByRole('tab', { name: 'Text ATLAS read' });
     expect(text).toHaveAttribute('aria-selected', 'true');
     await waitFor(() => expect(text).toHaveFocus());
     expect(original).toHaveAttribute('tabindex', '-1');
   });
 
-  it('shows a Word file as the text Intern read, with nothing to draw', async () => {
+  it('shows a Word file as the text ATLAS read, with nothing to draw', async () => {
     const preview = source();
     openPanel(letter, preview);
     fireEvent.click(viewButton());
@@ -139,10 +139,10 @@ describe('the document viewer', () => {
     expect(preview.documentFile).not.toHaveBeenCalled();
   });
 
-  it('says when the file has changed since Intern read it', async () => {
+  it('says when the file has changed since ATLAS read it', async () => {
     openPanel(letter, source({ documentText: async () => ({ ...pages, readNow: true, changed: true }) }));
     fireEvent.click(viewButton());
-    expect(await within(viewer()).findByRole('note')).toHaveTextContent('This file has changed since Intern read it. This is the text as it is now.');
+    expect(await within(viewer()).findByRole('note')).toHaveTextContent('This file has changed since ATLAS read it. This is the text as it is now.');
   });
 
   it('shows a picture as it is', async () => {
@@ -160,19 +160,19 @@ describe('the document viewer', () => {
     fireEvent.click(viewButton());
 
     const alert = await within(viewer()).findByRole('alert');
-    expect(alert).toHaveTextContent('Another program is holding the document, so Intern could not read it. Close it there, then try again.');
+    expect(alert).toHaveTextContent('Another program is holding the document, so ATLAS could not read it. Close it there, then try again.');
     held = false;
     fireEvent.click(within(alert).getByRole('button', { name: 'Try again' }));
     expect(await within(viewer()).findByRole('listitem', { name: 'Page 1 of 2' })).toBeInTheDocument();
     expect(preview.documentFile).toHaveBeenCalledTimes(2);
   });
 
-  it('says a document that has gone is not where Intern last saw it, and a file too large is to be opened instead', async () => {
+  it('says a document that has gone is not where ATLAS last saw it, and a file too large is to be opened instead', async () => {
     openPanel(invoice, source({ documentFile: async () => { throw { code: 'PATH_UNAVAILABLE', message: 'gone' }; }, documentText: async () => { throw { code: 'PATH_UNAVAILABLE', message: 'gone' }; } }));
     fireEvent.click(viewButton());
-    expect(await within(viewer()).findByRole('alert')).toHaveTextContent('The document is not where Intern last saw it. It may have been moved, renamed or deleted outside Intern.');
-    fireEvent.click(within(viewer()).getByRole('tab', { name: 'Text Intern read' }));
-    expect(await within(viewer()).findByRole('alert')).toHaveTextContent('not where Intern last saw it');
+    expect(await within(viewer()).findByRole('alert')).toHaveTextContent('The document is not where ATLAS last saw it. It may have been moved, renamed or deleted outside ATLAS.');
+    fireEvent.click(within(viewer()).getByRole('tab', { name: 'Text ATLAS read' }));
+    expect(await within(viewer()).findByRole('alert')).toHaveTextContent('not where ATLAS last saw it');
     fireEvent.keyDown(viewer(), { key: 'Escape' });
 
     const actions = handlers();
@@ -182,7 +182,7 @@ describe('the document viewer', () => {
     expect(alert).toHaveTextContent('This file is too large to show here. Open it in its own program instead.');
     // Trying again would say the same; reading its text is offered instead.
     expect(within(alert).queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
-    fireEvent.click(within(alert).getByRole('button', { name: 'Show the text Intern read' }));
+    fireEvent.click(within(alert).getByRole('button', { name: 'Show the text ATLAS read' }));
     expect(await within(viewer()).findByRole('region', { name: 'Page 1' })).toBeInTheDocument();
     // And its own program is a press away.
     fireEvent.click(within(viewer()).getByRole('button', { name: 'Open in its program' }));
@@ -194,8 +194,8 @@ describe('the document viewer', () => {
     openPanel(invoice, source(), openPdf);
     fireEvent.click(viewButton());
     const alert = await within(viewer()).findByRole('alert');
-    expect(alert).toHaveTextContent('This file is not a PDF Intern can draw. It may be damaged.');
-    fireEvent.click(within(alert).getByRole('button', { name: 'Show the text Intern read' }));
+    expect(alert).toHaveTextContent('This file is not a PDF ATLAS can draw. It may be damaged.');
+    fireEvent.click(within(alert).getByRole('button', { name: 'Show the text ATLAS read' }));
     expect(await within(viewer()).findByRole('region', { name: 'Page 1' })).toBeInTheDocument();
   });
 
