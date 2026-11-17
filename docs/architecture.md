@@ -335,6 +335,34 @@ implemented in Rust with no dependencies beyond the standard library.
 
 ### Budgets
 
+**What the local model reads** is retrieval's evidence, not the digest
+([`evidence-retrieval.md`](evidence-retrieval.md#the-chosen-configuration)):
+
+| Document | Behavior |
+| --- | --- |
+| its units cost ≤ 3,000 estimated tokens | sent whole, every unit as an `[id] text` line |
+| larger | each field retrieved within its own budget: type 180, date 675, parties 525, subject 450, identifier 180, key facts 300 tokens; 150% of them where the evidence is crowded (the dense tier) |
+
+These were widened in November 2026 from Stage 4's whole-document threshold
+of 1,800 tokens and budgets two thirds the size, which had the model reading
+about a tenth of every long document. On a CPU a document's cost is the
+prefill of its evidence, the instructions being read once and kept in the
+slot: about 70 s per 1,000 prompt tokens on the 9B and 39 s on the 4B on the
+slowest runner measured (AMD EPYC 7763), roughly half that on faster ones.
+On InternBench and the fixtures the widening costs nothing on the 78% of
+documents that went whole before, about 30% more model time on an excerpted
+one (33 s on the 9B at the median), and 69 to 95 s on the four 2- and
+3-page documents now read whole; it brings back five of the twelve subject
+terms and facts the narrower evidence lacked. The widest evidence, about
+3,000 tokens, fits the 8,192-token context beside the instructions, the
+file's name and the 1,024-token reply with more than 2,500 tokens to spare,
+so the context did not grow (a larger one would cost the 9B memory). The
+file's current name, when a person chose it rather than a scanner or a
+camera, goes before the evidence as a hint the reply cannot cite
+([`evidence-pipeline.md`](evidence-pipeline.md)).
+
+**The digest**, which a hosted model reads:
+
 | Source size | Behavior |
 | --- | --- |
 | ≤ 12,000 characters | passed through untouched |

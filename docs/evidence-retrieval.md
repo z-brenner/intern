@@ -9,7 +9,12 @@ measured beside the digest, before anything sent it; since Stage 8 the
 evidence pipeline built on it is the default for the local model
 ([`evidence-pipeline.md`](evidence-pipeline.md)), and the digest is what a
 hosted model reads. The acceptance table at the end records Stage 4 as it
-stood.
+stood. In November 2026 the evidence was widened - larger budgets, and
+documents up to 3,000 tokens sent whole - because the model was reading
+about a tenth of every long document; [the chosen
+configuration](#the-chosen-configuration) gives the measurements, and the
+sections after it describe Stage 4's configuration, which
+`RetrievalConfig::stage4()` keeps.
 
 ## The index
 
@@ -209,18 +214,185 @@ were not used to design anything and show the same results.
 
 ## The chosen configuration
 
-`RetrievalConfig::default()`:
+`RetrievalConfig::default()`, from November 2026:
 
-| Setting | Chosen | Plan start |
+| Setting | Chosen | Stage 4 (`RetrievalConfig::stage4()`) | Plan start (`plan_start()`) |
+| --- | --- | --- | --- |
+| Components | cues, structure, heading, position, features at 100; BM25 at 0 | same | all six at 100 |
+| Budgets (tokens) | **type 180, date 675, parties 525, subject 450, identifier 180, key facts 300** (Stage 4's x1.5) | type 120, date 450, parties 350, subject 300, identifier 120, key facts 200 | parties 450 |
+| Dense tier | 150% of the budgets, on the triggers | same | 175% |
+| Whole document | **up to 3,000 tokens** | up to 1,800 | 1,800 |
+| Strategy | hierarchical from 300 units, flat below | same | same |
+| Units | paragraphs split at 400 characters; 2 units per date; expansion up to 25% of a field's budget; stable ids | same | same |
+
+### Why it was widened
+
+Stage 4 chose the fewest tokens that kept every filename item
+([below](#stage-4s-choice)). That left the model reading little: of the 96
+documents measured here, one of more than 1,800 tokens was sent a median
+12% of its own text (10% from four pages up; the 60-page property policy
+about 2%), and the median prompt carried 758 tokens of evidence in a
+context of 8,192. The type, the date and the parties survived that. What
+did not is what a description needs: Stage 4's context lacked twelve of
+the gold's subject terms and facts, on eight documents, and on seven of
+them the digest carried at least one of those items.
+
+**What a token costs.** On a CPU the cost of a prompt is its prefill, and
+the instructions are read once and kept in the slot (`slots.rs`), so what a
+document pays for is its own user turn, which is its evidence. Measured:
+
+| Model | Machine | Prefill | Per 1,000 prompt tokens | From |
+| --- | --- | --- | --- | --- |
+| 9B | AMD EPYC 7763, 4 threads, repacked weights | 70 ms a token, linear from 4 to 2,080 tokens (fit over the 77 documents, intercept about 0) | 70 s | the timings in `bench/recording.json` |
+| 9B | AMD EPYC 7763, 2 threads, `--no-repack` | 70 s of prefill a request over the 13 battery requests | about 70 s | [`speed-linux-cpu-2026-11-12`](../bench/reports/speed-linux-cpu-2026-11-12/README.md) |
+| 9B | AMD EPYC 9V45 / 9V74, AVX2 path, `--no-repack` | 27 / 19 tokens a second | 37 / 52 s | [`speed-linux-cpu-2026-11-11`](../bench/reports/speed-linux-cpu-2026-11-11/README.md) |
+| 4B | AMD EPYC 7763, 2 threads, `--no-repack` | 508 s of prefill over the 13 battery requests, against the 9B's 911 s on the same processor: 0.56 of the 9B | about 39 s | [`speed-linux-cpu-2026-11-12`](../bench/reports/speed-linux-cpu-2026-11-12/README.md) |
+
+An estimated token (`engine::estimated_tokens`, which counts every digit
+as one) is 0.91 of the model's over the same documents (the server's
+prompt tokens against the context's estimate: 0.91 x estimate + 113), so
+1,000 estimated tokens of evidence cost about 64 s on the 9B and 36 s on
+the 4B on the slowest processor measured, and roughly half that on the
+faster ones. The reply - about 90 tokens, 16 s on the 9B - does not change.
+The seconds below are the EPYC 7763's: the worst case among the runners,
+and about what a laptop's AVX2 path does.
+
+The rule applied this time: send more wherever it carries more of what a
+description needs, as long as an excerpted document's model time grows by
+about 30% or less on the 9B; and send whole any document that fits in what
+a long document is now sent.
+
+### Measured
+
+`intern-bench retrieval` over the sources of `bench/recording.json` (the 77
+InternBench documents recorded live at `c427aff` with the routing worker,
+every page with its layout) and the 19 parsed fixtures of
+`fixtures/corpus-recording.json`, with their gold: 96 documents, 48 tuning
+and 48 held out. Recall in percent. "Losing" counts the documents whose
+context carries less of an item kind than the digest. The share seen is the
+context's tokens over the whole document's, at the median, for the 21
+documents Stage 4 excerpts. Seconds and percent are model time added on the
+9B at the rate above, against Stage 4: at the median over the documents
+excerpted under both, and the most any one document gains. Filename recall
+(type 99.0, date 97.9, parties 99.5; tuning 99.3, held out 98.2) and
+violations (none) are the same in every row.
+
+| Configuration | Facts tune / held out | Subject tune / held out | Facts, subject (all) | Documents losing a fact / a subject term | Tokens p50 / p90 / max | Share of an excerpted document seen | 9B s added: excerpted p50 / most | 9B time added, excerpted p50 (max) | Sent whole |
+|---|---|---|---|---|---|---|---|---|---|
+| Stage 4 | 97.2 / 96.1 | 98.2 / 95.1 | 96.7, 96.8 | 2 / 5 | 758 / 1,543 / 2,022 | 12% | - | - | 75 |
+| Stage 4, budgets x1.25 | 97.9 / 96.1 | 97.6 / 95.8 | 97.0, 96.8 | 1 / 3 | 787 / 1,706 / 2,472 | 15% | 15 / 32 | 16% (28%) | 75 |
+| Stage 4, budgets x1.5 | 97.9 / 96.1 | 99.4 / 96.8 | 97.0, 98.2 | 1 / 2 | 801 / 1,806 / 3,010 | 16% | 32 / 66 | 30% (44%) | 75 |
+| Stage 4, budgets x2 | 97.9 / 96.1 | 99.4 / 96.5 | 97.0, 98.0 | 1 / 2 | 816 / 2,222 / 4,009 | 22% | 60 / 132 | 57% (90%) | 75 |
+| Stage 4, description budgets (subject 600, key facts 400, parties 450, identifier 180) | 97.9 / 96.1 | 99.4 / 96.5 | 97.0, 98.0 | 1 / 2 | 801 / 1,854 / 2,872 | 18% | 35 / 59 | 35% (48%) | 75 |
+| Stage 4, always dense | 97.9 / 96.1 | 98.8 / 95.1 | 97.0, 97.1 | 1 / 4 | 787 / 1,543 / 2,022 | 13% | 0 / 33 | 0% (44%) | 75 |
+| Stage 4, whole up to 3,000 | 97.9 / 96.1 | 98.2 / 95.1 | 97.0, 96.8 | 1 / 5 | 787 / 1,706 / 2,406 | 12% | 0 / 95 | 0% | 79 |
+| Stage 4, whole up to 4,000 | 97.9 / 96.1 | 98.2 / 95.1 | 97.0, 96.8 | 1 / 5 | 801 / 1,832 / 3,789 | 12% | 0 / 182 | 0% | 81 |
+| **chosen** (budgets x1.5, whole up to 3,000) | 97.9 / 96.1 | 99.4 / 96.8 | 97.0, 98.2 | 1 / 2 | 837 / 2,047 / 3,010 | 16% | 33 / 95 | 30% (44%) | 79 |
+| chosen, always dense | 97.9 / 96.1 | 99.4 / 96.8 | 97.0, 98.2 | 1 / 2 | 868 / 2,047 / 3,010 | 20% | 44 / 95 | 35% (105%) | 79 |
+| chosen, dense 175% | 97.9 / 96.1 | 99.4 / 97.7 | 97.0, 98.6 | 1 / 1 | 837 / 2,195 / 3,556 | 19% | 48 / 101 | 44% (67%) | 79 |
+| chosen, budgets x1.75 | 97.9 / 96.1 | 98.8 / 97.7 | 97.0, 98.3 | 1 / 2 | 837 / 2,195 / 3,556 | 19% | 48 / 101 | 49% (67%) | 79 |
+| chosen, whole up to 4,000 | 97.9 / 96.1 | 99.4 / 96.8 | 97.0, 98.2 | 1 / 2 | 837 / 2,297 / 3,789 | 16% | 37 / 182 | 31% (44%) | 81 |
+| chosen, date and parties at Stage 4's | 97.9 / 96.1 | 99.4 / 95.8 | 97.0, 97.7 | 1 / 2 | 837 / 1,942 / 2,442 | 14% | 22 / 95 | 19% (30%) | 79 |
+| every document whole | 97.9 / 97.9 | 100.0 / 100.0 | 97.9, 100.0 | 0 / 0 | 876 / 9,033 / 116,181 | 100% | - / 7,294 | - | 96 |
+
+What it says:
+
+* **Budgets x1.5 is the knee.** It brings back five of the twelve items
+  Stage 4's context lacked - "service levels" in the services agreement,
+  "earn-out" in the asset purchase agreement, "term loan" in the credit
+  agreement, "dock" in the industrial lease and `FE-032` on the inspection
+  log - and loses none, for 30% more model time on the median excerpted
+  document (at most 44%). x1.25 found three of them and lost three subject terms of the
+  services agreement on the way. x2, or the increase spent on the
+  description's fields alone, found as many (GDPR in place of dock) at
+  twice the cost. Holding the date and the parties at Stage 4's budgets
+  lost "dock": the lines those fields bring carry subject words too. A
+  dense tier at 175%, or budgets x1.75, found one more ("warehouse") for
+  44-49%.
+* **Always dense adds cost, not evidence.** The triggers already make
+  every long InternBench document dense except two scans; forcing the rest
+  found nothing more.
+* **Whole up to 3,000** sends four 2- and 3-page documents of 1,832 to
+  2,406 tokens whole, where Stage 4 read a quarter to a half of each; one
+  of them, the
+  inspection log, carries the `FE-032` only the digest had. It costs those
+  four 69 to 95 s more on the 9B (+68% to +174%), and nothing to any other
+  document. 3,000 is about the most the widened budgets send from a long
+  document at the dense tier (3,010 measured), so no document costs more
+  whole than a long one costs excerpted, and the slowest document is no
+  slower for the threshold. Up to 4,000 adds two documents of 3,078 and
+  3,789 tokens, at up to 182 s each, for no item.
+* **What is still missed** is what Stage 4 found missed: the data
+  processing agreement's "GDPR", "student data" and "forty-eight hours"
+  (in its definitions and Annex I), "warehouse" in the industrial lease,
+  "tenant improvement" in the 25-page scanned lease, and "Vermont" and
+  "brewery" in the 60-page policy - each in the document, and ranked below
+  the budget. Only sending them whole recovers all of them, at 9,033
+  tokens on the tenth-largest document and 116,181 on the largest.
+
+### What it costs
+
+Over the 96 documents:
+
+| | Stage 4 | Chosen |
 | --- | --- | --- |
-| Components | cues, structure, heading, position, features at 100; **BM25 at 0** | all six at 100 |
-| Budgets (tokens) | type 120, date 450, **parties 350**, subject 300, identifier 120, key facts 200 | parties 450 |
-| Dense tier | **150%** of the budgets, on the triggers | 175% |
-| Whole document | up to 1,800 tokens | same |
-| Strategy | hierarchical from 300 units, flat below | same |
-| Units | paragraphs split at 400 characters; 2 units per date; expansion up to 25% of a field's budget; stable ids | same |
+| Evidence tokens, p50 / p90 / mean / max | 758 / 1,543 / 820 / 2,022 | 837 / 2,047 / 967 / 3,010 |
+| Context p50 by pages: 1-3 / 4-9 / 10-24 / 25+ | 676 / 928 / 958 / 1,736 | 685 / 1,193 / 1,259 / 2,312 |
+| Documents sent whole / at the normal tier / dense | 75 / 8 / 13 | 79 / 5 / 12 |
+| Long documents (10+ pages): context smaller than the digest by | 68% in total | 55% in total; two under 40% (the asset purchase agreement 36%, the credit agreement 34%) |
 
-The plan's values remain available as `RetrievalConfig::plan_start()`.
+| Documents | Count | Evidence p50, Stage 4 -> chosen | 9B seconds added, p50 (range) | 9B time added, p50 (range) | 4B seconds added, p50 |
+| --- | --- | --- | --- | --- | --- |
+| Sent whole by both | 75 | 673 -> 673 | 0 | 0 | 0 |
+| Excerpted by both, at the larger budgets | 17 | 1,415 -> 1,844 | 33 (9-66) | 30% (18-44%) | 18 |
+| Sent whole now (1,800 to 3,000 tokens) | 4 | 742 -> 2,022 | 79 (69-95) | 109% (68-174%) | 44 |
+
+The median document's time does not change: it went whole and still does.
+Over the whole corpus model time rises 12%, the 9B's median from 73 s to
+78 s a document and its 90th percentile from 122 s to 149 s (the median
+moves because four documents below it are now above it). A set with more
+long documents, or more 2- and 3-page documents of 1,800 to 3,000 tokens,
+pays more of it than InternBench does. The 40% long-document saving was a
+Stage 4 gate on spending tokens; two documents now fall short of it, and
+the sweep's ranking, which still puts that gate before recall, places the
+chosen configuration 25th of its 98. That is the trade made on purpose: the
+gate measured tokens against the digest, and the digest is not what the
+local model was short of.
+
+**The context window is not the limit.** The widest evidence the
+configuration sends - a whole document at 3,000 tokens, or a long one's
+excerpts at the dense tier, at most 3,465 by its budgets and 3,010
+measured - fits the local server's 8,192 tokens beside the instructions,
+the longest file name a prompt shows, the template and the whole
+1,024-token reply: 5,417 estimated tokens at most, 2,775 short of the
+8,192 (`the_widest_default_evidence_fits_the_local_context`). So the context
+stays at 8,192 (`server::CONTEXT_TOKENS`). The server sizes its KV cache by
+`--ctx-size` at load, whatever the prompt, so this change costs no memory;
+a larger window would cost the 9B memory, the binding constraint on a
+16 GB laptop ([`architecture.md`](architecture.md#two-models-one-at-a-time)),
+for evidence nothing here asks for. The fitting that keeps a prompt inside
+the context (estimate, retrieve again smaller, at most twice; halve once
+more if the server still refuses) is unchanged, for what the estimate
+cannot see.
+
+The prompt also shows the file's current name when a person chose it
+([`evidence-pipeline.md`](evidence-pipeline.md)): one line, about 25 tokens
+and the name, never a line a reply can cite. Neither evaluator passes the
+corpus's file names, which are its ids and name the answer, so none of the
+figures above include it.
+
+What the model makes of the wider evidence takes the model: the recordings
+of record have to be made again with this configuration, and that live run
+is the measurement ([`evaluation.md`](evaluation.md#after-a-retrieval-or-prompt-change)).
+
+### Stage 4's choice
+
+Stage 4's configuration (`RetrievalConfig::stage4()`, the default until the
+widening) is the middle column of the table above; the plan's values remain
+available as `RetrievalConfig::plan_start()`. The sweep keeps both as
+`stage4` and `plan_start`. This section and the ones after it measure
+Stage 4's configuration - "chosen" in their tables - on Stage 4's 91
+documents ([what was measured](#what-was-measured)).
 
 How it was chosen: the sweep ranks configurations on the tuning half by
 the Stage 4 gates first - no violation, fact recall not below the
@@ -243,7 +415,9 @@ level on every gate with the first.
 
 ## Ablation
 
-Context recall in percent, tuning half / held-out half; tokens at the
+Stage 4's measurements, on its 91 documents, with "chosen" meaning its
+configuration (`stage4` in the sweep today). Context recall in percent,
+tuning half / held-out half; tokens at the
 median over all 91 documents; the saving is the context's tokens against
 the digest's summed over documents of ten pages or more, and the last
 column counts those documents individually under a 40% saving. A
@@ -369,7 +543,8 @@ What the components do:
 
 ## Recall per field, against the digest
 
-The chosen configuration, context / digest:
+Stage 4's configuration, context / digest (the widened one's are under
+[the chosen configuration](#what-it-costs)):
 
 | Corpus | Half | Documents | Type | Date | Parties | Facts | Subject | `digest_recall` 1.0 | Violations |
 |---|---|---|---|---|---|---|---|---|---|
@@ -411,7 +586,7 @@ under 40%).
 
 ## Tokens against the digest
 
-Estimated tokens (`engine::estimated_tokens`), chosen configuration:
+Estimated tokens (`engine::estimated_tokens`), Stage 4's configuration:
 
 | Corpus | Pages | Docs | Context p50 | Digest p50 | Context mean | Digest mean | Context / digest (sum) | Smallest saving |
 |---|---|---|---|---|---|---|---|---|

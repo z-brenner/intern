@@ -465,7 +465,10 @@ whose date is on page one.
 
 Kept text is verbatim, which is what makes the safety check real: the model has
 to quote the document, and Intern checks the quoted facts against the document
-before they can rename anything.
+before they can rename anything. The file's current name, when a person chose
+it ("Host Chair SOW John Smith.pdf", not "scan0001.pdf"), goes to the model as a
+hint about which document this is, never as evidence: a fact only the name
+states is not used.
 
 Full details, thresholds, and measurements are in
 [`docs/architecture.md`](docs/architecture.md).

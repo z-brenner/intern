@@ -263,18 +263,45 @@ pub struct FieldBudgets {
 }
 
 impl Default for FieldBudgets {
-    /// The phase plan's budgets, with the parties' cut from 450 to 350:
-    /// past the first few names a long document's party units are lenders
-    /// and sub-processors (docs/evidence-retrieval.md).
+    /// Stage 4's budgets ([`FieldBudgets::stage4`]) half as large again,
+    /// every field alike: type 180, date 675, parties 525, subject 450,
+    /// identifier 180, key facts 300. The model was reading about a tenth
+    /// of a long document. At these budgets subject recall on InternBench
+    /// and the fixtures rises from 96.8% to 98.2%, losing no item, for
+    /// about 30% more evidence, and so model time, on an excerpted
+    /// document; x1.25 gained less and lost terms, and x2 gained nothing
+    /// more at twice the cost (docs/evidence-retrieval.md, "The chosen
+    /// configuration").
     fn default() -> Self {
+        Self::stage4().scaled(150)
+    }
+}
+
+impl FieldBudgets {
+    /// The budgets Stage 4 chose for the fewest tokens: the phase plan's,
+    /// with the parties' cut from 450 to 350, since past the first few
+    /// names a long document's party units are lenders and sub-processors.
+    /// The default until the evidence was widened.
+    pub fn stage4() -> Self {
         Self {
             parties: 350,
             ..Self::plan_start()
         }
     }
-}
 
-impl FieldBudgets {
+    /// Every budget at `percent` of this one.
+    pub fn scaled(&self, percent: u32) -> Self {
+        let scaled = |value: u32| value * percent / 100;
+        Self {
+            document_type: scaled(self.document_type),
+            date: scaled(self.date),
+            parties: scaled(self.parties),
+            subject: scaled(self.subject),
+            identifier: scaled(self.identifier),
+            key_facts: scaled(self.key_facts),
+        }
+    }
+
     /// The phase plan's starting budgets.
     pub fn plan_start() -> Self {
         Self {
@@ -382,20 +409,44 @@ pub struct RetrievalConfig {
 }
 
 impl Default for RetrievalConfig {
-    /// The configuration InternBench chose (docs/evidence-retrieval.md):
-    /// the plan's starting point with BM25 off, the dense tier at 150% and
-    /// the parties' budget at 350.
+    /// Stage 4's configuration ([`RetrievalConfig::stage4`]) with the
+    /// evidence widened (docs/evidence-retrieval.md, "The chosen
+    /// configuration"): every field's budget half as large again
+    /// ([`FieldBudgets::default`]), and a document goes whole up to 3,000
+    /// estimated tokens rather than 1,800 - about what the dense tier now
+    /// sends from a long document's excerpts, so no document whose text
+    /// would fit that is read in pieces, and none costs more whole than a
+    /// long one costs excerpted. On InternBench and the fixtures the median
+    /// document is unchanged (it goes whole either way), an excerpted
+    /// document carries about 30% more, and one of 1,800 to 3,000 tokens is
+    /// read whole: on the 9B at 70 ms a prompt token, the slowest runner
+    /// measured, 9 to 66 s more for the first and 69 to 95 s for the
+    /// second. The 8,192-token context holds the largest (about 3,000
+    /// tokens of evidence beside 1,024 for the reply) with room to spare.
     fn default() -> Self {
         Self {
-            weights: Weights::default(),
+            whole_document_tokens: 3_000,
             budgets: FieldBudgets::default(),
-            dense_pct: 150,
-            ..Self::plan_start()
+            ..Self::stage4()
         }
     }
 }
 
 impl RetrievalConfig {
+    /// The configuration Stage 4 chose for the fewest tokens: the plan's
+    /// starting point with BM25 off, the dense tier at 150% and the
+    /// parties' budget at 350 ([`FieldBudgets::stage4`]), and a document
+    /// going whole up to 1,800 tokens. The default until the evidence was
+    /// widened; the sweep keeps it to compare against.
+    pub fn stage4() -> Self {
+        Self {
+            weights: Weights::default(),
+            budgets: FieldBudgets::stage4(),
+            dense_pct: 150,
+            ..Self::plan_start()
+        }
+    }
+
     /// The phase plan's starting point, before tuning.
     pub fn plan_start() -> Self {
         Self {
@@ -1629,7 +1680,7 @@ mod tests {
         let partial: RetrievalConfig =
             serde_json::from_str(r#"{"budgets": {"date": 600}, "strategy": "flat"}"#).unwrap();
         assert_eq!(partial.budgets.date, 600);
-        assert_eq!(partial.budgets.parties, 350);
+        assert_eq!(partial.budgets.parties, FieldBudgets::default().parties);
         assert_eq!(partial.strategy, Strategy::Flat);
     }
 
@@ -1647,18 +1698,27 @@ mod tests {
         assert_eq!(context.handles.len(), context.units.len());
     }
 
+    /// Halved twice - where a refit after the server's refusal can end - the
+    /// evidence is smaller and still carries the defining date. (Halved
+    /// once, this document's evidence still fits the default budgets whole:
+    /// at half of them it sends what it sends at full.)
     #[test]
     fn a_smaller_scale_sends_less() {
         let source = credit_agreement();
         let index = EvidenceIndex::build(&source);
         let config = RetrievalConfig::default();
         let full = retrieve(&index, &config, 100);
-        let half = retrieve(&index, &config, 50);
-        assert!(half.estimated_tokens < full.estimated_tokens);
+        let quarter = retrieve(&index, &config, 25);
+        assert!(quarter.estimated_tokens < full.estimated_tokens);
         assert!(
-            context_states(&half, &index, "2026-06-12"),
+            context_states(&quarter, &index, "2026-06-12"),
             "the defining date survives halving:\n{}",
-            half.text
+            quarter.text
+        );
+        let stage4 = RetrievalConfig::stage4();
+        assert!(
+            retrieve(&index, &stage4, 50).estimated_tokens
+                < retrieve(&index, &stage4, 100).estimated_tokens
         );
     }
 

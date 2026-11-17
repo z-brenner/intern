@@ -364,6 +364,8 @@ pub fn adapt_document(document: WorkerDocument) -> Result<DocumentSource, Extrac
             .collect(),
         parser_warnings,
         page_image,
+        // The worker reads bytes; the name is the caller's to add.
+        file_name: None,
     })
 }
 

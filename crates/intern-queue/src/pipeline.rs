@@ -3360,6 +3360,11 @@ impl Pipeline {
             self.events.queue_changed();
             return Ok(keep_draining);
         }
+        // The name the file has here goes with it to the engine, which may
+        // show it to the model as orientation, never as evidence. Added
+        // after the reading is remembered, so the memo keeps what the
+        // reader made of the bytes alone.
+        let source = source.with_file_name_of(&item.source_path);
         let analysis = match self.analyze_with_deadline(&source, &extension, &existing) {
             Ok(analysis) => {
                 self.forget_missing_model();
@@ -5863,6 +5868,9 @@ impl Pipeline {
             &item.source_path,
         );
         let existing_names = existing.iter().map(String::as_str).collect::<Vec<_>>();
+        // Named as a reading names it, so the request is the one the stored
+        // reply answered when the file's name is the same.
+        let source = source.with_file_name_of(&item.source_path);
         let analysis =
             match self
                 .model
