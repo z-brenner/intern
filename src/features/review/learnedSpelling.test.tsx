@@ -164,6 +164,11 @@ describe('a document held for a spelling nobody has checked', () => {
     for (const button of pressable) {
       fireEvent.pointerDown(button, { pointerType: 'mouse' });
       fireEvent.click(button, { detail: 1 });
+      // View document opens the viewer over the window, which reads only and
+      // keeps every key to itself; it is closed again so the presses and keys
+      // below reach the review window, as they would after a person closed it.
+      const viewer = screen.queryByRole('dialog', { name: /SOW final v3\.pdf/i });
+      if (viewer) fireEvent.click(within(viewer).getByRole('button', { name: 'Close document' }));
     }
     fireEvent.click(within(panel).getByText('Analysis details'));
     // The spellings typed, and Enter, on the panel's heading and on nothing.
