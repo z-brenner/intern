@@ -3,8 +3,25 @@ name: Release v0.1.0-alpha.20
 # Publishing is a deliberate act, not a side effect of merging. A maintainer
 # dispatches this workflow against the exact main commit they want released;
 # every guard below still refuses anything but that commit.
+#
+# It names the Whole-product QA run it ships on. That run ran every gate, the
+# Windows browser tests, the workspace tests, the installer smoke, the update
+# over alpha.14, and the whole corpus with real inference, on release inputs
+# the preflight requires to be byte for byte this commit's; this workflow
+# used to do all of it again (about forty of alpha.19's ninety-four minutes)
+# and learned nothing new from it. It checks that run instead
+# (scripts/verify-qa-run.mjs), ships that run's model evaluation and logs as
+# its evidence, and itself builds, signs, smoke-tests, attests and publishes
+# the installer.
 on:
   workflow_dispatch:
+    inputs:
+      qa_run:
+        description: >-
+          The ID of the "Whole-product QA evidence" run whose capture the
+          sign-off accepted (the number in the run's URL)
+        required: true
+        type: string
 
 concurrency:
   group: intern-v0.1.0-alpha.20-release
@@ -12,6 +29,8 @@ concurrency:
 
 permissions:
   contents: write
+  # Reads the named QA run and downloads its evidence artifact.
+  actions: read
   # Keyless provenance for the installer. `id-token` lets the runner prove its own
   # identity to Sigstore, `attestations` lets it record the result against this
   # repository. No signing key or certificate is stored anywhere; there is nothing
@@ -24,6 +43,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       eligible: ${{ steps.target.outputs.eligible }}
+      qa_commit: ${{ steps.qa.outputs.commit }}
+      qa_attempt: ${{ steps.qa.outputs.attempt }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -61,6 +82,24 @@ jobs:
       # Windows build and real inference.
       - name: Preflight the sign-off, release notes, and versions
         run: node scripts/release-preflight.mjs --root=. --workflow="$GITHUB_WORKFLOW"
+      # The QA run this release ships on, checked before the Windows job
+      # starts: a successful dispatched QA run on main, on a commit with this
+      # commit's release inputs, whose evidence validates (model evaluation
+      # accepted, installed smoke accepted, the update over alpha.14 bound
+      # in) and whose capture is the one the sign-off accepted. The input is
+      # passed through the environment, never pasted into the script.
+      - name: Verify the QA run this release ships on
+        id: qa
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QA_RUN: ${{ inputs.qa_run }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$QA_RUN" =~ ^[0-9]+$ ]]; then echo "::error::qa_run must be a workflow run ID (the number in the QA run's URL), not '$QA_RUN'"; exit 1; fi
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$QA_RUN" > "$RUNNER_TEMP/qa-run.json"
+          attempt="$(jq -r .run_attempt "$RUNNER_TEMP/qa-run.json")"
+          gh run download "$QA_RUN" --repo "$GITHUB_REPOSITORY" --name "intern-whole-product-qa-$QA_RUN-$attempt" --dir "$RUNNER_TEMP/qa-evidence"
+          node scripts/verify-qa-run.mjs --root=. --run="$RUNNER_TEMP/qa-run.json" --artifact="$RUNNER_TEMP/qa-evidence" --repository="$GITHUB_REPOSITORY" --expect-attempt="$attempt"
 
   release:
     needs: release_target
@@ -75,6 +114,9 @@ jobs:
       INTERN_REQUIRE_GENERATED_FIXTURES: "1"
       INTERN_PDFIUM_DIR: ${{ github.workspace }}\src-tauri\resources\native\pdfium
       GH_TOKEN: ${{ github.token }}
+      QA_RUN: ${{ inputs.qa_run }}
+      QA_COMMIT: ${{ needs.release_target.outputs.qa_commit }}
+      QA_RUN_ATTEMPT: ${{ needs.release_target.outputs.qa_attempt }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -91,13 +133,31 @@ jobs:
         with:
           node-version: 24.15.0
           cache: npm
+      # The same QA run, and the same attempt of it, that the first job
+      # checked, checked again here where its files are used: the model
+      # evaluation and the logs this release publishes come from it. A QA run
+      # run again in between is refused rather than mixed with this one.
+      - name: Download and verify the QA run's evidence
+        shell: pwsh
+        run: |
+          if ($env:QA_RUN -notmatch '^[0-9]+$' -or $env:QA_COMMIT -notmatch '^[0-9a-f]{40}$' -or $env:QA_RUN_ATTEMPT -notmatch '^[0-9]+$') { throw "The QA run was not carried over from the first job" }
+          $Run = Join-Path $env:RUNNER_TEMP "qa-run.json"
+          gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:QA_RUN" | Set-Content -LiteralPath $Run -Encoding utf8NoBOM
+          if ($LASTEXITCODE -ne 0) { throw "Could not read QA run $env:QA_RUN" }
+          $Evidence = Join-Path $env:RUNNER_TEMP "qa-evidence"
+          gh run download $env:QA_RUN --repo $env:GITHUB_REPOSITORY --name "intern-whole-product-qa-$($env:QA_RUN)-$($env:QA_RUN_ATTEMPT)" --dir $Evidence
+          if ($LASTEXITCODE -ne 0) { throw "Could not download QA run $env:QA_RUN's evidence" }
+          node scripts/verify-qa-run.mjs --root=. "--run=$Run" "--artifact=$Evidence" "--repository=$env:GITHUB_REPOSITORY" "--expect-attempt=$env:QA_RUN_ATTEMPT"
+          if ($LASTEXITCODE -ne 0) { throw "QA run $env:QA_RUN's evidence was not accepted" }
+          if ((Get-Content -LiteralPath $Run -Raw | ConvertFrom-Json).head_sha -ne $env:QA_COMMIT) { throw "QA run $env:QA_RUN no longer names $env:QA_COMMIT" }
+          "INTERN_QA_EVIDENCE=$Evidence" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: 9.0.x
       - name: Install pinned Rust toolchain
         shell: pwsh
         run: |
-          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
+          rustup toolchain install 1.88.0 --profile minimal
           rustup default 1.88.0
       # The runtime assets CI's Windows packaging job built and saved on main,
       # restored under exactly CI's key, complete entries only, and never
@@ -132,70 +192,27 @@ jobs:
             Start-Sleep -Seconds (10 * $Attempt)
           }
           exit 1
+      # The fixtures the installed worker's smoke reads.
       - run: npm run fixtures
-      - run: npm run check
-      - run: npx playwright install chromium
-      - run: npm run test:e2e
-      - name: Stage parser worker for desktop compile checks
-        shell: pwsh
-        run: |
-          cargo build --locked -p intern-worker
-          New-Item -ItemType Directory src-tauri\binaries -Force | Out-Null
-          Copy-Item target\debug\intern-worker.exe src-tauri\binaries\intern-worker-x86_64-pc-windows-msvc.exe -Force
-          New-Item -ItemType File src-tauri\binaries\tesseract-x86_64-pc-windows-msvc.exe -Force | Out-Null
-          New-Item -ItemType Directory src-tauri\resources\licenses -Force | Out-Null
-          New-Item -ItemType Directory src-tauri\resources\tessdata -Force | Out-Null
-          New-Item -ItemType Directory src-tauri\resources\native\pdfium -Force | Out-Null
-          New-Item -ItemType Directory src-tauri\resources\native\sidecars -Force | Out-Null
-          New-Item -ItemType Directory src-tauri\resources\native\llama-upstream -Force | Out-Null
-          New-Item -ItemType Directory src-tauri\resources\ocr-models -Force | Out-Null
-          New-Item -ItemType File src-tauri\resources\licenses\compile-placeholder.txt -Force | Out-Null
-          New-Item -ItemType File src-tauri\resources\tessdata\compile-placeholder.traineddata -Force | Out-Null
-          New-Item -ItemType File src-tauri\resources\native\pdfium\compile-placeholder.dll -Force | Out-Null
-          New-Item -ItemType File src-tauri\resources\native\sidecars\compile-placeholder.dll -Force | Out-Null
-          New-Item -ItemType File src-tauri\resources\native\llama-upstream\compile-placeholder.dll -Force | Out-Null
-          New-Item -ItemType File src-tauri\resources\ocr-models\compile-placeholder.onnx -Force | Out-Null
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      - name: Run apply, undo, recovery, worker, and workspace tests
-        shell: pwsh
-        # A hang here used to sit until the job's 360-minute limit. The suite
-        # takes about ten minutes; this fails in a tenth of the time it took to
-        # notice the last one.
-        timeout-minutes: 45
-        run: |
-          New-Item -ItemType Directory release -Force | Out-Null
-          # Redirected by cmd rather than piped through Tee-Object. This step
-          # hung for over two hours while CI ran the identical `cargo test` on
-          # the same commit and finished in 33 minutes; the only difference was
-          # the PowerShell pipeline. A test process that outlives cargo inherits
-          # the pipe's write handle, so Tee-Object waits for a writer that never
-          # closes, and the step hangs after the tests have already passed.
-          # cmd's > hands cargo a real file handle, so nothing can hold the
-          # pipeline open, and the exit code is still cargo's own.
-          & cmd /c "cargo test --locked --workspace --all-targets > release\cargo-test.log 2>&1"
-          $TestExit = $LASTEXITCODE
-          Get-Content -LiteralPath release\cargo-test.log
-          if ($TestExit -ne 0) { throw "Rust workspace tests failed" }
+      # No gates here, and no compile placeholders. npm check, the browser
+      # tests, fmt, Clippy, the workspace tests, the native fixture and PP-OCR
+      # tests and the corpus scoring all passed in the QA run checked above,
+      # on these release inputs; the frontend is built and type-checked again
+      # by the installer build itself (its beforeBuildCommand). Nothing here
+      # compiles the desktop crate before the pinned runtime is staged, so no
+      # placeholder exists to be bundled by mistake.
       - name: Build parser worker sidecar
         shell: pwsh
         run: |
           cargo build --locked -p intern-worker --release --features windows-native
-          cargo build --locked -p intern-engine --release --bin intern-evaluate
           New-Item -ItemType Directory src-tauri\binaries -Force | Out-Null
           Copy-Item target\release\intern-worker.exe src-tauri\binaries\intern-worker-x86_64-pc-windows-msvc.exe -Force
       - name: Fetch and verify pinned Windows assets
         shell: pwsh
-        run: |
-          Remove-Item src-tauri\resources\licenses\compile-placeholder.txt -Force
-          Remove-Item src-tauri\resources\tessdata\compile-placeholder.traineddata -Force
-          Remove-Item src-tauri\resources\native\pdfium\compile-placeholder.dll -Force
-          Remove-Item src-tauri\resources\native\sidecars\compile-placeholder.dll -Force
-          Remove-Item src-tauri\resources\native\llama-upstream\compile-placeholder.dll -Force
-          Remove-Item src-tauri\resources\ocr-models\compile-placeholder.onnx -Force
-          ./scripts/fetch-windows-assets.ps1 -CacheDirectory "${{ runner.temp }}\intern-assets-cache"
+        run: ./scripts/fetch-windows-assets.ps1 -CacheDirectory "${{ runner.temp }}\intern-assets-cache"
       - run: npm run assets:verify -- --require-bundled
-      - run: cargo test --locked -p intern-worker --test generated_fixtures --features windows-native
+      # The shipping worker against the shipping runtime, before the installer
+      # is built; the SBOM step reads the staged runtime too.
       - name: Stage and exercise real package-shaped runtime
         shell: pwsh
         run: |
@@ -203,54 +220,10 @@ jobs:
           ./scripts/stage-windows-runtime.ps1 -Destination $Stage
           ./scripts/smoke-worker.ps1 -WorkerPath (Join-Path $Stage "intern-worker.exe") -RuntimeDirectory $Stage
           "INTERN_RUNTIME_STAGE=$Stage" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      # The worker smoke only proves the staged runtime reads its fixtures;
-      # this reads them through PP-OCR itself, from the staged ONNX Runtime
-      # and models, and fails if either is missing rather than skipping.
-      - name: Read scans through the staged PP-OCR runtime
-        shell: pwsh
-        run: |
-          $env:INTERN_RUNTIME_DIR = $env:INTERN_RUNTIME_STAGE
-          $env:INTERN_REQUIRE_PP_OCR = "1"
-          cargo test --locked -p intern-worker --test paddle_ocr --features windows-native
-          if ($LASTEXITCODE -ne 0) { throw "PP-OCR runtime tests failed" }
-      - name: Score the corpus through the shipping pipeline for this exact commit
-        shell: pwsh
-        # Downloads 5.29 GiB and scores the corpus with real inference: about
-        # an hour when healthy, since Qwen3.5 9B reads in about five times the
-        # 2B's 13 minutes. Bounded so a wedged llama-server cannot hold the job
-        # open for hours.
-        timeout-minutes: 150
-        run: |
-          New-Item -ItemType Directory release -Force | Out-Null
-          # No $LASTEXITCODE guard: the script is PowerShell, so that variable
-          # holds whatever its last *native* command left behind rather than the
-          # script's own verdict. It happened to be the acceptance validator, so
-          # the guard fired correctly once and reported "Corpus evaluation
-          # failed" for a run whose evaluation had in fact completed and whose
-          # model acceptance was blocked - the right outcome with the wrong
-          # reason, and none of the gate's own explanation. The script now
-          # prints the failures and throws deliberately.
-          & ./scripts/run-model-evaluation.ps1 `
-            -RuntimeDirectory $env:INTERN_RUNTIME_STAGE `
-            -WorkerPath (Join-Path $env:INTERN_RUNTIME_STAGE "intern-worker.exe") `
-            -EvaluatePath target\release\intern-evaluate.exe `
-            -OutputPath release\model-evaluation.json 2>&1 | Tee-Object -FilePath release\model-evaluation.log
-          node scripts/validate-model-evaluation.mjs release\model-evaluation.json
-      # A refused release is the case where evidence matters most. Without this
-      # the scored report died on the runner and the only surviving explanation
-      # was a one-line exception.
-      - name: Preserve the corpus evaluation even when it blocks the release
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: model-evaluation-${{ github.run_id }}-${{ github.run_attempt }}
-          if-no-files-found: warn
-          path: |
-            release/model-evaluation.json
-            release/model-evaluation.log
       # Pin the bundler's own toolset rather than letting it fetch one mid-build.
       # See scripts/prefetch-nsis.ps1: an unpinned GitHub download here failed two
-      # consecutive CI runs, and a release must not depend on it.
+      # consecutive CI runs, and a release must not depend on it. CI saves this
+      # entry; the release restores it and does not save.
       - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}\intern-nsis-cache
@@ -286,6 +259,9 @@ jobs:
       - name: Smoke test installer and installed worker
         shell: pwsh
         run: |
+          # The test and scoring steps that used to create release\ first are
+          # QA's now; Tee-Object cannot create the folder it writes into.
+          New-Item -ItemType Directory release -Force | Out-Null
           $Installer = Get-ChildItem target\release\bundle\nsis\*.exe | Select-Object -First 1
           if (-not $Installer) { throw "NSIS installer was not produced" }
           # No $LASTEXITCODE check here: it is only set by a native command, and
@@ -337,6 +313,17 @@ jobs:
           }
           Copy-Item docs\qa\latest-implementation.png $Release
           Copy-Item docs\qa\rendered-fidelity-signoff.json $Release
+          # What the QA run this release ships on scored and tested, verified
+          # above: its model evaluation (bound to that run and to these release
+          # inputs), and the logs of its workspace tests, its scoring and its
+          # update over alpha.14. This run's own installer smoke log is already
+          # here.
+          Copy-Item (Join-Path $env:INTERN_QA_EVIDENCE "docs\qa\model-evaluation.json") (Join-Path $Release "model-evaluation.json")
+          foreach ($Log in @("cargo-test.log", "model-evaluation.log", "update-smoke.log")) {
+            Copy-Item (Join-Path $env:INTERN_QA_EVIDENCE "docs\qa\logs\$Log") (Join-Path $Release $Log)
+          }
+          $ReleaseInputs = (node scripts/hash-release-inputs.mjs --root=.).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Could not digest the release inputs" }
           # The manifest an installed Intern reads to find a newer version.
           #
           # Tauri v2 signs the NSIS installer itself and writes the detached
@@ -390,10 +377,11 @@ jobs:
           - Commit: ``$env:GITHUB_SHA``
           - Workflow: ``$env:GITHUB_WORKFLOW``
           - Run: ``$env:GITHUB_RUN_ID`` attempt ``$env:GITHUB_RUN_ATTEMPT``
-          - Durable apply, undo, recovery, worker, and workspace tests: pass
-          - Corpus evaluation on the pinned local model through the shipping pipeline: pass
-          - Rendered screenshot: the reviewed 1536x1024 capture, shipped as-is and bound to the fidelity sign-off by release_inputs_sha256
-          - Installed application: launch, clean shutdown, worker PDF/OCR path, uninstall, and data retention passed
+          - Release inputs: ``$ReleaseInputs``
+          - Shipped on Whole-product QA evidence run ``$env:QA_RUN`` attempt ``$env:QA_RUN_ATTEMPT`` at ``$env:QA_COMMIT``, whose release inputs are the same: every gate, the Windows browser tests, the durable apply, undo, recovery, worker, and workspace tests, the native fixture and PP-OCR tests, the installer smoke, and the update over v0.1.0-alpha.14 passed there
+          - Corpus evaluation on the pinned local model through the shipping pipeline, in that QA run: pass
+          - Rendered screenshot: the reviewed 1536x1024 capture from that QA run, shipped as-is and bound to the fidelity sign-off by release_inputs_sha256
+          - Installed application (this run's signed installer): launch, clean shutdown, worker PDF/OCR path, uninstall, and data retention passed
           "@ | Set-Content release\release-checklist.md -Encoding utf8NoBOM
           # The checksum list intentionally excludes itself and the evidence
           # manifest. Including either would create a digest cycle. The evidence
@@ -425,7 +413,12 @@ jobs:
             --checksum=release/SHA256SUMS.txt `
             --log=release/cargo-test.log `
             --log=release/model-evaluation.log `
+            --log=release/update-smoke.log `
             --log=release/installer-smoke.log `
+            --qa-commit=$env:QA_COMMIT `
+            --qa-workflow="Whole-product QA evidence" `
+            --qa-run-id=$env:QA_RUN `
+            --qa-run-attempt=$env:QA_RUN_ATTEMPT `
             @SbomArguments
           # $PSNativeCommandUseErrorActionPreference is False by default, so a
           # failing `node` does not throw even under $ErrorActionPreference =
@@ -438,7 +431,12 @@ jobs:
             --commit=$env:GITHUB_SHA `
             --workflow="$env:GITHUB_WORKFLOW" `
             --run-id=$env:GITHUB_RUN_ID `
-            --run-attempt=$env:GITHUB_RUN_ATTEMPT
+            --run-attempt=$env:GITHUB_RUN_ATTEMPT `
+            --qa-commit=$env:QA_COMMIT `
+            --qa-workflow="Whole-product QA evidence" `
+            --qa-run-id=$env:QA_RUN `
+            --qa-run-attempt=$env:QA_RUN_ATTEMPT `
+            --release-inputs=$ReleaseInputs
           if ($LASTEXITCODE -ne 0) { throw "Release evidence was not accepted" }
       # Provenance for the one file a user downloads and runs, recorded only after
       # the evidence manifest above has already been accepted, so a rejected build

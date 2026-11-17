@@ -29,12 +29,12 @@ it('scores the corpus with the exact model the app installs, text-only', async (
 
 // Each tier is scored on the llama.cpp build the app runs it on: upstream
 // llama.cpp from the runtime's llama-upstream folder for both Qwen3.5 models;
-// the release and QA runs score the accurate one. The runtime's root holds no
-// llama-server. Both workflows hand over the runtime root.
+// the QA run, which a release ships on, scores the accurate one. The
+// runtime's root holds no llama-server. The workflow hands over the runtime
+// root.
 it('scores each tier on the llama-server the app runs it on', async () => {
-  const [script, release, qa] = await Promise.all([
+  const [script, qa] = await Promise.all([
     readFile('scripts/run-model-evaluation.ps1', 'utf8'),
-    readFile('.github/workflows/release.yml', 'utf8'),
     readFile('.github/workflows/qa.yml', 'utf8'),
   ]);
   expect(script).toMatch(/\[ValidateSet\("fast", "accurate"\)\]\[string\]\$Tier = "accurate"/);
@@ -42,10 +42,8 @@ it('scores each tier on the llama-server the app runs it on', async () => {
   expect(script).toContain('$Server = [IO.Path]::GetFullPath((Join-Path $Runtime $ServerRelative))');
   expect(script).not.toContain('Join-Path $Runtime "llama-server.exe"');
   expect(script).toContain('Start-Process -FilePath $Server ');
-  for (const workflow of [release, qa]) {
-    expect(workflow).toMatch(/-RuntimeDirectory \$env:INTERN(?:_QA)?_RUNTIME_STAGE `/);
-    expect(workflow).not.toMatch(/run-model-evaluation\.ps1[^\n]*-Tier\b/);
-  }
+  expect(qa).toMatch(/-RuntimeDirectory \$env:INTERN_QA_RUNTIME_STAGE `/);
+  expect(qa).not.toMatch(/run-model-evaluation\.ps1[^\n]*-Tier\b/);
 });
 
 it('the evaluator drives the shipping extraction, distillation, and validation path', async () => {
@@ -63,24 +61,30 @@ it('the evaluator drives the shipping extraction, distillation, and validation p
   expect(source).toContain('legacy_digest');
 });
 
+// The release ships on the QA run's report, so QA's scoring is the gate:
+// QA scores, then refuses a report the acceptance gate refuses, and the
+// release's own evidence validation accepts only a completed evidence-pipeline
+// report from that QA run.
 it('the release gate only accepts evidence from the shipping pipeline', async () => {
-  const [validator, release] = await Promise.all([
+  const [validator, qa, evidence] = await Promise.all([
     readFile('scripts/validate-model-evaluation.mjs', 'utf8'),
-    readFile('.github/workflows/release.yml', 'utf8'),
+    readFile('.github/workflows/qa.yml', 'utf8'),
+    readFile('scripts/release-evidence-lib.mjs', 'utf8'),
   ]);
   expect(validator).toContain("report.pipeline === 'evidence'");
   expect(validator).toContain('date_forbidden');
-  expect(release).toContain('intern-evaluate');
-  expect(release).toContain('validate-model-evaluation.mjs');
-  expect(release.indexOf('run-model-evaluation.ps1')).toBeLessThan(release.indexOf('validate-model-evaluation.mjs'));
+  expect(qa).toContain('intern-evaluate');
+  expect(qa).toContain('validate-model-evaluation.mjs');
+  expect(qa.indexOf('run-model-evaluation.ps1')).toBeLessThan(qa.indexOf('node scripts/validate-model-evaluation.mjs'));
+  expect(evidence).toContain("report.pipeline === 'evidence'");
+  expect(evidence).toContain("report.acceptance?.status === 'accepted'");
 });
 
 it('the runner scores with the pipeline the release gate accepts, unless told otherwise', async () => {
-  const [script, validator, evaluate, release, qa] = await Promise.all([
+  const [script, validator, evaluate, qa] = await Promise.all([
     readFile('scripts/run-model-evaluation.ps1', 'utf8'),
     readFile('scripts/validate-model-evaluation.mjs', 'utf8'),
     readFile('crates/intern-engine/src/bin/intern-evaluate.rs', 'utf8'),
-    readFile('.github/workflows/release.yml', 'utf8'),
     readFile('.github/workflows/qa.yml', 'utf8'),
   ]);
   const accepted = /report\.pipeline === '([a-z]+)'/.exec(validator)?.[1];
@@ -95,11 +99,9 @@ it('the runner scores with the pipeline the release gate accepts, unless told ot
   expect(set.split(',').map((word) => word.trim().replace(/"/g, ''))).toContain(accepted);
   expect(script).toContain('--pipeline $Pipeline');
   expect(evaluate).toContain(`"${accepted}" => Pipeline::Evidence`);
-  // Both workflows that gate on the report rely on that default.
-  for (const workflow of [release, qa]) {
-    expect(workflow).toContain('run-model-evaluation.ps1');
-    expect(workflow).not.toMatch(/-Pipeline\b/);
-  }
+  // QA, whose report a release ships on, relies on that default.
+  expect(qa).toContain('run-model-evaluation.ps1');
+  expect(qa).not.toMatch(/-Pipeline\b/);
 });
 
 // Each model is launched with flags of its own

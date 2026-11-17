@@ -2,6 +2,14 @@ import { createHash } from 'node:crypto';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 
+/**
+ * The workflow whose run a release ships on. A release does not score the
+ * corpus or run the gates again: it names one QA run on byte-identical
+ * release inputs, checks that run's evidence (scripts/verify-qa-run.mjs), and
+ * binds that run's model evaluation into its own manifest under `qa`.
+ */
+export const QA_WORKFLOW = 'Whole-product QA evidence';
+
 export function requireValue(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -81,14 +89,20 @@ function acceptedInstalledCore(report, installer, context) {
     && Object.values(checks).every((value) => value === true);
 }
 
-export async function deriveSignoffs(root, paths, artifacts, context) {
+/**
+ * The three sign-offs, from their artifacts. The model evaluation is bound to
+ * the run that scored it: the manifest's own run for QA, and for a release the
+ * QA run it ships on (`modelContext`). The installed-core smoke is always the
+ * manifest's own run, since a release smoke-tests the installer it publishes.
+ */
+export async function deriveSignoffs(root, paths, artifacts, context, modelContext = context) {
   const [model, fidelity, installed] = await Promise.all([
     readJsonArtifact(root, paths.model_evaluation),
     readJsonArtifact(root, paths.fidelity_signoff),
     readJsonArtifact(root, paths.installed_core_smoke),
   ]);
   return {
-    model_evaluation: acceptedModel(model, context) ? 'accepted' : 'rejected',
+    model_evaluation: acceptedModel(model, modelContext) ? 'accepted' : 'rejected',
     rendered_fidelity: acceptedFidelity(fidelity, artifacts.implementation_screenshot, model) ? 'accepted' : (fidelity?.status === 'pending' ? 'pending' : 'rejected'),
     installed_core_path: acceptedInstalledCore(installed, artifacts.installer, context) ? 'accepted' : 'rejected',
   };

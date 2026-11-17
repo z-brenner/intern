@@ -240,7 +240,6 @@ describe('the Windows builds', () => {
     ]);
     const staging = [
       ['ci.yml windows-rust', jobOf(workflow, 'windows-rust'), false],
-      ['release.yml release', jobOf(release, 'release'), true],
       ['qa.yml', jobOf(qa, 'windows-whole-product-qa'), true],
     ] as const;
     const reference = created(stepsOf(staging[0][1]).find((step) => step.includes('New-Item -ItemType File src-tauri\\resources\\'))!);
@@ -260,9 +259,12 @@ describe('the Windows builds', () => {
       expect(removed(steps[fetch]), name).toEqual(reference);
       expect(steps[fetch].indexOf('Remove-Item'), name).toBeLessThan(steps[fetch].indexOf('./scripts/fetch-windows-assets.ps1'));
     }
-    const packaging = jobOf(workflow, 'windows-package');
-    expect(packaging).toContain('./scripts/fetch-windows-assets.ps1');
-    expect(packaging).not.toContain('compile-placeholder');
+    // CI's installer job and the release build nothing of the desktop crate
+    // before the fetch, so they stage none, and none can be bundled.
+    for (const [name, job] of [['ci.yml windows-package', jobOf(workflow, 'windows-package')], ['release.yml release', jobOf(release, 'release')]]) {
+      expect(job, name).toContain('./scripts/fetch-windows-assets.ps1');
+      expect(job, name).not.toContain('compile-placeholder');
+    }
   });
 
   // No llama-server is a sidecar any more: a placeholder for one would be left
