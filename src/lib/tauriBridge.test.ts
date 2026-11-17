@@ -259,6 +259,34 @@ describe('TauriBridge', () => {
     ]);
   });
 
+  // The document viewer reads a document by its item's id too: its file as
+  // raw bytes, which arrive as an ArrayBuffer, and the text Intern read.
+  it('reads a document for the viewer by its id, as bytes and as the pages Intern read', async () => {
+    const pdf = new TextEncoder().encode('%PDF-1.7');
+    const fake = fakeTransport({
+      document_file: pdf.buffer,
+      document_text: { pages: [{ number: 1, text: 'INVOICE INV-3301', ocr: false }, { number: 2, text: 'Total due', ocr: true }], readNow: true, changed: false },
+    });
+    const bridge = new TauriBridge(fake.transport);
+
+    const bytes = await bridge.documentFile('7');
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(new TextDecoder().decode(bytes)).toBe('%PDF-1.7');
+    expect(await bridge.documentText('7')).toEqual({
+      pages: [{ number: 1, text: 'INVOICE INV-3301', ocr: false }, { number: 2, text: 'Total due', ocr: true }],
+      readNow: true,
+      changed: false,
+    });
+    expect(fake.calls).toEqual([
+      { command: 'document_file', args: { id: '7' } },
+      { command: 'document_text', args: { id: '7' } },
+    ]);
+    // A transport that hands the bytes over as numbers, and a reply with fields missing, read the same way.
+    const plain = new TauriBridge(fakeTransport({ document_file: [37, 80], document_text: { pages: [{ number: 1 }] } }).transport);
+    expect([...await plain.documentFile('8')]).toEqual([37, 80]);
+    expect(await plain.documentText('8')).toEqual({ pages: [{ number: 1, text: '', ocr: false }], readNow: false, changed: false });
+  });
+
   // The humanized reason cannot say which review items the backend will
   // retry; the code can, so it is kept beside the sentence.
   it('normalize_keeps_error_code_and_filed_fields', async () => {

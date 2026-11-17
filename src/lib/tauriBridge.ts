@@ -9,6 +9,7 @@ import { SUPPORTED_EXTENSIONS } from './formats';
 import type {
   DescriptionsEventSource,
   DesktopBridge,
+  DocumentText,
   ExistingModelFiles,
   FileSelection,
   IntakeEventSource,
@@ -191,6 +192,21 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
   }
   openItem(id: string): Promise<void> { return this.transport.invoke('document_open', { id }); }
   revealItem(id: string): Promise<void> { return this.transport.invoke('document_reveal', { id }); }
+  // The backend answers with the raw bytes, which arrive as an ArrayBuffer:
+  // a 50 MB scan as a JSON array of numbers would be four times its size.
+  async documentFile(id: string): Promise<Uint8Array> {
+    const bytes = await this.transport.invoke<ArrayBuffer | Uint8Array | number[]>('document_file', { id });
+    if (Array.isArray(bytes)) return Uint8Array.from(bytes);
+    return ArrayBuffer.isView(bytes) ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength) : new Uint8Array(bytes);
+  }
+  async documentText(id: string): Promise<DocumentText> {
+    const text = await this.transport.invoke<Partial<DocumentText> | undefined>('document_text', { id });
+    return {
+      pages: (text?.pages ?? []).map((page) => ({ number: page.number, text: page.text ?? '', ocr: page.ocr === true })),
+      readNow: text?.readNow === true,
+      changed: text?.changed === true,
+    };
+  }
 
   approve(id: string, filename: string, description: string): Promise<void> {
     return this.transport.invoke('proposal_approve', { id, filename, description });
