@@ -1,4 +1,4 @@
-import { CircleCheck, ClipboardCopy, Ellipsis, Info, PanelRight, Trash2, X } from 'lucide-react';
+import { CircleCheck, ClipboardCopy, Ellipsis, Info, PanelRight, Trash2 } from 'lucide-react';
 import { useDeferredValue, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { AppHeader } from './components/AppHeader';
@@ -391,11 +391,6 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   const selected = items.find((item) => item.id === selectedId);
   const panelOpen = Boolean(selected) && (narrowInspector ? detailsAskedFor : detailsOpen);
   const drawerOpen = panelOpen && narrowInspector;
-  // Wide and left open with no row selected - another view, or the last
-  // document decided - the panel stays where it was and says how to fill
-  // it, rather than going and giving the table its width back until the
-  // next click takes it again.
-  const detailsEmpty = !narrowInspector && detailsOpen && !selected && visible.length > 0;
   // A name or a description with the caret in it leaves the screen only by
   // something the person did. Its field can go by itself - the document is
   // read again (every untouched provisional reading is, at once, when the
@@ -1303,8 +1298,9 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
           </button>}
         </div>
         <div className="queue-actions">
-          <button ref={detailsButton} type="button" className="details-toggle" aria-expanded={panelOpen || detailsEmpty} aria-controls={panelOpen || detailsEmpty ? REVIEW_PANEL_ID : undefined} disabled={!selected && !detailsEmpty}
-            title={selected ? 'Show or hide details for the selected row. Enter, F2 or a double-click on a row opens them at its name.' : 'Double-click a row to see its details'} onClick={() => panelOpen || detailsEmpty ? closeDetails(true) : rememberDetails(true)}><Icon icon={PanelRight} />Details</button>
+          {/* With nothing selected it is disabled, and says how a row's details are opened. */}
+          <button ref={detailsButton} type="button" className="details-toggle" aria-expanded={panelOpen} aria-controls={panelOpen ? REVIEW_PANEL_ID : undefined} disabled={!selected}
+            title={selected ? 'Show or hide details for the selected row. Enter, F2 or a double-click on a row opens them at its name.' : 'Double-click a row to see its details'} onClick={() => panelOpen ? closeDetails(true) : rememberDetails(true)}><Icon icon={PanelRight} />Details</button>
           {/*
             What is done to the table now and then, in both views, behind one
             button: Copy, and the view's Clear, last and set apart. The
@@ -1374,11 +1370,6 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
           onDismiss={toast.kind === 'progress' ? undefined : () => setToast(undefined)}>{toast.text}</Toast>}
         {actionError && <Toast tone="error" label="Action error" onDismiss={() => setActionError('')}>{actionError}</Toast>}
       </div>}
-      {/* Not the review panel: nothing in it acts, and it has the panel's place only while nothing is selected. */}
-      {detailsEmpty && <aside id={REVIEW_PANEL_ID} className="inspector inspector--empty" aria-label="Details" role="complementary">
-        <div className="inspector-title"><h2>Details</h2><button type="button" className="icon-button" onClick={() => closeDetails()} aria-label="Close details"><Icon icon={X} /></button></div>
-        <p>Double-click a row to see its details.</p>
-      </aside>}
       {panelOpen && selected && <ReviewInspector id={REVIEW_PANEL_ID} ref={inspectorHandle} busy={actionPending} drawer={drawerOpen} item={selected} drafts={reviewDrafts}
         earlier={earlierDrafts.get(selected.id)} onDiscardEarlier={(kept) => discardEarlier(selected.id, kept.key)}
         position={undecided.length ? { index: undecided.findIndex((item) => item.id === selected.id) + 1 || undefined, total: undecided.length } : undefined}

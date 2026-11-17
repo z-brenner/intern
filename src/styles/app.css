@@ -382,9 +382,7 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
    pointer, and a press on a button that has just moved there is refused
    (src/lib/aimedPress.ts). */
 @keyframes inspector-in { from { opacity: 0; } }
-/* Left open with nothing selected: where the panel will be, and how to fill it. */
-.inspector--empty p { margin: 12px 0 0; color: var(--text-muted); font-size: 13px; line-height: 1.5; }
-.inspector--empty h2 { font-size: 16px; color: var(--text-soft); }
+
 .inspector-title, .dialog-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .inspector h2, .dialog-head h2 { margin: 0; font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: -.2px; }
 .inspector h3 { font-family: var(--font-display); font-size: 14px; font-weight: 600; margin: 0 0 10px; }

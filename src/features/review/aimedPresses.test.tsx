@@ -30,7 +30,7 @@ const ACTS: Array<[RegExp, boolean]> = [
   [/^(Undo the rename of .+|Undo the renames of these \d+ documents)$/, true],
   [/^Install .+ and restart$/, true],
   // These only move the view, open something, or take back a question.
-  [/^(Close review|Close details|Next undecided|Open|Show in folder|More review actions|Copy description|Cancel|Close|Dismiss|Not now)$/, false],
+  [/^(Close review|Next undecided|Open|Show in folder|More review actions|Copy description|Cancel|Close|Dismiss|Not now)$/, false],
   // Clear queue… and Clear completed… only ask; the dialog's yes is what clears.
   [/^(Queue, \d+|Completed, \d+|\d+ needs? review|\d+ ready|Copy table|Copy selection|Details|More actions|Clear queue…|Clear completed…|History)$/, false],
   [/^(Add files|Add folder|Pause queue|Resume queue|Help & support|Settings|Private · .*)$/, false],

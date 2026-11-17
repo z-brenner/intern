@@ -177,35 +177,17 @@ describe('the Details panel', () => {
     expect(panel()).not.toBeInTheDocument();
   });
 
-  // Left open with nothing selected, the panel keeps its place and says how
-  // to fill it, rather than leaving and taking the width back from the next click.
-  it('stays open with nothing selected, saying how to fill it', async () => {
+  // With nothing selected the toggle cannot open anything, and says how a row's details are opened.
+  it('says how to open a row from the Details toggle while nothing is selected', async () => {
     render(<App bridge={createInMemoryBridge()} />);
     await screen.findByRole('grid', { name: 'Queue' });
-    clickCell(queueCell('NDA - Acme Corp.docx'));
-    fireEvent.click(detailsToggle());
-    expect(panel()).toHaveTextContent('NDA - Acme Corp.docx');
-
     fireEvent.click(screen.getByRole('button', { name: /^Completed/ }));
-    const empty = await screen.findByRole('complementary', { name: 'Details' });
-    expect(empty).toHaveTextContent('Double-click a row to see its details.');
-    expect(detailsToggle()).toHaveAttribute('aria-expanded', 'true');
-    expect(detailsToggle()).toHaveAttribute('aria-controls', empty.id);
-
-    // A double-click fills it.
+    expect(detailsToggle()).toBeDisabled();
+    expect(detailsToggle()).toHaveAttribute('title', 'Double-click a row to see its details');
     const filed = queueCell('Completed lease.pdf', 'proposed');
     clickCell(filed, { detail: 1 });
     clickCell(filed, { detail: 2 });
     expect(panel()).toHaveTextContent('Completed lease.pdf');
-    expect(screen.queryByRole('complementary', { name: 'Details' })).not.toBeInTheDocument();
-
-    // Emptied again, its toggle closes it, and so does its own button.
-    fireEvent.click(screen.getByRole('button', { name: /^Queue/ }));
-    expect(await screen.findByRole('complementary', { name: 'Details' })).toBeInTheDocument();
-    fireEvent.click(detailsToggle());
-    expect(screen.queryByRole('complementary', { name: 'Details' })).not.toBeInTheDocument();
-    expect(detailsToggle()).toBeDisabled();
-    expect(detailsToggle()).toHaveAttribute('title', 'Double-click a row to see its details');
   });
 
   // How to open a row is said below the table until a row has been opened from it once.
