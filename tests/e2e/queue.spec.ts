@@ -3,7 +3,7 @@ import { moreAction, openDetails, queueCell } from './grid';
 
 test('mixed batch can be reviewed, approved, and undone entirely in memory', async ({ page }) => {
   await page.goto('/?fixtureBatch=1');
-  await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+  await expect(page.getByRole('main', { name: 'ATLAS' })).toBeVisible();
 
   await page.getByRole('region', { name: 'Drag files or folders here to copy them into Input' }).evaluate((dropZone) => {
     const transfer = new DataTransfer();
@@ -55,13 +55,13 @@ test('mixed batch can be reviewed, approved, and undone entirely in memory', asy
 
 test('naming your organization in Settings leads a waiting proposal with it', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+  await expect(page.getByRole('main', { name: 'ATLAS' })).toBeVisible();
   const lease = page.getByRole('row', { name: /Lease Agreement - 123 Main St\.pdf/i });
   await expect(lease).toContainText('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf');
 
   await page.getByRole('button', { name: /Settings/i }).click();
   const dialog = page.getByRole('dialog', { name: /Settings/i });
-  await dialog.locator('summary', { hasText: 'How Intern names files' }).click();
+  await dialog.locator('summary', { hasText: 'How ATLAS names files' }).click();
   // One name per line; the blank line a list picks up is not a name.
   await dialog.getByLabel('Your organizations').fill('TenantCo Inc.\n\n');
   await dialog.getByRole('button', { name: 'Save settings' }).click();
@@ -93,7 +93,7 @@ test('Clear queue and Clear completed ask first, say what stays, and empty their
 
   await (await moreAction(page, 'Clear queue…')).click();
   const question = page.getByRole('alertdialog', { name: 'Clear the queue?' });
-  await expect(question).toContainText("This takes all 8 documents out of Intern's queue");
+  await expect(question).toContainText("This takes all 8 documents out of ATLAS's queue");
   await expect(question).toContainText('Your files stay where they are, in Input.');
   await expect(question).toContainText("This can't be undone.");
   await expect(question.getByRole('button', { name: 'Cancel' })).toBeFocused();

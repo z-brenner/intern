@@ -34,19 +34,19 @@ const openBundledPdf: OpenPdf = async (bytes) => (await import('./pdfDocument'))
 
 /** What is said of a document the viewer could not show, by the backend's code. */
 const VIEW_ERRORS: Record<string, string> = {
-  PATH_UNAVAILABLE: 'The document is not where Intern last saw it. It may have been moved, renamed or deleted outside Intern.',
-  SOURCE_LOCKED: 'Another program is holding the document, so Intern could not read it. Close it there, then try again.',
+  PATH_UNAVAILABLE: 'The document is not where ATLAS last saw it. It may have been moved, renamed or deleted outside ATLAS.',
+  SOURCE_LOCKED: 'Another program is holding the document, so ATLAS could not read it. Close it there, then try again.',
   VIEW_TOO_LARGE: 'This file is too large to show here. Open it in its own program instead.',
-  VIEW_UNSUPPORTED: 'Intern cannot draw this kind of file here.',
-  UPLOADER_UNVERIFIED: 'Intern does not open a document from an uploader it could not verify.',
+  VIEW_UNSUPPORTED: 'ATLAS cannot draw this kind of file here.',
+  UPLOADER_UNVERIFIED: 'ATLAS does not open a document from an uploader it could not verify.',
   ITEM_NOT_FOUND: 'That document is no longer in the queue.',
-  PASSWORD_PROTECTED: 'This file is password-protected, so Intern could not read its text.',
-  UNSUPPORTED_CONTENT: 'This file is not what its extension says it is, so Intern could not read its text.',
-  DOCUMENT_TOO_LARGE: 'This document is too large for Intern to read its text.',
-  OCR_UNAVAILABLE: 'Intern\'s text-recognition files are missing, so it could not read this scan. Reinstall Intern to restore them.',
-  EXTRACTION_FAILED: 'Intern could not read this file\'s text. The file may be damaged.',
+  PASSWORD_PROTECTED: 'This file is password-protected, so ATLAS could not read its text.',
+  UNSUPPORTED_CONTENT: 'This file is not what its extension says it is, so ATLAS could not read its text.',
+  DOCUMENT_TOO_LARGE: 'This document is too large for ATLAS to read its text.',
+  OCR_UNAVAILABLE: 'ATLAS\'s text-recognition files are missing, so it could not read this scan. Reinstall ATLAS to restore them.',
+  EXTRACTION_FAILED: 'ATLAS could not read this file\'s text. The file may be damaged.',
   IO_ERROR: 'The document could not be read.',
-  PICTURE_UNREADABLE: 'Intern could not draw this picture. The file may be damaged.',
+  PICTURE_UNREADABLE: 'ATLAS could not draw this picture. The file may be damaged.',
 };
 
 /** Failures that are the file's for good: trying again cannot change them. */
@@ -59,8 +59,8 @@ function describeViewError(error: unknown): string {
   const code = errorCode(error);
   if (code && VIEW_ERRORS[code]) return VIEW_ERRORS[code];
   const name = typeof error === 'object' && error && 'name' in error ? String(error.name) : '';
-  if (name === 'PasswordException') return 'This PDF is password-protected, so Intern cannot draw it.';
-  if (name === 'InvalidPDFException') return 'This file is not a PDF Intern can draw. It may be damaged.';
+  if (name === 'PasswordException') return 'This PDF is password-protected, so ATLAS cannot draw it.';
+  if (name === 'InvalidPDFException') return 'This file is not a PDF ATLAS can draw. It may be damaged.';
   return describeActionError(error);
 }
 
@@ -206,7 +206,7 @@ export function DocumentViewer({ item, source, onClose, onOpen, openPdf = openBu
         <h2 id={titleId} className="viewer-title"><FileKindIcon filename={item.originalFilename} /><span>{name}</span></h2>
         {kind !== 'text' && <div className="viewer-tabs" role="tablist" aria-label="Show">
           {(['original', 'text'] as const).map((which) => <button key={which} type="button" role="tab" data-tab={which} id={`${panelId}-${which}`} aria-selected={tab === which} aria-controls={panelId} tabIndex={tab === which ? 0 : -1} onClick={() => showTab(which)} onKeyDown={onTabKey}>
-            {which === 'original' ? 'Original' : 'Text Intern read'}
+            {which === 'original' ? 'Original' : 'Text ATLAS read'}
           </button>)}
         </div>}
         <div className="viewer-tools">
@@ -237,7 +237,7 @@ function Failed({ error, onRetry, onText }: { error: unknown; onRetry?(): void; 
     <p>{describeViewError(error)}</p>
     <div className="viewer-status-actions">
       {onRetry && !(code && SETTLED.has(code)) && <button type="button" onClick={onRetry}>Try again</button>}
-      {onText && code !== 'UPLOADER_UNVERIFIED' && code !== 'ITEM_NOT_FOUND' && code !== 'PATH_UNAVAILABLE' && <button type="button" onClick={onText}>Show the text Intern read</button>}
+      {onText && code !== 'UPLOADER_UNVERIFIED' && code !== 'ITEM_NOT_FOUND' && code !== 'PATH_UNAVAILABLE' && <button type="button" onClick={onText}>Show the text ATLAS read</button>}
     </div>
   </div>;
 }
@@ -391,9 +391,9 @@ function TextPages({ text, item }: { text: DocumentText; item: QueueItem }) {
   const pages = text.pages.map((page) => ({ ...page, parts: markedText(page.text, marks, found) }));
   const legend = (['date', 'type', 'parties'] as const).filter((field) => found.has(field));
   return <div className="viewer-text">
-    {text.changed && <p className="viewer-note" role="note">This file has changed since Intern read it. This is the text as it is now.</p>}
+    {text.changed && <p className="viewer-note" role="note">This file has changed since ATLAS read it. This is the text as it is now.</p>}
     {legend.length > 0 && <p className="viewer-legend">Marked: {legend.map((field) => <mark key={field} className={`viewer-mark viewer-mark--${field}`}>{FIELD_NAMES[field]}</mark>)}</p>}
-    {pages.length === 0 && <p className="viewer-status">Intern found no text in this document.</p>}
+    {pages.length === 0 && <p className="viewer-status">ATLAS found no text in this document.</p>}
     {pages.map((page) => <section key={page.number} className="viewer-text-page" aria-label={`Page ${page.number}`}>
       <h3>Page {page.number}{page.ocr && <span className="viewer-ocr" title="Read from a picture of the page, so a letter can be misread"><Icon icon={ScanText} />Scanned</span>}</h3>
       {page.text.trim() ? <p className="viewer-text-body">{page.parts}</p> : <p className="viewer-text-empty">No text on this page.</p>}

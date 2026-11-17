@@ -20,10 +20,10 @@ import { CLOSED_KEY, MAX_DESCRIPTION, MAX_NAME, MAX_STORED, TYPED_KEY, documentO
   it closed in the ordinary way: its mark is in storage as the launch
   begins.
 */
-describe('what was typed in review and not filed, through closing Intern', () => {
+describe('what was typed in review and not filed, through closing ATLAS', () => {
   const lease: QueueItem = { id: '7', originalFilename: 'scan.pdf', status: 'review', proposedFilename: '2024-03-01 Lease.pdf', description: 'A lease.', confidence: 0.8, proposalRevision: '1', readBy: { tier: 'accurate', modelId: 'accurate-a', displayName: 'Accurate' } };
   const invoice: QueueItem = { id: '8', originalFilename: 'scan 2.pdf', status: 'ready', proposedFilename: '2024-04-01 Invoice.pdf', description: 'An invoice.', confidence: 0.9, proposalRevision: '1' };
-  const unreadable: QueueItem = { id: '9', originalFilename: 'fax.pdf', status: 'review', errorCode: 'EXTRACTION_FAILED', reason: 'Intern could not read it.' };
+  const unreadable: QueueItem = { id: '9', originalFilename: 'fax.pdf', status: 'review', errorCode: 'EXTRACTION_FAILED', reason: 'ATLAS could not read it.' };
   /** What `documentOf` and `readingOf` give for the lease and for the unreadable document above. */
   const DIGESTS = ['c3bd92c21e2e0c25', 'ed2ee7de81d24cc9', '1a9c63b8880aef05', 'e06ae1af2c56fc8c'];
   const NAME = '2024-03-01 Lease of Unit 4';
@@ -69,7 +69,7 @@ describe('what was typed in review and not filed, through closing Intern', () =>
     return { fields: kept.drafts.get(id), aside: (kept.earlier.get(id) ?? []).map(({ text, edited }) => ({ text, edited })), kept };
   };
 
-  it('is in the fields again when Intern starts with the document as it was typed over', () => {
+  it('is in the fields again when ATLAS starts with the document as it was typed over', () => {
     const storage = storageOf();
     const first = launch(storage, [lease, invoice]);
     first.drafts.set(lease.id, typedOver(lease));
@@ -319,7 +319,7 @@ describe('what was typed in review and not filed, through closing Intern', () =>
     expect(found(storage, [lease, invoice])).toMatchObject({ fields: { stem: NAME }, aside: [{ text: 'before' }] });
   });
 
-  it('is dropped when its document is not in the queue as Intern starts, and goes from storage', () => {
+  it('is dropped when its document is not in the queue as ATLAS starts, and goes from storage', () => {
     const storage = storageOf();
     const first = launch(storage, [lease, invoice]);
     first.drafts.set(lease.id, typedOver(lease));
@@ -351,7 +351,7 @@ describe('what was typed in review and not filed, through closing Intern', () =>
     expect(stored(storage)).toBeNull();
   });
 
-  it('is the same document under the NEEDS REVIEW name Intern gives one it could not read', () => {
+  it('is the same document under the NEEDS REVIEW name ATLAS gives one it could not read', () => {
     for (const marked of ['NEEDS REVIEW - fax.pdf', 'NEEDS REVIEW - fax (2).pdf', 'needs review - fax.pdf']) {
       const storage = storageOf();
       launch(storage, [unreadable]).drafts.set(unreadable.id, typedOver(unreadable, '2024-05-05 Fax from the bank', ''));
@@ -365,7 +365,7 @@ describe('what was typed in review and not filed, through closing Intern', () =>
     expect(found(storage, [unreadable], unreadable.id).fields).toMatchObject({ stem: '2024-05-05 Fax from the bank' });
   });
 
-  it('comes back set aside when it was set aside, oldest first, ahead of what is set aside as Intern starts', () => {
+  it('comes back set aside when it was set aside, oldest first, ahead of what is set aside as ATLAS starts', () => {
     const storage = storageOf();
     const first = launch(storage, [lease]);
     first.earlier.set(lease.id, [keptText('first', true), keptText('second', true)]);
@@ -496,7 +496,7 @@ describe('what was typed in review and not filed, through closing Intern', () =>
     expect(found(storage, [lease, invoice]).aside).toEqual([{ text: 'typed', edited: true }]);
   });
 
-  it('holds what was typed and nothing Intern read', () => {
+  it('holds what was typed and nothing ATLAS read', () => {
     const storage = storageOf();
     const first = launch(storage, [lease]);
     first.drafts.set(lease.id, typedOver(lease, 'typed name', 'typed sentence'));
@@ -529,7 +529,7 @@ describe('what was typed in review and not filed, through closing Intern', () =>
     expect(documentOf({ ...lease, originalFilename: 'scan (2) final.pdf' })).not.toBe(documentOf({ ...lease, originalFilename: 'scan final.pdf' }));
   });
 
-  it('is ignored and removed when what is stored is not what Intern writes', () => {
+  it('is ignored and removed when what is stored is not what ATLAS writes', () => {
     const entry = { id: lease.id, document: documentOf(lease), draft: { reading: readingOf(lease), stem: NAME, description: SENTENCE } };
     const foreign = [
       'not json', '', 'null', '7', '"text"', '[]', '{}',
@@ -554,7 +554,7 @@ describe('what was typed in review and not filed, through closing Intern', () =>
     expect(found(storageOf({ [TYPED_KEY]: JSON.stringify({ version: 1, documents: [entry] }) }), [lease]).fields).toMatchObject({ stem: NAME });
   });
 
-  it('passes over an entry that is not as Intern writes it, and keeps the others', () => {
+  it('passes over an entry that is not as ATLAS writes it, and keeps the others', () => {
     const good = { id: invoice.id, document: documentOf(invoice), earlier: ['2024-04-01 Invoice 17'] };
     const draft = { reading: readingOf(lease), stem: NAME, description: SENTENCE };
     const bad: unknown[] = [

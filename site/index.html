@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Intern — download</title>
-<meta name="description" content="Intern reads a document and tells you what to call it, on your own computer.">
+<title>ATLAS — download</title>
+<meta name="description" content="ATLAS reads a document and tells you what to call it, on your own computer.">
 <style>
   /* ------------------------------------------------------------------ *
    * Tokens. One accent (ochre) beside navy and interactive blue.
@@ -306,6 +306,16 @@
    * ------------------------------------------------------------------ */
   .hero { padding-top: clamp(2.75rem, 5vw, 4.5rem); padding-bottom: clamp(2.5rem, 5vw, 4rem); }
   .hero h1 { max-width: 12em; }
+  /* The name is an acronym: spelled out once, quietly, under the headline. */
+  .hero-acronym {
+    margin-top: 1rem;
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--muted);
+    text-wrap: balance;
+  }
   .hero-deck {
     margin-top: 1.35rem;
     max-width: 33rem;
@@ -742,7 +752,7 @@
 <nav class="nav" aria-label="Primary">
   <div class="shell nav-in">
     <a class="brand" href="./">
-      <span class="brand-mark">Intern</span>
+      <span class="brand-mark">ATLAS</span>
 
     </a>
     <ul class="nav-links">
@@ -760,9 +770,10 @@
   <section class="section hero">
     <div class="shell">
       <p class="eyebrow">WINDOWS DESKTOP APP</p>
-      <h1>Intern reads a document and tells you what to call it.</h1>
+      <h1>ATLAS reads a document and tells you what to call it.</h1>
+      <p class="hero-acronym">ATLAS: Analyze · Title · Label · Approve · Store</p>
       <p class="hero-deck">
-        Drop in PDFs, Word files, spreadsheets, email and scans. Intern proposes
+        Drop in PDFs, Word files, spreadsheets, email and scans. ATLAS proposes
         a filename, shows the passage that proves it, and renames nothing until
         you approve.
       </p>
@@ -914,7 +925,7 @@
         <li class="step">
           <div class="step-node"><svg class="ico" aria-hidden="true"><use href="#i-doc"/></svg></div>
           <h3><span class="num">01</span>Documents in</h3>
-          <p>Drag them onto the window, or point Intern at a folder to watch.</p>
+          <p>Drag them onto the window, or point ATLAS at a folder to watch.</p>
           <ul class="step-formats">
             <li>PDF</li><li>WORD</li><li>EXCEL</li><li>EMAIL</li><li>TEXT</li><li>SCANS</li>
           </ul>
@@ -923,7 +934,7 @@
           <div class="step-node"><svg class="ico" aria-hidden="true"><use href="#i-eye"/></svg></div>
           <h3><span class="num">02</span>Read on your machine</h3>
           <p>The document's own text first, and OCR only when a page has none.</p>
-          <p class="step-note">Intern reads and names your documents on your computer.</p>
+          <p class="step-note">ATLAS reads and names your documents on your computer.</p>
         </li>
         <li class="step">
           <div class="step-node"><svg class="ico" aria-hidden="true"><use href="#i-check"/></svg></div>
@@ -936,7 +947,7 @@
       <ul class="facts">
         <li>
           <b>If it can't be proved, it isn't guessed</b>
-          <span>Anything Intern cannot back up with evidence from the document goes to a review list.</span>
+          <span>Anything ATLAS cannot back up with evidence from the document goes to a review list.</span>
         </li>
         <li>
           <b>Every rename can be undone</b>
@@ -944,7 +955,7 @@
         </li>
         <li>
           <b>Already filed? It says so</b>
-          <span>A document whose content Intern has filed before is filed as a copy named after the original, never read and named twice.</span>
+          <span>A document whose content ATLAS has filed before is filed as a copy named after the original, never read and named twice.</span>
         </li>
       </ul>
       </div>
@@ -960,7 +971,7 @@
       </div>
       <div class="sec-body plate-cols">
       <div>
-        <p class="lead">Intern reads and names your documents on your computer.</p>
+        <p class="lead">ATLAS reads and names your documents on your computer.</p>
         <p class="body-text">
           Document text, extracted pages, OCR output, and the prompts sent to the
           model stay on your computer.
@@ -978,14 +989,14 @@
           </div>
           <div>
             <dt>Update check</dt>
-            <dd>When Intern starts, every 6 hours while it runs, and when you press <strong>Check for updates</strong>. The automatic check can be switched off in Settings. Sends nothing about your documents.</dd>
+            <dd>When ATLAS starts, every 6 hours while it runs, and when you press <strong>Check for updates</strong>. The automatic check can be switched off in Settings. Sends nothing about your documents.</dd>
           </div>
           <div>
             <dt>Microsoft sign-in and Graph, provisioned builds only</dt>
             <dd>login.microsoftonline.com, to sign in and keep the sign-in current, and graph.microsoft.com, for account and file metadata that verifies who uploaded a document to a team Inbox; never its content. Not in the build published here.</dd>
           </div>
         </dl>
-        <p class="note">That is every network request Intern makes, and there is no telemetry. A default install sends only the first two, and neither carries anything about your documents.</p>
+        <p class="note">That is every network request ATLAS makes, and there is no telemetry. A default install sends only the first two, and neither carries anything about your documents.</p>
 
         <div class="callout">
           <svg class="ico" aria-hidden="true"><use href="#i-cloud"/></svg>
@@ -1064,7 +1075,7 @@
           <strong>Run anyway</strong>.</p>
           <p>On a PC where <strong>Smart App Control</strong> is on (enforcement
           mode), Windows blocks the installer outright and offers no Run anyway.
-          Intern cannot be installed there until it is signed.</p>
+          ATLAS cannot be installed there until it is signed.</p>
         </div>
       </div>
 
@@ -1128,7 +1139,7 @@
       <ul class="facts">
         <li>
           <b>Resumable</b>
-          <span>If the connection drops, reopen Intern and it continues where it stopped.</span>
+          <span>If the connection drops, reopen ATLAS and it continues where it stopped.</span>
         </li>
         <li>
           <b>Verified before use</b>
@@ -1136,7 +1147,7 @@
         </li>
         <li>
           <b>Already have it?</b>
-          <span><strong>Choose existing model files</strong> points Intern at a copy from another machine and skips the download.</span>
+          <span><strong>Choose existing model files</strong> points ATLAS at a copy from another machine and skips the download.</span>
         </li>
       </ul>
 
@@ -1153,7 +1164,7 @@
         <h2>Updates, checked for you, installed by you</h2>
       </div>
       <div class="sec-body">
-      <p class="lead">Intern checks for a newer release when it starts and every 6 hours while it runs.</p>
+      <p class="lead">ATLAS checks for a newer release when it starts and every 6 hours while it runs.</p>
       <p class="body-text">
         The check asks GitHub for the release manifest and sends nothing about
         your documents: no filenames, no contents, no identifier. To stop it,
@@ -1184,7 +1195,7 @@
 <footer class="site-foot">
   <div class="shell foot-in">
     <div>
-      <p class="foot-mark">Intern</p>
+      <p class="foot-mark">ATLAS</p>
       <p class="foot-copy">© 2026 Zachary Brenner. All rights reserved. Source-available under the <a href="https://github.com/z-brenner/intern/blob/main/LICENSE">Elastic License 2.0</a>.</p>
     </div>
     <nav class="foot-nav" aria-label="Footer">

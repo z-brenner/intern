@@ -1,5 +1,7 @@
 # Prior art: what other tools do, and what Intern took from them
 
+ATLAS was called Intern before v0.1.0-alpha.20; this document uses the old name.
+
 A research pass over open-source document organizers, run in September 2026
 before round six. The question was not "what is fashionable" but "what has
 someone already got right that Intern lacks, and what has someone got wrong

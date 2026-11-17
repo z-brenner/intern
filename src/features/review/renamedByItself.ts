@@ -108,6 +108,6 @@ export function undoableRenames(said: readonly RenameSaid[], rows: readonly Queu
  */
 export function renamedByItselfText(renames: readonly RenameSaid[]): string {
   if (renames.length === 0) return '';
-  if (renames.length === 1) return `${renames[0].name} was renamed under Intern's proposal, without anyone approving it. What you typed for it was not filed, and is kept in its details.`;
-  return `${renames.length} documents with a name or a description you typed were renamed under Intern's proposals, without anyone approving them. What you typed for each was not filed, and is kept in its details.`;
+  if (renames.length === 1) return `${renames[0].name} was renamed under ATLAS's proposal, without anyone approving it. What you typed for it was not filed, and is kept in its details.`;
+  return `${renames.length} documents with a name or a description you typed were renamed under ATLAS's proposals, without anyone approving them. What you typed for each was not filed, and is kept in its details.`;
 }

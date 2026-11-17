@@ -90,7 +90,7 @@ describe('the local model setting', () => {
     const dialog = await openSettings();
     const accurate = within(dialog).getByRole('listitem', { name: 'Qwen3.5 9B' });
     expect(accurate).toHaveTextContent('Not usable');
-    expect(accurate).toHaveTextContent('did not pass its check on this computer, so Intern does not use it');
+    expect(accurate).toHaveTextContent('did not pass its check on this computer, so ATLAS does not use it');
     expect(within(accurate).getByRole('button', { name: 'Download again' })).toBeEnabled();
   });
 });

@@ -25,7 +25,7 @@ export function MicrosoftIntakeSettings({ bridge, savedFolder, unsavedFolder }: 
   };
   return <div className="microsoft-intake" role="group" aria-label="Microsoft upload identity">
     <div className="identity-heading"><h4>Microsoft upload identity</h4><span className="identity-policy">Unknown uploader = held</span></div>
-    <p className="section-lead">Unverified uploads are never processed. Intern checks Microsoft's own file metadata for who created the document and who last modified it, never a typed name or the computer that synced it first.</p>
+    <p className="section-lead">Unverified uploads are never processed. ATLAS checks Microsoft's own file metadata for who created the document and who last modified it, never a typed name or the computer that synced it first.</p>
     {/* Only the browser preview lacks the Microsoft commands; the desktop app never calls itself one. */}
     {!supported && !isTauriRuntime() && <p className="check-hint">Microsoft account connection is available in the installed desktop app. This browser preview cannot verify any uploads.</p>}
     {status?.error && <p className="form-error" role="status" aria-label="Microsoft connection status">{status.error}</p>}
@@ -36,7 +36,7 @@ export function MicrosoftIntakeSettings({ bridge, savedFolder, unsavedFolder }: 
       {status.account && <span>{status.account.email}</span>}
       <div className="update-actions"><button type="button" disabled={busy} onClick={() => void run(disconnect)}>Disconnect Microsoft</button></div>
     </div> : <>
-      <p className="identity-permissions" role="note">This connection reads your Microsoft profile and file metadata and keeps sign-in available after restart. Intern never downloads SharePoint document content through Microsoft Graph; document analysis stays local unless you separately choose a hosted model.</p>
+      <p className="identity-permissions" role="note">This connection reads your Microsoft profile and file metadata and keeps sign-in available after restart. ATLAS never downloads SharePoint document content through Microsoft Graph; document analysis stays local unless you separately choose a hosted model.</p>
       {!prompt && <div className="update-actions"><button type="button" className="primary" disabled={!available || busy} onClick={begin}>Connect my Microsoft account</button></div>}
     </>}
     {prompt && <div className="identity-signin" role="status" aria-label="Microsoft sign-in">
@@ -47,7 +47,7 @@ export function MicrosoftIntakeSettings({ bridge, savedFolder, unsavedFolder }: 
     </div>}
     <div className="identity-folder">
       <h4>2. Pair the intake folder</h4>
-      <p className="check-hint">Save the local intake folder first. Intern verifies it against the provisioned Files/Inbox library; matching folder names alone are not proof.</p>
+      <p className="check-hint">Save the local intake folder first. ATLAS verifies it against the provisioned Files/Inbox library; matching folder names alone are not proof.</p>
       {unsavedFolder && <p className="check-hint">Save your changed intake folder before pairing it.</p>}
       <div className="update-actions"><button type="button" disabled={!available || busy || !status?.connected || !savedFolder || unsavedFolder} onClick={() => void run(async () => { await bridge.microsoftBindIntake?.(); await refresh(); })}>Verify folder pairing</button></div>
       {status?.binding && <p className="check-hint" role="status" aria-label="Microsoft folder pairing">Paired: {status.binding.localFolder}<br /><span>{status.binding.webUrl}</span></p>}

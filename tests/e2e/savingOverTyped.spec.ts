@@ -36,8 +36,8 @@ import { openDetails, queueCell } from './grid';
 
 const LEASE = 'Lease Agreement - 123 Main St.pdf';
 const EMPLOYMENT = 'Employment Agreement - John Smith.pdf';
-const ONE = '1 document has a name or a description you typed and did not file. When you save, Intern can rename it under the name it proposed. You can file it first, or take back what you typed. What you typed is kept with the document, but is not filed.';
-const TWO = '2 documents have a name or a description you typed and did not file. When you save, Intern can rename them under the names it proposed. You can file them first, or take back what you typed. What you typed is kept with each document, but is not filed.';
+const ONE = '1 document has a name or a description you typed and did not file. When you save, ATLAS can rename it under the name it proposed. You can file it first, or take back what you typed. What you typed is kept with the document, but is not filed.';
+const TWO = '2 documents have a name or a description you typed and did not file. When you save, ATLAS can rename them under the names it proposed. You can file them first, or take back what you typed. What you typed is kept with each document, but is not filed.';
 
 /** What these journeys use in Settings. */
 function inSettings(page: Page) {
@@ -45,7 +45,7 @@ function inSettings(page: Page) {
   const level = dialog.getByRole('group', { name: 'Which documents are ready' });
   return {
     dialog,
-    naming: dialog.locator('summary', { hasText: 'How Intern names files' }),
+    naming: dialog.locator('summary', { hasText: 'How ATLAS names files' }),
     strict: level.getByRole('radio', { name: /^Strict/ }),
     balanced: level.getByRole('radio', { name: /^Balanced/ }),
     automatic: dialog.getByRole('checkbox', { name: 'Automatically rename ready documents' }),
@@ -73,16 +73,16 @@ const controls = (dialog: Locator) => dialog.locator('button, summary, input, se
   return `${control.tagName} ${control.getAttribute('aria-label') ?? control.closest('label')?.textContent?.trim().slice(0, 30) ?? control.textContent?.trim().slice(0, 30) ?? ''} at ${Math.round(box.left)},${Math.round(box.top)}`;
 }));
 
-test('Settings warns before a save that lets Intern rename a document with a name typed and not filed, and the warning goes with the choice', async ({ page }) => {
+test('Settings warns before a save that lets ATLAS rename a document with a name typed and not filed, and the warning goes with the choice', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/');
-  await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+  await expect(page.getByRole('main', { name: 'ATLAS' })).toBeVisible();
   await expect(queueCell(page, LEASE, 'status')).toHaveText('Needs review');
 
   // A name typed for the lease, which waits in review, and not filed.
   const panel = await openDetails(page, LEASE);
   await panel.getByLabel('Filename').fill('2023-09-15 Lease of 123 Main St');
-  await expect(panel.getByRole('button', { name: "Back to Intern's proposal" })).toBeVisible();
+  await expect(panel.getByRole('button', { name: "Back to ATLAS's proposal" })).toBeVisible();
 
   let settings = await openSettings(page);
   await expect(settings.strict).toBeChecked();
@@ -172,7 +172,7 @@ test('Settings warns before a save that lets Intern rename a document with a nam
   await expect(queueCell(page, LEASE, 'status')).toHaveText('Ready with a note');
   await expect(page.getByRole('button', { name: 'Completed, 1' })).toBeVisible();
   // What the save did is said, and nothing says a document was renamed.
-  await expect(page.locator('.toasts')).toHaveText('The review level is now Balanced. 1 document that needed review became ready. With automatic renaming on, Intern renames it by itself.');
+  await expect(page.locator('.toasts')).toHaveText('The review level is now Balanced. 1 document that needed review became ready. With automatic renaming on, ATLAS renames it by itself.');
   await expect(page.getByRole('group', { name: 'Renamed without you' })).toHaveCount(0);
   const leaseAgain = await openDetails(page, LEASE);
   await expect(leaseAgain.getByLabel('Filename')).toHaveValue('2023-09-15 Lease of 123 Main St');
@@ -221,7 +221,7 @@ for (const [width, height] of [[1280, 800], [800, 600]] as const) {
   test(`a warning that goes by itself leaves nothing that acts where it was, at ${width} by ${height}`, async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto('/?queue=changes');
-    await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+    await expect(page.getByRole('main', { name: 'ATLAS' })).toBeVisible();
     const panel = await openDetails(page, LEASE);
     await panel.getByLabel('Filename').fill('2023-09-15 Lease of 123 Main St');
     await page.setViewportSize({ width, height });
@@ -318,7 +318,7 @@ const tops = (dialog: Locator) => dialog.locator('button, summary, input, select
 test('a checkbox whose line was in view when it brought the warning stays in view, at 1280 by 800: the sections scroll for it by the key or the press that made it, and never by themselves', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/?queue=changes');
-  await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+  await expect(page.getByRole('main', { name: 'ATLAS' })).toBeVisible();
   const panel = await openDetails(page, LEASE);
   await panel.getByLabel('Filename').fill('2023-09-15 Lease of 123 Main St');
 
@@ -521,7 +521,7 @@ async function keptInView(settings: ReturnType<typeof inSettings>, control: Loca
 test('a choice made from the keyboard stays in view where its line was cut off before the key: the checkbox and Balanced, each at the height where Tab brings it to the end of the view', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/');
-  await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+  await expect(page.getByRole('main', { name: 'ATLAS' })).toBeVisible();
   const panel = await openDetails(page, LEASE);
   await panel.getByLabel('Filename').fill('2023-09-15 Lease of 123 Main St');
 

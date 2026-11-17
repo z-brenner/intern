@@ -76,9 +76,6 @@ fn the_document_viewer_widens_only_pictures() {
 #[test]
 fn main_window_starts_invisible() {
     let window = &config()["app"]["windows"][0];
-    assert_eq!(
-        window["title"], "Intern",
-        "the first window is the main one"
-    );
+    assert_eq!(window["title"], "ATLAS", "the first window is the main one");
     assert_eq!(window["visible"], serde_json::Value::Bool(false));
 }

@@ -174,7 +174,7 @@ describe('what to check', () => {
 
     await openRow(await screen.findByRole('row', { name: /Scan 0102.pdf/i }));
     let evidence = screen.getByRole('heading', { name: 'Evidence' }).closest('section')!;
-    expect(evidence).toHaveTextContent('Lines from the document behind the date and document type. The parties are the names Intern read, not lines from the document.');
+    expect(evidence).toHaveTextContent('Lines from the document behind the date and document type. The parties are the names ATLAS read, not lines from the document.');
     // The date and the type are lines the engine found in the document. The
     // Parties row is the proposal's party names, which no line of the
     // document need read like, so it is never set in quotation marks.
@@ -208,7 +208,7 @@ describe('what to check', () => {
 
     expect(screen.getByLabelText('Read by')).toHaveTextContent('Read by Qwen3.5 4B. Provisional — will be re-read by the accurate model.');
     const evidence = screen.getByRole('heading', { name: 'Evidence' }).closest('section')!;
-    expect(evidence).toHaveTextContent(/^EvidenceLines from the document behind the date and document type\. The parties are the names Intern read, not lines from the document\./);
+    expect(evidence).toHaveTextContent(/^EvidenceLines from the document behind the date and document type\. The parties are the names ATLAS read, not lines from the document\./);
     expect(evidence).not.toHaveTextContent(/in its own words/);
     expect([...evidence.querySelectorAll('q')].map((quote) => quote.textContent)).toEqual(['Invoice Date: May 1, 2025', 'INVOICE']);
     // The doubted party is marked, and is still not a quotation.
@@ -224,7 +224,7 @@ describe('what to check', () => {
 
     await openRow(await screen.findByRole('row', { name: /Names.pdf/i }));
     let evidence = screen.getByRole('heading', { name: 'Evidence' }).closest('section')!;
-    expect(within(evidence).getByText(/The parties are/)).toHaveTextContent(/^The parties are the names Intern read\. They are not lines from the document\.$/);
+    expect(within(evidence).getByText(/The parties are/)).toHaveTextContent(/^The parties are the names ATLAS read\. They are not lines from the document\.$/);
     expect(evidence.querySelectorAll('q')).toHaveLength(0);
     expect([...evidence.querySelectorAll('.reading')].map((name) => name.textContent)).toEqual(['Fabrikam Inc.', 'Northwind Traders']);
 

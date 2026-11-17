@@ -1039,13 +1039,13 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     // and only a PDF is drawn - the preview has no picture to show.
     documentFile: async (id) => {
       const item = find(id);
-      if (item.status === 'processing' && item.stage === 'filing') throw { code: 'PATH_UNAVAILABLE', message: 'the document is not where Intern last saw it' };
-      if (filenameExtension(item.originalFilename)?.toLowerCase() !== 'pdf') throw { code: 'VIEW_UNSUPPORTED', message: 'the window shows this format as the text Intern read' };
+      if (item.status === 'processing' && item.stage === 'filing') throw { code: 'PATH_UNAVAILABLE', message: 'the document is not where ATLAS last saw it' };
+      if (filenameExtension(item.originalFilename)?.toLowerCase() !== 'pdf') throw { code: 'VIEW_UNSUPPORTED', message: 'the window shows this format as the text ATLAS read' };
       return demoPdf(demoPages(item));
     },
     documentText: async (id) => {
       const item = find(id);
-      if (item.status === 'processing' && item.stage === 'filing') throw { code: 'PATH_UNAVAILABLE', message: 'the document is not where Intern last saw it' };
+      if (item.status === 'processing' && item.stage === 'filing') throw { code: 'PATH_UNAVAILABLE', message: 'the document is not where ATLAS last saw it' };
       return { pages: demoPages(item), readNow: false, changed: false };
     },
     getSettings: async () => ({ ...settings }),

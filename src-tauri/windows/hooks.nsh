@@ -1,11 +1,18 @@
 ; Intern's additions to the NSIS installer Tauri generates
 ; (tauri.conf.json > bundle > windows > nsis > installerHooks).
 ;
-; "Send to > Intern" in Explorer's right-click menu is how people who live in
+; "Send to > ATLAS" in Explorer's right-click menu is how people who live in
 ; Explorer and Outlook expect to hand documents over: select the attachments
 ; saved from an email, right-click, Send to. The shortcut starts Intern.exe
 ; with one path per selected file; a copy already running receives them
 ; through the single-instance plugin (commands.rs, launch_documents).
+;
+; The shortcut is named after the app, ATLAS. Releases before
+; v0.1.0-alpha.20, when the app was called Intern, named it Intern.lnk. The
+; product name stays Intern (tauri.conf.json), because the template takes
+; the install folder, the Start menu entry and the uninstall key from it,
+; and an update has to land on those; so the shortcut's names are written
+; out here rather than taken from the product name.
 ;
 ; The template's own uninstall already removes the autostart value from the
 ; HKCU Run key, so nothing here touches it.
@@ -79,15 +86,18 @@ Var InternWasInstalled
 
   ; Written on every install, updates included: a person updating from a
   ; release without the shortcut gets it, at the cost of restoring one a
-  ; person deleted by hand.
-  CreateShortcut "$SENDTO\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+  ; person deleted by hand. The shortcut a release before alpha.20 made
+  ; under the old name goes first, so Send to never lists the app twice.
+  Delete "$SENDTO\Intern.lnk"
+  CreateShortcut "$SENDTO\ATLAS.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
   ; An uninstall that is part of an update - the template records /UPDATE in
   ; $UpdateMode, and keeps the Start menu shortcut the same way - leaves the
-  ; shortcut where it is.
+  ; shortcut where it is. Any other takes it away under either name.
   ${If} $UpdateMode <> 1
-    Delete "$SENDTO\${PRODUCTNAME}.lnk"
+    Delete "$SENDTO\ATLAS.lnk"
+    Delete "$SENDTO\Intern.lnk"
   ${EndIf}
 !macroend

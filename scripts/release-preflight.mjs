@@ -119,7 +119,7 @@ function notesProblems(root, version) {
   if (!existsSync(join(root, path))) return [`${path} is missing; it is published as the release notes.`];
   const notes = readFileSync(join(root, path), 'utf8');
   const problems = [];
-  if (!notes.includes(`# Intern v${version}`)) problems.push(`${path} does not start its notes with "# Intern v${version}".`);
+  if (!notes.includes(`# ATLAS v${version}`)) problems.push(`${path} does not start its notes with "# ATLAS v${version}".`);
   if (!notes.includes('not Authenticode signed')) problems.push(`${path} does not say the installer is "not Authenticode signed", which every downloader needs to know before SmartScreen tells them.`);
   // A word left to fill in later: the notes are published as written, and
   // they are a release input, so filling it in after QA means QA again.

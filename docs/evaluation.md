@@ -1,5 +1,7 @@
 # Measuring accuracy: the corpus, the recording, and the baseline
 
+ATLAS was called Intern before v0.1.0-alpha.20; this document uses the old name.
+
 Every claim this project makes about accuracy is a number from
 `intern-evaluate` over the clean-room corpus in `fixtures/`. This page is how
 those numbers are produced, and how CI keeps them from quietly getting worse.

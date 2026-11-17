@@ -8,10 +8,10 @@ import type { TauriEvent, TauriTransport } from './lib/tauriBridge';
 import type { AppSettings, QueueItem } from './types';
 
 describe('App', () => {
-  it('exposes the Intern application landmark', () => {
+  it('exposes the ATLAS application landmark', () => {
     render(<App />);
 
-    expect(screen.getByRole('main', { name: 'Intern' })).toBeInTheDocument();
+    expect(screen.getByRole('main', { name: 'ATLAS' })).toBeInTheDocument();
   });
 
   it('exposes one unambiguous Settings action', async () => {
@@ -84,7 +84,7 @@ describe('desktop drag and drop', () => {
     const bridge = createInMemoryBridge({ items: [] });
     const copyToInput = vi.spyOn(bridge, 'copyToInput');
     render(<App bridge={bridge} selection={createTauriSelectionBoundary(desktop.transport)} />);
-    await screen.findByRole('main', { name: 'Intern' });
+    await screen.findByRole('main', { name: 'ATLAS' });
     await waitFor(() => expect(desktop.listening('tauri://drag-enter') && desktop.listening('tauri://drag-drop')).toBe(true));
 
     desktop.emit('tauri://drag-enter', { paths: ['C:/Docs/a.pdf'], position: { x: 1, y: 2 } });
@@ -113,7 +113,7 @@ describe('desktop drag and drop', () => {
     const base = createInMemoryBridge({ items: [], settings: { intakeFolder: '', intakeEnabled: false, destination: '' } });
     const bridge = { ...base, getSettings: async () => { throw new Error('settings.json could not be read'); } };
     render(<App bridge={bridge} selection={createTauriSelectionBoundary(desktop.transport)} />);
-    await screen.findByRole('main', { name: 'Intern' });
+    await screen.findByRole('main', { name: 'ATLAS' });
     await waitFor(() => expect(desktop.listening('tauri://drag-drop')).toBe(true));
 
     desktop.emit('tauri://drag-enter', { paths: ['C:/Docs/a.pdf'], position: { x: 1, y: 2 } });
@@ -228,7 +228,7 @@ describe('updating from alpha.9', () => {
     const history = await bridge.historyList();
     const first = render(<App bridge={bridge} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Set up Intern' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Set up ATLAS' }));
     // The model is already downloaded, so setup goes straight to Microsoft.
     fireEvent.click(await screen.findByRole('button', { name: 'Yes, this is my account' }));
     // Nothing is overwritten before the person turns filing on.
@@ -236,8 +236,8 @@ describe('updating from alpha.9', () => {
     expect(await bridge.getSettings()).toEqual(alpha9SettingsAsRead);
 
     fireEvent.click(screen.getByRole('button', { name: 'Turn on filing' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Open Intern' }));
-    expect(await screen.findByRole('main', { name: 'Intern' })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Open ATLAS' }));
+    expect(await screen.findByRole('main', { name: 'ATLAS' })).toBeInTheDocument();
     expect(await screen.findByRole('row', { name: /scan-0002.pdf/ })).toBeInTheDocument();
 
     expect(await bridge.listItems()).toEqual(alpha9Items);
@@ -256,26 +256,26 @@ describe('updating from alpha.9', () => {
 
     // Completion survives a remount: the next launch opens the app directly.
     render(<App bridge={bridge} />);
-    expect(await screen.findByRole('main', { name: 'Intern' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Set up Intern' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('main', { name: 'ATLAS' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set up ATLAS' })).not.toBeInTheDocument();
   });
 
   it('opens straight into the app for someone who already completed onboarding', async () => {
     const bridge = alpha9Bridge({ sharePoint: 'fake', completedOnboardingVersion: 1, sharePointFake: { connected: true, phase: 'active' } });
     render(<App bridge={bridge} />);
 
-    expect(await screen.findByRole('main', { name: 'Intern' })).toBeInTheDocument();
+    expect(await screen.findByRole('main', { name: 'ATLAS' })).toBeInTheDocument();
     expect(await screen.findByRole('row', { name: /scan-0002.pdf/ })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Set up Intern' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set up ATLAS' })).not.toBeInTheDocument();
   });
 
   it('shows no onboarding when the deployment is disabled, and leaves their settings alone', async () => {
     const bridge = alpha9Bridge();
     render(<App bridge={bridge} />);
 
-    expect(await screen.findByRole('main', { name: 'Intern' })).toBeInTheDocument();
+    expect(await screen.findByRole('main', { name: 'ATLAS' })).toBeInTheDocument();
     expect(await screen.findByRole('row', { name: /scan-0002.pdf/ })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Set up Intern' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set up ATLAS' })).not.toBeInTheDocument();
     expect(screen.queryByRole('list', { name: 'Setup steps' })).not.toBeInTheDocument();
     expect(await bridge.getSettings()).toEqual(alpha9SettingsAsRead);
     expect(await bridge.listItems()).toEqual(alpha9Items);

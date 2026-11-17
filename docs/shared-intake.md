@@ -1,5 +1,7 @@
 # Shared intake folders, OneDrive, and SharePoint
 
+ATLAS was called Intern before v0.1.0-alpha.20; this document uses the old name.
+
 Intern always watches the **input folder** (the `intakeFolder` setting, called
 the intake folder below): documents that appear in it are analyzed, named, and
 moved to the **output folder** (the `destination` setting). Intern is not

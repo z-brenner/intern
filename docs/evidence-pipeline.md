@@ -1,5 +1,7 @@
 # The evidence pipeline
 
+ATLAS was called Intern before v0.1.0-alpha.20; this document uses the old name.
+
 The evidence pipeline is how Intern reads a document with its local model,
 the default since phase 3 (`Pipeline::Evidence`; `--pipeline evidence` in
 the evaluation tools, where it is also the default). The digest pipeline

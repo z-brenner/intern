@@ -172,7 +172,7 @@ const ready: QueueItem = {
     expect(banner).toHaveTextContent(
       'The queue stopped taking new work. The hosted service asked for a slower pace. Wait a minute, then resume the queue.',
     );
-    expect(banner).not.toHaveTextContent('Intern will retry');
+    expect(banner).not.toHaveTextContent('ATLAS will retry');
   });
 
   // The local model server stopped answering, or never came back after a
@@ -191,7 +191,7 @@ const ready: QueueItem = {
 
     const banner = await screen.findByRole('alert', { name: 'Queue stopped' });
     expect(banner).toHaveTextContent(
-      'The queue stopped taking new work. The local model stopped responding. Resume the queue to try again, and restart Intern if it stops again.',
+      'The queue stopped taking new work. The local model stopped responding. Resume the queue to try again, and restart ATLAS if it stops again.',
     );
     expect(banner).not.toHaveTextContent('Retry it');
     expect(screen.getByRole('button', { name: 'Resume queue' })).toBeVisible();

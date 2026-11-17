@@ -21,7 +21,7 @@ import type { QueueItem } from '../../types';
 const ACTS: Array<[RegExp, boolean]> = [
   [/^(Approve & rename|Apply rename|Keep original|Analyze again|Check again|Process anyway|Retry|Retry item|Cancel processing|Undo)$/, true],
   [/^(Remove from queue|Remove item|I have resolved the files myself)$/, true],
-  [/^(Use this date|Use date & rename|Back to Intern's proposal|Back to the name it came with)$/, true],
+  [/^(Use this date|Use date & rename|Back to ATLAS's proposal|Back to the name it came with)$/, true],
   [/^(Discard what I had|Done)$/, true],
   // A date or a party to put in the name.
   [/^(\d{4}-\d{2}-\d{2}( · file date)?|Contoso Ltd|Fabrikam Inc)$/, true],
@@ -33,7 +33,7 @@ const ACTS: Array<[RegExp, boolean]> = [
   [/^(Close review|Next undecided|Open|Show in folder|More review actions|Copy description|Cancel|Close|Dismiss|Not now)$/, false],
   // A reason's few words, which open its why; and the document viewer, which reads only.
   [/^(Model unsure|Already filed|Password-protected|File changed since read|Model failed)$/, false],
-  [/^(View document|Original|Text Intern read|Zoom in|Zoom out|Fit to width|Zoom \d+%, fit to width|Open in its program|Close document|Try again|Show the text Intern read)$/, false],
+  [/^(View document|Original|Text ATLAS read|Zoom in|Zoom out|Fit to width|Zoom \d+%, fit to width|Open in its program|Close document|Try again|Show the text ATLAS read)$/, false],
   // Clear queue… and Clear completed… only ask; the dialog's yes is what clears.
   [/^(Queue, \d+|Completed, \d+|\d+ needs? review|\d+ ready|Copy table|Copy selection|Details|More actions|Clear queue…|Clear completed…|History)$/, false],
   [/^(Add files|Add folder|Pause queue|Resume queue|Help & support|Settings|Private · .*)$/, false],
@@ -103,7 +103,7 @@ describe('the controls that act', () => {
       unmount();
     }
     // The states above do show what the list is about: none of these went unseen.
-    for (const name of ['Approve & rename', 'Apply rename', 'Keep original', 'Analyze again', 'Check again', 'Process anyway', 'Retry', 'Retry item', 'Cancel processing', 'Undo', 'Remove from queue', 'Remove item', 'I have resolved the files myself', 'Use this date', 'Use date & rename', "Back to Intern's proposal", 'Back to the name it came with', '2024-03-01', '2024-05-02 · file date', 'Contoso Ltd']) expect([...found], name).toContain(name);
+    for (const name of ['Approve & rename', 'Apply rename', 'Keep original', 'Analyze again', 'Check again', 'Process anyway', 'Retry', 'Retry item', 'Cancel processing', 'Undo', 'Remove from queue', 'Remove item', 'I have resolved the files myself', 'Use this date', 'Use date & rename', "Back to ATLAS's proposal", 'Back to the name it came with', '2024-03-01', '2024-05-02 · file date', 'Contoso Ltd']) expect([...found], name).toContain(name);
   });
 
   it('are marked on what is kept of a name, on a result that can be undone, and across the queue\'s own window', async () => {
@@ -246,7 +246,7 @@ describe('a button that acts on a first press only', () => {
     const proposed = name().value;
     fireEvent.change(name(), { target: { value: `${proposed} signed` } });
     await drawn();
-    const back = screen.getByRole('button', { name: "Back to Intern's proposal" });
+    const back = screen.getByRole('button', { name: "Back to ATLAS's proposal" });
     now = 20_300;
     expect(press(back, 1)).toBe(false);
     expect(name()).toHaveValue(`${proposed} signed`);

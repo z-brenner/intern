@@ -14,12 +14,12 @@ function enabledBridge(fake: FakeSharePoint = {}, options: InMemoryBridgeOptions
 }
 
 async function onboarding() {
-  await screen.findByRole('button', { name: 'Set up Intern' });
-  return screen.getByRole('main', { name: 'Intern setup' });
+  await screen.findByRole('button', { name: 'Set up ATLAS' });
+  return screen.getByRole('main', { name: 'ATLAS setup' });
 }
 
 async function begin() {
-  fireEvent.click(await screen.findByRole('button', { name: 'Set up Intern' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Set up ATLAS' }));
 }
 
 /** Connect is enabled once the Microsoft status has loaded; a click before then does nothing. */
@@ -60,15 +60,15 @@ describe('guided onboarding routing', () => {
     const bridge = createInMemoryBridge();
     render(<App bridge={bridge} />);
 
-    expect(await screen.findByRole('main', { name: 'Intern' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Set up Intern' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('main', { name: 'ATLAS' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set up ATLAS' })).not.toBeInTheDocument();
   });
 
   it('keeps the existing model setup screen when the deployment is disabled', async () => {
     render(<App bridge={createInMemoryBridge({ setup: { state: 'required', downloadedBytes: 0, totalBytes: PINNED_MODEL_BYTES } })} />);
 
     expect(await screen.findByRole('button', { name: 'Download model' })).toBeVisible();
-    expect(screen.queryByRole('button', { name: 'Set up Intern' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set up ATLAS' })).not.toBeInTheDocument();
     expect(screen.queryByRole('list', { name: 'Setup steps' })).not.toBeInTheDocument();
   });
 
@@ -78,7 +78,7 @@ describe('guided onboarding routing', () => {
     render(<App bridge={bridge} />);
 
     expect(await screen.findByRole('heading', { name: 'Your documents, renamed and filed' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Set up Intern' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set up ATLAS' })).not.toBeInTheDocument();
   });
 
   it('shows an inert loading state until onboarding status settles', () => {
@@ -94,8 +94,8 @@ describe('guided onboarding routing', () => {
   it('skips onboarding once the current version is completed', async () => {
     render(<App bridge={enabledBridge({ connected: true, phase: 'active' }, { completedOnboardingVersion: 1 })} />);
 
-    expect(await screen.findByRole('main', { name: 'Intern' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Set up Intern' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('main', { name: 'ATLAS' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set up ATLAS' })).not.toBeInTheDocument();
   });
 
   it('shows a legacy install the new workflow once, then opens the app directly', async () => {
@@ -104,13 +104,13 @@ describe('guided onboarding routing', () => {
 
     await onboarding();
     await walkToFinished();
-    fireEvent.click(screen.getByRole('button', { name: 'Open Intern' }));
-    expect(await screen.findByRole('main', { name: 'Intern' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open ATLAS' }));
+    expect(await screen.findByRole('main', { name: 'ATLAS' })).toBeInTheDocument();
     first.unmount();
 
     render(<App bridge={bridge} />);
-    expect(await screen.findByRole('main', { name: 'Intern' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Set up Intern' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('main', { name: 'ATLAS' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set up ATLAS' })).not.toBeInTheDocument();
   });
 
   it('does not read or subscribe to the queue until onboarding completes', async () => {
@@ -121,8 +121,8 @@ describe('guided onboarding routing', () => {
     await walkToFinished();
     expect(listItems).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open Intern' }));
-    await screen.findByRole('main', { name: 'Intern' });
+    fireEvent.click(screen.getByRole('button', { name: 'Open ATLAS' }));
+    await screen.findByRole('main', { name: 'ATLAS' });
     await waitFor(() => expect(listItems).toHaveBeenCalled());
   });
 
@@ -135,16 +135,16 @@ describe('guided onboarding routing', () => {
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(/try again/i);
     expect(screen.getByText('ONBOARDING_STATE_UNREADABLE')).toBeInTheDocument();
-    expect(screen.queryByRole('main', { name: 'Intern' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('main', { name: 'ATLAS' })).not.toBeInTheDocument();
     expect(listItems).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
-    expect(await screen.findByRole('button', { name: 'Set up Intern' })).toBeVisible();
+    expect(await screen.findByRole('button', { name: 'Set up ATLAS' })).toBeVisible();
   });
 });
 
 describe('guided onboarding steps', () => {
-  it('explains what Intern does before asking for anything', async () => {
+  it('explains what ATLAS does before asking for anything', async () => {
     render(<App bridge={enabledBridge()} />);
 
     const main = await onboarding();
@@ -459,12 +459,12 @@ describe('guided onboarding steps', () => {
     expect(poll).not.toHaveBeenCalled();
   });
 
-  it('activates, then summarizes what Intern is doing and for whom', async () => {
+  it('activates, then summarizes what ATLAS is doing and for whom', async () => {
     const bridge = enabledBridge({ connected: true, phase: 'ready_to_activate' });
     render(<App bridge={bridge} />);
 
     await walkToFinished();
-    const main = screen.getByRole('main', { name: 'Intern setup' });
+    const main = screen.getByRole('main', { name: 'ATLAS setup' });
     await expectFocused(screen.getByRole('heading', { name: 'Watching Files/Inbox. Filing your documents into Files/Filed.' }));
     expect(main).toHaveTextContent('Pat Lee');
     expect(main).toHaveTextContent('pat.lee@contoso.test');
@@ -587,14 +587,14 @@ describe('guided onboarding failures', () => {
     render(<App bridge={bridge} />);
 
     await walkToFinished();
-    fireEvent.click(screen.getByRole('button', { name: 'Open Intern' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open ATLAS' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/try again/i);
     expect(screen.getByText('ONBOARDING_STATE_WRITE_FAILED')).toBeInTheDocument();
-    expect(screen.queryByRole('main', { name: 'Intern' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('main', { name: 'ATLAS' })).not.toBeInTheDocument();
     expect(listItems).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open Intern' }));
-    expect(await screen.findByRole('main', { name: 'Intern' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open ATLAS' }));
+    expect(await screen.findByRole('main', { name: 'ATLAS' })).toBeInTheDocument();
   });
 
   it('goes back to turning on filing when the backend refuses completion because setup is no longer active', async () => {
@@ -606,10 +606,10 @@ describe('guided onboarding failures', () => {
     const ready = await bridge.getSharePointSetup();
     vi.spyOn(bridge, 'completeOnboarding').mockRejectedValueOnce({ code: 'ONBOARDING_SETUP_INCOMPLETE', message: 'the fixed binding is not active' });
     vi.spyOn(bridge, 'getSharePointSetup').mockResolvedValueOnce({ ...ready, phase: 'ready_to_activate' });
-    fireEvent.click(screen.getByRole('button', { name: 'Open Intern' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open ATLAS' }));
 
     await expectFocused(await screen.findByRole('heading', { name: 'Turn on filing' }));
-    expect(screen.queryByRole('main', { name: 'Intern' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('main', { name: 'ATLAS' })).not.toBeInTheDocument();
     expect(listItems).not.toHaveBeenCalled();
   });
 

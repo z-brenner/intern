@@ -130,7 +130,7 @@ describe('humanizeReason', () => {
   // the_documents_own_word_put_back_is_no_check_of_the_rule).
   it('says a name a learned spelling changed waits until the spelling is always used, and what to do if the name is right or not', () => {
     const sentence = humanizeReason('LEARNED_SPELLING_UNCONFIRMED');
-    expect(sentence).toBe('Intern used a spelling it learned from your edits, and a name it changes waits for you until you choose Always use for it in Settings, under Learned spellings. Approve the name if it is right; if not, put the document\'s own words back.');
+    expect(sentence).toBe('ATLAS used a spelling it learned from your edits, and a name it changes waits for you until you choose Always use for it in Settings, under Learned spellings. Approve the name if it is right; if not, put the document\'s own words back.');
     // It is chosen in Settings, not beside this sentence in the review window.
     expect(sentence).toMatch(/Always use for it in Settings, under Learned spellings/);
     expect(sentence).not.toMatch(/first time|Use on its own/);
@@ -140,7 +140,7 @@ describe('humanizeReason', () => {
 
   it('explains a bare duplicate flag once the filed name it referred to is gone', () => {
     // Named as the review menu names it: a review item has no Retry.
-    expect(humanizeReason('DUPLICATE')).toBe('This document\'s content was filed once already, so Intern did not file it again. Choose Process anyway to process it all the same, keep it where it is, or remove it.');
+    expect(humanizeReason('DUPLICATE')).toBe('This document\'s content was filed once already, so ATLAS did not file it again. Choose Process anyway to process it all the same, keep it where it is, or remove it.');
   });
 
   it('names the date gate and the hosted-model failures in plain words', () => {
@@ -205,7 +205,7 @@ describe('describeQueueStop', () => {
     for (const code of ['MODEL_FAILED', 'MODEL_OUTPUT_INVALID', 'HOSTED_MODEL_RATE_LIMITED', 'HOSTED_MODEL_UNREACHABLE', 'READER_CRASHED', 'READER_CHECK_UNWRITABLE']) {
       const sentence = describeQueueStop(code);
       expect(sentence, code).toMatch(/resume the queue/i);
-      expect(sentence, code).not.toMatch(/Retry it|Intern will retry/);
+      expect(sentence, code).not.toMatch(/Retry it|ATLAS will retry/);
       expect(sentence, code).not.toBe(humanizeReason(code));
     }
     expect(describeQueueStop('HOSTED_MODEL_RATE_LIMITED')).toBe('The hosted service asked for a slower pace. Wait a minute, then resume the queue.');
@@ -234,7 +234,7 @@ describe('a note on a document that is not waiting', () => {
   // The codes the Balanced level lets a ready document carry (the level's rule is the engine's).
   const carried = ['TYPE_MISSING', 'TYPE_UNSUPPORTED', 'TYPE_INFERRED', 'DESCRIPTION_UNSUPPORTED', 'LOW_CONFIDENCE'];
 
-  it('says what Intern found, tells nobody to check, and says of nothing that it waits', () => {
+  it('says what ATLAS found, tells nobody to check, and says of nothing that it waits', () => {
     for (const code of carried) {
       const note = describeNotes([code]);
       expect(note, code).not.toBe(code);
@@ -243,7 +243,7 @@ describe('a note on a document that is not waiting', () => {
       expect(note, code).not.toMatch(/(^|\. )Check\b|\bwaits?\b|\bapprove\b/i);
     }
     expect(describeNotes(['TYPE_UNSUPPORTED'])).toBe('The document does not state the type in this name as its own, or names it only in a subject line or the body of a letter.');
-    expect(describeNotes(['TYPE_INFERRED'])).toBe('Intern took the type from the document\'s title or from its layout, such as “Letter” or “Email”.');
+    expect(describeNotes(['TYPE_INFERRED'])).toBe('ATLAS took the type from the document\'s title or from its layout, such as “Letter” or “Email”.');
     // Where to look is still said, for someone who does look.
     expect(describeNotes(['LOW_CONFIDENCE'])).toBe('The model was unsure of its reading. If you look at this name, start with the date and the parties.');
     // These two already say what was found and ask for nothing.
@@ -326,7 +326,7 @@ describe('a note on a document that is not waiting', () => {
   it('leaves every review sentence as it was', () => {
     expect(humanizeReason('TYPE_UNSUPPORTED, TYPE_INFERRED, LOW_CONFIDENCE')).toBe(
       'The document does not state this type as its own, or names it only in a subject line or the body of a letter. Check the type. '
-      + 'Intern took the type from the document\'s title or from its layout, such as “Letter” or “Email”. Check that it names the document. '
+      + 'ATLAS took the type from the document\'s title or from its layout, such as “Letter” or “Email”. Check that it names the document. '
       + 'The model was unsure of its reading. Check the name against the document, starting with the date and the parties.',
     );
   });

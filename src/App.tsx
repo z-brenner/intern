@@ -104,9 +104,9 @@ export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBri
 
   // Its own landmark name: the screen that follows may be setup or the app, and
   // this placeholder must not be mistaken for either.
-  if (gate.kind === 'loading') return <main className="setup-screen" aria-label="Starting Intern"><section><p role="status" aria-label="Loading setup" aria-live="polite">Loading setup</p></section></main>;
-  if (gate.kind === 'failed') return <main className="setup-screen" aria-label="Intern setup"><section>
-    <h1>Intern could not open</h1>
+  if (gate.kind === 'loading') return <main className="setup-screen" aria-label="Starting ATLAS"><section><p role="status" aria-label="Loading setup" aria-live="polite">Loading setup</p></section></main>;
+  if (gate.kind === 'failed') return <main className="setup-screen" aria-label="ATLAS setup"><section>
+    <h1>ATLAS could not open</h1>
     <OnboardingProblemNotice problem={gate.problem} />
     <div className="setup-actions"><button type="button" className="primary" onClick={() => { setGate({ kind: 'loading' }); setAttempt((count) => count + 1); }}>Try again</button></div>
   </section></main>;
@@ -687,7 +687,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     rows: visible,
     store: gridStore,
     onCopied: (block) => { setActionError(''); setActionMessage(`Copied ${describeBlock(block)}.`); },
-    onFailed: (error) => setActionError(`Intern could not copy to the clipboard. ${describeActionError(error)}`),
+    onFailed: (error) => setActionError(`ATLAS could not copy to the clipboard. ${describeActionError(error)}`),
   });
   // Promise<unknown>: some commands report what they did - discardWaiting
   // resolves with a count - and the result is not needed here. False when
@@ -921,7 +921,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     catch { setActionError(`The guide could not be opened. You can reach it at ${GUIDE_URL}.`); }
   };
   const saveSettings = async (next: AppSettings) => {
-    if (!settingsLoaded) throw new Error('Intern could not read your settings, so saving now would replace them with defaults. Restart Intern and try again.');
+    if (!settingsLoaded) throw new Error('ATLAS could not read your settings, so saving now would replace them with defaults. Restart ATLAS and try again.');
     await bridge.saveSettings(next);
     setSettings(next);
   };
@@ -1201,7 +1201,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     />
     {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={() => setSettingsOpen(false)} onSave={async (next) => { await saveSettings(next); setSettingsOpen(false); await model.refresh(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} typed={typedNotFiled} />}
   </>;
-  return <main className="app-shell" aria-label="Intern">
+  return <main className="app-shell" aria-label="ATLAS">
     <p className="sr-only" role="status" aria-label="Queue status" aria-live="polite" aria-atomic="true">{queueStatus}</p>
     <p className="sr-only" role="status" aria-label="Action status" aria-live="polite" aria-atomic="true">{actionMessage}</p>
     {drag.dragging && <div className="drop-overlay" aria-hidden="true"><p>{dropOverlayText(drag.count, inputName)}</p></div>}
@@ -1209,7 +1209,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
        own Install button; showing both at once would be the same choice
        offered twice. */}
     {!settingsOpen && updateStatus?.state === 'available' && updateStatus.version !== updateDismissed && <div className="note note--update" role="status" aria-label="Update available" inert={behindADialog || undefined}>
-      <p>Intern {updateStatus.version} is available. You have {updateStatus.currentVersion}.</p>
+      <p>ATLAS {updateStatus.version} is available. You have {updateStatus.currentVersion}.</p>
       {updateError && <p role="alert">{updateError}</p>}
       <div className="update-actions">
         <button type="button" data-acts className="primary" disabled={updateInstalling || renameApplying} onClick={() => void installUpdate()}>{updateInstalling ? installingLabel(updateProgress) : `Install ${updateStatus.version} and restart`}</button>
@@ -1293,7 +1293,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
             its note is the place to start. The same switch as "ready" in
             the queue, and as there it shows only while there are any.
           */}
-          {view === 'completed' && renamedWithNotes.length > 0 && <button type="button" className="note-filter" aria-pressed={notedFilter} title="Show only the documents renamed while Intern had a note about their reading" onClick={() => { setNotedOnly(!notedOnly); clearCellSelection(); }}>
+          {view === 'completed' && renamedWithNotes.length > 0 && <button type="button" className="note-filter" aria-pressed={notedFilter} title="Show only the documents renamed while ATLAS had a note about their reading" onClick={() => { setNotedOnly(!notedOnly); clearCellSelection(); }}>
             <Icon icon={Info} />{renamedWithNotes.length} with a note
           </button>}
         </div>
@@ -1330,7 +1330,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
             </div>}
           </div>}
           {view === 'queue' && readyItems.length > 0 && <button type="button" data-acts className="primary" aria-label="Rename all ready" disabled={actionPending}
-            title={readyUntyped.length < readyItems.length ? `Renames the ${readyUntyped.length} ready ${readyUntyped.length === 1 ? 'document' : 'documents'} as Intern proposed. ${readyItems.length - readyUntyped.length} with a name or a description you typed ${readyItems.length - readyUntyped.length === 1 ? 'is' : 'are'} left for you to file.` : undefined}
+            title={readyUntyped.length < readyItems.length ? `Renames the ${readyUntyped.length} ready ${readyUntyped.length === 1 ? 'document' : 'documents'} as ATLAS proposed. ${readyItems.length - readyUntyped.length} with a name or a description you typed ${readyItems.length - readyUntyped.length === 1 ? 'is' : 'are'} left for you to file.` : undefined}
             onClick={() => void applyAllReady()}>Rename all ready <span>{readyUntyped.length}</span></button>}
           {view === 'completed' && filtered.length > 0 && <button type="button" disabled={actionPending} onClick={(event) => openHistory(event.currentTarget)}>History</button>}
         </div>
@@ -1379,13 +1379,13 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     {historyOpen && <HistoryDialog bridge={bridge} selection={selection} filedItems={new Set(items.filter((item) => item.status === 'completed').map((item) => item.id))}
       notes={new Map(renamedWithNotes.map((item) => [item.id, { label: checkText(item), text: itemNote(item)?.text ?? '' }]))} onClose={closeHistory} />}
     {clearing === 'queue' && <ClearDialog title="Clear the queue?" confirm="Clear queue" busy={actionPending} onConfirm={() => void clearView('queue')} onCancel={cancelClear}>
-      <p>This takes {queueCountText(items.filter((item) => item.status !== 'completed').length)} out of Intern's queue, including any being read or waiting for your review. Completed documents stay as they are.</p>
-      <p>Your files stay where they are{inputName ? <>, in <strong>{inputName}</strong></> : ''}. Intern won't pick them up again unless they change, or you add them again with Add files.</p>
+      <p>This takes {queueCountText(items.filter((item) => item.status !== 'completed').length)} out of ATLAS's queue, including any being read or waiting for your review. Completed documents stay as they are.</p>
+      <p>Your files stay where they are{inputName ? <>, in <strong>{inputName}</strong></> : ''}. ATLAS won't pick them up again unless they change, or you add them again with Add files.</p>
       <p><strong>This can't be undone.</strong></p>
     </ClearDialog>}
     {clearing === 'completed' && <ClearDialog title="Clear completed?" confirm="Clear completed" busy={actionPending} onConfirm={() => void clearView('completed')} onCancel={cancelClear}>
       <p>This takes {queueCountText(completedCount)} off the Completed list, with {completedCount === 1 ? 'its' : 'their'} rename history{failedCount > 0 ? `, and the ${failedCount === 1 ? 'one' : failedCount} in the queue that failed` : ''}.</p>
-      <p>Your files stay where they are: filed documents keep their new names. You won't be able to undo these renames from Intern.</p>
+      <p>Your files stay where they are: filed documents keep their new names. You won't be able to undo these renames from ATLAS.</p>
       <p><strong>This can't be undone.</strong></p>
     </ClearDialog>}
     {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={saveFromSettings} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} typed={typedNotFiled} />}
@@ -1520,7 +1520,7 @@ function batchOutcome(ids: string[], queue: QueueItem[], leftTyped = 0, noted: R
   const withNotes = filed.filter((item) => noted.has(item.id)).length;
   const text = [
     ids.length === 0 && leftTyped ? 'Nothing was renamed.' : filed.length > 0 || (!named && !later && !back) ? renamedCount(filed.length) : '',
-    withNotes ? `${withNotes} had a note from Intern.` : '',
+    withNotes ? `${withNotes} had a note from ATLAS.` : '',
     named ? `${named} already had ${named === 1 ? 'its name' : 'their names'}.` : '',
     later ? `${later} will be renamed when the queue is free.` : '',
     back ? `${back} ${back === 1 ? 'needs' : 'need'} review again.` : '',

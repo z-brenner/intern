@@ -43,7 +43,7 @@ function SummaryDialog({ changes, onDismiss }: { changes: string[]; onDismiss():
   return <dialog ref={dialog} className="settings-dialog whats-new" aria-labelledby="whats-new-title"
     onKeyDown={(event) => event.stopPropagation()}
     onCancel={(event) => { event.preventDefault(); onDismiss(); }}>
-    <h2 id="whats-new-title">What’s new in Intern</h2>
+    <h2 id="whats-new-title">What’s new in ATLAS</h2>
     <ul>{changes.map((change) => <li key={change}>{change}</li>)}</ul>
     <button type="button" className="primary" autoFocus onClick={onDismiss}>Continue</button>
   </dialog>;

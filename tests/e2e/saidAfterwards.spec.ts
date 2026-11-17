@@ -18,7 +18,7 @@ const SHOTS = process.env.R23_OUT;
 async function openSettings(page: Page) {
   await page.getByRole('button', { name: 'Settings' }).click();
   const dialog = page.getByRole('dialog', { name: 'Settings' });
-  await dialog.locator('summary', { hasText: 'How Intern names files' }).click();
+  await dialog.locator('summary', { hasText: 'How ATLAS names files' }).click();
   const level = dialog.getByRole('group', { name: 'Which documents are ready' });
   return {
     dialog,
@@ -36,7 +36,7 @@ const queueAsShown = (page: Page) => page.evaluate(() => ({
 test('a save that changes the level says what it did to the documents that wait: to Balanced, and back to Strict', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/');
-  await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+  await expect(page.getByRole('main', { name: 'ATLAS' })).toBeVisible();
   await expect(queueCell(page, LEASE, 'status')).toHaveText('Needs review');
   const result = page.getByRole('group', { name: 'Action result' });
 
@@ -110,7 +110,7 @@ test('a document with a name typed for it, renamed with nobody here deciding it,
   const renamed = page.getByRole('group', { name: 'Renamed without you' });
   const words = renamed.locator('p');
   const undo = renamed.getByRole('button', { name: `Undo the rename of ${LEASE}` });
-  const said = `${LEASE} was renamed under Intern's proposal, without anyone approving it. What you typed for it was not filed, and is kept in its details.`;
+  const said = `${LEASE} was renamed under ATLAS's proposal, without anyone approving it. What you typed for it was not filed, and is kept in its details.`;
   for (let attempt = 1; ; attempt += 1) {
     if (attempt > 1) await page.evaluate(() => window.localStorage.clear());
     await page.goto('/?queue=changes');
@@ -168,7 +168,7 @@ test('a document with a name typed for it, read again by itself and renamed befo
   await expect(page.locator('.toasts')).toHaveCount(0);
   await filedByItself(page);
   const renamed = page.getByRole('group', { name: 'Renamed without you' });
-  await expect(renamed.locator('p')).toHaveText(`${LEASE} was renamed under Intern's proposal, without anyone approving it. What you typed for it was not filed, and is kept in its details.`);
+  await expect(renamed.locator('p')).toHaveText(`${LEASE} was renamed under ATLAS's proposal, without anyone approving it. What you typed for it was not filed, and is kept in its details.`);
   await expect(renamed.getByRole('button', { name: `Undo the rename of ${LEASE}` })).toBeVisible();
   await expect(page.getByRole('group', { name: 'Action result' })).toHaveCount(0);
 });

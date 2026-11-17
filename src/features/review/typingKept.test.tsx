@@ -649,10 +649,10 @@ describe('a name or a description being typed', () => {
     row, Enter: approve(lease, 2023-09-15 Lease Agreement between ABC
     Properties LLC and.pdf), while the row still read "... and TenantCo Inc".
   */
-  it('can be taken back with "Back to Intern\'s proposal", which is there only while what is in the fields differs', async () => {
+  it('can be taken back with "Back to ATLAS\'s proposal", which is there only while what is in the fields differs', async () => {
     windowOf(true);
     const { bridge } = await start();
-    const back = () => screen.queryByRole('button', { name: 'Back to Intern\'s proposal' });
+    const back = () => screen.queryByRole('button', { name: 'Back to ATLAS\'s proposal' });
     const PROPOSED_DESCRIPTION = 'Commercial lease agreement between landlord and tenant for 123 Main St.';
     await openDetails(LEASE);
     expect(back()).not.toBeInTheDocument();
@@ -714,7 +714,7 @@ describe('a name or a description being typed', () => {
     await openDetails(EMPLOYMENT);
     fireEvent.change(filename(), { target: { value: `${EMPLOYMENT_PROPOSED} (corrected)` } });
     await waitFor(() => expect(all()).toHaveTextContent('Rename all ready 2'));
-    fireEvent.click(screen.getByRole('button', { name: 'Back to Intern\'s proposal' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to ATLAS\'s proposal' }));
     await waitFor(() => expect(all()).toHaveTextContent('Rename all ready 3'));
     expect(all()).not.toHaveAttribute('title');
 
@@ -752,7 +752,7 @@ describe('a name or a description being typed', () => {
     const all = screen.getByRole('button', { name: 'Rename all ready' });
     // Its count is of what it will rename; the documents that are ready are still three.
     await waitFor(() => expect(all).toHaveTextContent('Rename all ready 2'));
-    expect(all).toHaveAttribute('title', 'Renames the 2 ready documents as Intern proposed. 1 with a name or a description you typed is left for you to file.');
+    expect(all).toHaveAttribute('title', 'Renames the 2 ready documents as ATLAS proposed. 1 with a name or a description you typed is left for you to file.');
     expect(screen.getByRole('button', { name: /3 ready/ })).toBeInTheDocument();
 
     fireEvent.click(all);

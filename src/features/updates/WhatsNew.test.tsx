@@ -43,7 +43,7 @@ describe('update summary', () => {
     localStorage.setItem(LAST_SEEN_VERSION_KEY, '0.1.0-alpha.15');
     const getVersion = async () => '0.1.0-alpha.16';
     const view = render(<WhatsNew getVersion={getVersion} />);
-    expect(await screen.findByRole('dialog', { name: 'What’s new in Intern' })).toBeVisible();
+    expect(await screen.findByRole('dialog', { name: 'What’s new in ATLAS' })).toBeVisible();
     expect(screen.getByText(/Status now comes first/)).toBeVisible();
     expect(localStorage.getItem(LAST_SEEN_VERSION_KEY)).toBe('0.1.0-alpha.15');
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));

@@ -1,5 +1,7 @@
 # SharePoint root verification
 
+ATLAS was called Intern before v0.1.0-alpha.20; this document uses the old name.
+
 Activation needs proof that one local folder is the provisioned SharePoint
 `Files` library. `detect_cloud_roots` only finds candidate folders, using the
 `Tenants` registry values and display names, and those never authorize

@@ -1,5 +1,7 @@
 # Claude integration — deferred
 
+ATLAS was called Intern before v0.1.0-alpha.20; this document uses the old name.
+
 Claude integration is deferred at the maintainer's request. This release contains
 no Claude account connection, automatic escalation, browser handoff, or related
 settings. Intern analyzes documents locally. The findings below record why the

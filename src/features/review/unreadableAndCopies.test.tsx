@@ -22,7 +22,7 @@ const unreadable: QueueItem = {
   errorCode: 'PASSWORD_PROTECTED', reason: humanizeReason('PASSWORD_PROTECTED'), fileModifiedDate: '2026-01-02',
 };
 
-describe('a document Intern could not read', () => {
+describe('a document ATLAS could not read', () => {
   afterEach(() => cleanup());
 
   it('can be retried or named by hand, and is not offered Analyze again beside Retry', () => {
@@ -55,7 +55,7 @@ describe('a document Intern could not read', () => {
     const ref = createRef<ReviewInspectorHandle>();
     render(<ReviewInspector ref={ref} item={unreadable} drawer={false} {...handlers()} />);
     act(() => ref.current?.requestRemove());
-    expect(screen.getByRole('group', { name: 'Confirm removal' })).toHaveTextContent('stays where it is, under this name, and Intern leaves it alone');
+    expect(screen.getByRole('group', { name: 'Confirm removal' })).toHaveTextContent('stays where it is, under this name, and ATLAS leaves it alone');
   });
 
   it('has sentences that point at what can be done now', () => {
@@ -66,7 +66,7 @@ describe('a document Intern could not read', () => {
     }
   });
 
-  it('is renamed NEEDS REVIEW in the demo, and gets back only the name Intern took', async () => {
+  it('is renamed NEEDS REVIEW in the demo, and gets back only the name ATLAS took', async () => {
     const bridge = createInMemoryBridge({ items: [{ ...unreadable }], settings: { intakeEnabled: true, intakeFolder: 'C:\\Inbox' } });
     await bridge.copyToInput({ files: [{ path: 'C:\\Inbox\\Lease password.pdf', displayName: 'Lease password.pdf' }] });
     // Dropped from elsewhere, it is copied into the input folder first, and
@@ -141,7 +141,7 @@ describe('an exact duplicate', () => {
   });
 
   it('explains the duplicate left where it is without promising it was never filed elsewhere', () => {
-    expect(humanizeReason('DUPLICATE')).toContain('so Intern did not file it again');
+    expect(humanizeReason('DUPLICATE')).toContain('so ATLAS did not file it again');
     expect(humanizeReason('EXACT_COPY')).toContain('filed it as a copy');
   });
 });

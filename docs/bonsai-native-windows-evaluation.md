@@ -1,5 +1,7 @@
 # Bonsai 2 Small: native Windows qualification
 
+ATLAS was called Intern before v0.1.0-alpha.20; this document uses the old name.
+
 > **Superseded by the 77-document evaluation.** On the full InternBench corpus
 > ([`bench/reports/bonsai-linux-cpu-2026-10-27`](../bench/reports/bonsai-linux-cpu-2026-10-27/README.md))
 > neither Bonsai model reached Qwen3.5 2B: 37/77 correct names for Bonsai 2 2B,

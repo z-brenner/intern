@@ -10,7 +10,7 @@ test.describe('whole-product browser QA', () => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto('/');
 
-    await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+    await expect(page.getByRole('main', { name: 'ATLAS' })).toBeVisible();
     await expect(page.getByRole('navigation', { name: 'Queue navigation' })).toBeVisible();
     // The Details panel opens only when asked; the seeded selection is the
     // item needing review, and F2 opens the panel at its name.

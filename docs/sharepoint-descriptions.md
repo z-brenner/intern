@@ -1,5 +1,7 @@
 # Descriptions in a SharePoint column
 
+ATLAS was called Intern before v0.1.0-alpha.20; this document uses the old name.
+
 Intern produces two things about every document: a filename and a
 one-sentence description. The filename travels with the file. The sentence
 used to stay in the local queue, where nobody else could see it.

@@ -1,4 +1,4 @@
-# Releasing Intern
+# Releasing ATLAS
 
 A release is a deliberate act. Nothing is published by merging; a maintainer
 dispatches the release workflow against one exact `main` commit, and every gate
@@ -24,7 +24,7 @@ but `docs/qa/`.
 
 For each release, add a matching version entry to
 `src/features/updates/releaseNotes.ts` before QA. Write short, plain-language
-changes for people using Intern, including fixes and improvements they will
+changes for people using ATLAS, including fixes and improvements they will
 notice. Keep older entries so people who skip releases see all their new
 changes. The desktop app shows these notes once after updating, and remembers
 the version when the person selects Continue or dismisses the summary.
@@ -66,8 +66,11 @@ the version when the person selects Continue or dismisses the summary.
      workflow name `scripts/validate-release-evidence.mjs` accepts). That test
      fails until they agree.
    - Write `docs/releases/v<version>.md`. It is published as the release
-     notes. It must start with `# Intern v<version>` and must say the
+     notes. It must start with `# ATLAS v<version>` and must say the
      installer is `not Authenticode signed`; the preflight checks both.
+     (Notes before alpha.20, when the app was called Intern, start
+     `# Intern v<version>`. The installer, the release assets and the
+     install folder keep the name Intern.)
    - Return `docs/qa/rendered-fidelity-signoff.json` to pending
      (`status`, `release_inputs_sha256`, `screenshot_sha256`, `reviewer` and
      `reviewed_at` all `"pending"`) and the QA checklist to pending/blocked.

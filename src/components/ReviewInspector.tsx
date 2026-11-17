@@ -47,7 +47,7 @@ export const DATE_REQUIRED_MESSAGE = 'Every rename needs a date. Start the filen
 function stemProblem(stem: string, extension: string | undefined, sourceExtension: string | undefined): string | undefined {
   if (!stem.trim()) return undefined;
   if (extension !== undefined && stem.trim().toLowerCase().endsWith(`.${extension.toLowerCase()}`)) {
-    return `Leave \u201c.${extension}\u201d off: Intern adds the extension itself.`;
+    return `Leave \u201c.${extension}\u201d off: ATLAS adds the extension itself.`;
   }
   return validateFilename(joinFilename(stem, extension), sourceExtension);
 }
@@ -564,10 +564,10 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       note is there to be seen all the same - at this level a document can
       be renamed with nobody having looked at it.
     */}
-    {note && <section className="check-first noted" aria-label="Intern's note">
+    {note && <section className="check-first noted" aria-label="ATLAS's note">
       <h3><Icon icon={Info} />{completed ? 'Renamed with a note' : 'Ready with a note'}</h3>
       <p className="note-lead">{completed ? RENAMED_NOTE_LEAD : READY_NOTE_LEAD}</p>
-      {noteChips.length > 0 ? <ReasonChips key={item.id} reasons={noteChips} label="Intern noted" /> : <p className="reason-text">{note.text}</p>}
+      {noteChips.length > 0 ? <ReasonChips key={item.id} reasons={noteChips} label="ATLAS noted" /> : <p className="reason-text">{note.text}</p>}
     </section>}
     {/*
       What was typed for this document before it changed by itself: read
@@ -587,7 +587,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
           Rename all ready leaves for the person is exactly what shows this.
           In the heading's line, so nothing moves when it comes and goes.
         */}
-        {draft.edited && <button type="button" data-acts className="link-button" disabled={busy} title="Puts the name and the description back as they were before you typed. What you typed for this document is dropped." onClick={backToProposal}>{unreadable ? 'Back to the name it came with' : "Back to Intern's proposal"}</button>}
+        {draft.edited && <button type="button" data-acts className="link-button" disabled={busy} title="Puts the name and the description back as they were before you typed. What you typed for this document is dropped." onClick={backToProposal}>{unreadable ? 'Back to the name it came with' : "Back to ATLAS's proposal"}</button>}
       </div>
       <label className="filename-label">Filename
         <span className="filename-field">
@@ -622,7 +622,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
         reached review's own keys, which move on and file names.
       */}
       {heldForSpelling && item.houseRules && item.houseRules.length > 0 && <p className="check-hint held-spelling-hint" role="note" aria-label="Why the name waits">
-        This name waits for you because Intern has not been told to use {item.houseRules.length === 1 ? 'this spelling' : 'every one of these spellings'} on its own: <q>Always use</q> is in Settings, under Learned spellings.
+        This name waits for you because ATLAS has not been told to use {item.houseRules.length === 1 ? 'this spelling' : 'every one of these spellings'} on its own: <q>Always use</q> is in Settings, under Learned spellings.
       </p>}
       {/*
         The same for a party the evidence names and the name does not: the
@@ -725,8 +725,8 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
         if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelRemove(); }
       }}>
         <p>{remove.resolvedFiles
-          ? 'This rename stopped part-way, so its files may need putting right by hand. Remove it only once you have: Intern will not touch them again.'
-          : <>Remove <q>{item.originalFilename}</q> from the queue? The file itself stays where it is{isUnreadable(item) ? ', under this name, and Intern leaves it alone' : ''}.</>}</p>
+          ? 'This rename stopped part-way, so its files may need putting right by hand. Remove it only once you have: ATLAS will not touch them again.'
+          : <>Remove <q>{item.originalFilename}</q> from the queue? The file itself stays where it is{isUnreadable(item) ? ', under this name, and ATLAS leaves it alone' : ''}.</>}</p>
         <button ref={confirmRef} type="button" data-acts className="primary" disabled={busy} onClick={decides(() => { setConfirmingRemove(false); onRemove(remove.resolvedFiles); })}>{remove.resolvedFiles ? 'I have resolved the files myself' : remove.label}</button>
         <button type="button" disabled={busy} onClick={cancelRemove}>Cancel</button>
       </div> : <>
@@ -768,8 +768,8 @@ export function readByLine(reading: ModelReading, pending: boolean): string {
  * only that the note was there when it was renamed, not who renamed it:
  * the row does not say.
  */
-const READY_NOTE_LEAD = 'Nothing holds it. Intern only noted this about its reading.';
-const RENAMED_NOTE_LEAD = 'Intern noted this about its reading when it was renamed.';
+const READY_NOTE_LEAD = 'Nothing holds it. ATLAS only noted this about its reading.';
+const RENAMED_NOTE_LEAD = 'ATLAS noted this about its reading when it was renamed.';
 
 const FIELD_WORDS: Record<ReasonField, string> = { date: 'date', type: 'document type', parties: 'parties', description: 'description' };
 
@@ -782,7 +782,7 @@ function evidenceLead(fields: readonly ReasonField[]): string {
   const names = fields.includes('parties');
   return [
     lines.length > 0 ? `Lines from the document behind the ${listOf(lines)}.` : '',
-    names ? `The parties are the names Intern read${lines.length > 0 ? ', not lines from the document' : '. They are not lines from the document'}.` : '',
+    names ? `The parties are the names ATLAS read${lines.length > 0 ? ', not lines from the document' : '. They are not lines from the document'}.` : '',
   ].filter(Boolean).join(' ');
 }
 

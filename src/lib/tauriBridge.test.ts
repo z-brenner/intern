@@ -273,7 +273,7 @@ describe('TauriBridge', () => {
 
   // The document viewer reads a document by its item's id too: its file as
   // raw bytes, which arrive as an ArrayBuffer, and the text Intern read.
-  it('reads a document for the viewer by its id, as bytes and as the pages Intern read', async () => {
+  it('reads a document for the viewer by its id, as bytes and as the pages ATLAS read', async () => {
     const pdf = new TextEncoder().encode('%PDF-1.7');
     const fake = fakeTransport({
       document_file: pdf.buffer,
@@ -959,7 +959,7 @@ describe('TauriBridge', () => {
 
   // Installing closes Intern on Windows. What must happen first gets its turn
   // after the download, however long that took, and can stop the install.
-  it('downloads, runs what must happen before Intern closes, and only then installs', async () => {
+  it('downloads, runs what must happen before ATLAS closes, and only then installs', async () => {
     const steps = updateDownloading([{ event: 'Started', data: { contentLength: 10 } }, { event: 'Finished' }]);
     const bridge = new TauriBridge(fakeTransport().transport);
     await bridge.checkForUpdate();

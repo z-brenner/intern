@@ -84,7 +84,7 @@ export function typedWarning(count: number): string {
   const one = count === 1;
   return [
     `${one ? '1 document has' : `${count} documents have`} a name or a description you typed and did not file.`,
-    `When you save, Intern can rename ${one ? 'it under the name' : 'them under the names'} it proposed.`,
+    `When you save, ATLAS can rename ${one ? 'it under the name' : 'them under the names'} it proposed.`,
     `You can file ${one ? 'it' : 'them'} first, or take back what you typed.`,
     `What you typed is kept with ${one ? 'the' : 'each'} document, but is not filed.`,
   ].join(' ');

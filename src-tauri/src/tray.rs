@@ -53,9 +53,9 @@ pub fn tray_tooltip(needs_review: usize, ready: usize) -> String {
         parts.push(format!("{ready} ready to rename"));
     }
     if parts.is_empty() {
-        "Intern".to_owned()
+        "ATLAS".to_owned()
     } else {
-        format!("Intern – {}", parts.join(", "))
+        format!("ATLAS – {}", parts.join(", "))
     }
 }
 
@@ -86,15 +86,15 @@ pub fn sync_tray(app: &AppHandle, run_in_background: bool) {
 /// Builds the tray icon itself. Kept thin and runtime-only: everything worth
 /// unit testing lives in the pure helpers above.
 fn create_tray(app: &AppHandle) -> tauri::Result<()> {
-    let open = MenuItemBuilder::with_id("open", "Open Intern").build(app)?;
-    let quit = MenuItemBuilder::with_id("quit", "Quit Intern").build(app)?;
+    let open = MenuItemBuilder::with_id("open", "Open ATLAS").build(app)?;
+    let quit = MenuItemBuilder::with_id("quit", "Quit ATLAS").build(app)?;
     let menu = MenuBuilder::new(app)
         .item(&open)
         .separator()
         .item(&quit)
         .build()?;
     let mut tray = TrayIconBuilder::with_id(TRAY_ID)
-        .tooltip("Intern")
+        .tooltip("ATLAS")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
@@ -136,13 +136,13 @@ mod tests {
 
     #[test]
     fn the_tooltip_says_what_waits_on_a_person_and_nothing_else() {
-        assert_eq!(tray_tooltip(0, 0), "Intern");
-        assert_eq!(tray_tooltip(1, 0), "Intern – 1 needs review");
-        assert_eq!(tray_tooltip(3, 0), "Intern – 3 need review");
-        assert_eq!(tray_tooltip(0, 2), "Intern – 2 ready to rename");
+        assert_eq!(tray_tooltip(0, 0), "ATLAS");
+        assert_eq!(tray_tooltip(1, 0), "ATLAS – 1 needs review");
+        assert_eq!(tray_tooltip(3, 0), "ATLAS – 3 need review");
+        assert_eq!(tray_tooltip(0, 2), "ATLAS – 2 ready to rename");
         assert_eq!(
             tray_tooltip(3, 2),
-            "Intern – 3 need review, 2 ready to rename"
+            "ATLAS – 3 need review, 2 ready to rename"
         );
     }
 

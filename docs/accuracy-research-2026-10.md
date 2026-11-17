@@ -1,5 +1,7 @@
 # Making Intern more accurate: research, October 2026
 
+ATLAS was called Intern before v0.1.0-alpha.20; this document uses the old name.
+
 Status: research summary plus the measured changes of 2026-10-29. The question was
 "there has to be something we can do model-wise or pipeline-wise to increase accuracy".
 Three research passes covered:

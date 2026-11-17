@@ -28,7 +28,7 @@ const SENTENCES: Record<string, string> = {
   // a heading that opens on it - whether or not the model gave a type.
   // Neither sentence says the type is absent or that the model gave none.
   TYPE_UNSUPPORTED: 'The document does not state this type as its own, or names it only in a subject line or the body of a letter. Check the type.',
-  TYPE_INFERRED: 'Intern took the type from the document\'s title or from its layout, such as “Letter” or “Email”. Check that it names the document.',
+  TYPE_INFERRED: 'ATLAS took the type from the document\'s title or from its layout, such as “Letter” or “Email”. Check that it names the document.',
   // Both are raised in more cases than a party missing from the text
   // (ReviewReason in domain.rs; raised in facts.rs and validate.rs, on the
   // relation compose.rs reads). PARTY_UNSUPPORTED: most often a name that
@@ -120,12 +120,12 @@ const SENTENCES: Record<string, string> = {
   // "NEEDS REVIEW - ..." where it lies (UNREADABLE_CODES in the backend):
   // Retry reads it again, a name typed for it can be approved, Keep original
   // gives the file its own name back, and Remove leaves it as it is.
-  PASSWORD_PROTECTED: 'This file is password-protected, so Intern could not read it. Remove the password and retry, or name it yourself.',
-  UNSUPPORTED_CONTENT: 'This file is not what its extension says it is, so Intern could not read it. Name it yourself, or keep its name.',
-  DOCUMENT_TOO_LARGE: 'This document is too large for Intern to read. Name it yourself, or split it and add the parts.',
-  OCR_UNAVAILABLE: 'Intern\'s text-recognition files are missing. Reinstall Intern to restore them.',
-  EXTRACTION_FAILED: 'Intern could not read this file. It may be damaged: open it to check, then retry or name it yourself.',
-  ANALYSIS_FAILED: 'Intern hit an internal error while reading this document. Retry, or name it yourself.',
+  PASSWORD_PROTECTED: 'This file is password-protected, so ATLAS could not read it. Remove the password and retry, or name it yourself.',
+  UNSUPPORTED_CONTENT: 'This file is not what its extension says it is, so ATLAS could not read it. Name it yourself, or keep its name.',
+  DOCUMENT_TOO_LARGE: 'This document is too large for ATLAS to read. Name it yourself, or split it and add the parts.',
+  OCR_UNAVAILABLE: 'ATLAS\'s text-recognition files are missing. Reinstall ATLAS to restore them.',
+  EXTRACTION_FAILED: 'ATLAS could not read this file. It may be damaged: open it to check, then retry or name it yourself.',
+  ANALYSIS_FAILED: 'ATLAS hit an internal error while reading this document. Retry, or name it yourself.',
   MODEL_FAILED: 'The model could not finish reading this document. Retry it, or name it yourself.',
   MODEL_OUTPUT_INVALID: 'The model\'s answer for this document could not be used. Retry it, or name it yourself.',
   MODEL_INPUT_TOO_LARGE: 'This document is too long for the model to read at once. Name it yourself, or split it.',
@@ -143,7 +143,7 @@ const SENTENCES: Record<string, string> = {
   SECRET_SERVICE_UNAVAILABLE: 'The hosted model\'s key could not be read because no credential store answered on this desktop. Start and unlock GNOME Keyring or KWallet, or use the local model.',
   HOSTED_MODEL_UNAUTHORIZED: 'The hosted service rejected the API key. Check the key in Settings.',
   HOSTED_MODEL_UNREACHABLE: 'The hosted service could not be reached. Check the connection and try again.',
-  HOSTED_MODEL_RATE_LIMITED: 'The hosted service asked for a slower pace. Intern will retry.',
+  HOSTED_MODEL_RATE_LIMITED: 'The hosted service asked for a slower pace. ATLAS will retry.',
   HOSTED_MODEL_REJECTED: 'The hosted service rejected the request — often an unknown model name. Check the Model section in Settings.',
   HOSTED_MODEL_REFUSED: 'The hosted model declined to answer about this document.',
   // Raised before analysis when the content was filed before; the name it was
@@ -152,10 +152,10 @@ const SENTENCES: Record<string, string> = {
   // With an output folder, an exact duplicate is filed there as a copy
   // instead (EXACT_COPY); this is the one left where it is - no output
   // folder, a file already in it, a copy the person undid.
-  DUPLICATE: 'This document\'s content was filed once already, so Intern did not file it again. Choose Process anyway to process it all the same, keep it where it is, or remove it.',
+  DUPLICATE: 'This document\'s content was filed once already, so ATLAS did not file it again. Choose Process anyway to process it all the same, keep it where it is, or remove it.',
   // An exact duplicate moved into the output folder under the original's
   // filed name with COPY in front, without being read.
-  EXACT_COPY: 'This file is an exact copy of a document Intern already filed, so Intern filed it as a copy, named after that document, without reading it.',
+  EXACT_COPY: 'This file is an exact copy of a document ATLAS already filed, so ATLAS filed it as a copy, named after that document, without reading it.',
   // Raised after analysis when the text is nearly the text of a document
   // already filed - a second scan, a re-export, a copy saved again. The
   // inspector names that filing beside this sentence.
@@ -171,7 +171,7 @@ const SENTENCES: Record<string, string> = {
   // rule when nothing else in the name changed. Not "for the first time": a
   // spelling an earlier release learned has been used before, and is
   // unchecked after the update all the same.
-  LEARNED_SPELLING_UNCONFIRMED: 'Intern used a spelling it learned from your edits, and a name it changes waits for you until you choose Always use for it in Settings, under Learned spellings. Approve the name if it is right; if not, put the document\'s own words back.',
+  LEARNED_SPELLING_UNCONFIRMED: 'ATLAS used a spelling it learned from your edits, and a name it changes waits for you until you choose Always use for it in Settings, under Learned spellings. Approve the name if it is right; if not, put the document\'s own words back.',
   // Set when a person undoes a rename. The file is back under its original
   // name and the proposal is still here, so the document waits for a decision
   // rather than being renamed again by the next automatic pass.
@@ -211,7 +211,7 @@ const CLOSINGS: Record<string, string> = {
 const QUEUE_STOP_SENTENCES: Record<string, string> = {
   // The local model server could not be reached, restarted, or recovered, or
   // no model has been loaded for minutes.
-  MODEL_FAILED: 'The local model stopped responding. Resume the queue to try again, and restart Intern if it stops again.',
+  MODEL_FAILED: 'The local model stopped responding. Resume the queue to try again, and restart ATLAS if it stops again.',
   // Several documents in a row came back with a reply that could not be used.
   MODEL_OUTPUT_INVALID: 'The model\'s answers for several documents in a row could not be used. Check the Model section in Settings, then resume the queue.',
   HOSTED_MODEL_RATE_LIMITED: 'The hosted service asked for a slower pace. Wait a minute, then resume the queue.',
@@ -219,10 +219,10 @@ const QUEUE_STOP_SENTENCES: Record<string, string> = {
   // Intern's document reader crashed on several documents in a row, or on
   // several of one kind with none of that kind it could read; the documents
   // wait under their own names to be read again.
-  READER_CRASHED: 'Intern\'s document reader crashed on several documents. They wait under their own names. Restart Intern, then resume the queue.',
+  READER_CRASHED: 'ATLAS\'s document reader crashed on several documents. They wait under their own names. Restart ATLAS, then resume the queue.',
   // The reader's self-test could not write its small file in Intern's own
   // data folder, which says nothing about the reader.
-  READER_CHECK_UNWRITABLE: 'Intern could not write a small test file in its own data folder to check its document reader. Make sure that folder can be written to, then resume the queue.',
+  READER_CHECK_UNWRITABLE: 'ATLAS could not write a small test file in its own data folder to check its document reader. Make sure that folder can be written to, then resume the queue.',
 };
 
 /**
@@ -293,7 +293,7 @@ function eachSaid(codes: readonly string[], instead: Record<string, string>): st
  */
 const NOTE_SENTENCES: Record<string, string> = {
   TYPE_UNSUPPORTED: 'The document does not state the type in this name as its own, or names it only in a subject line or the body of a letter.',
-  TYPE_INFERRED: 'Intern took the type from the document\'s title or from its layout, such as “Letter” or “Email”.',
+  TYPE_INFERRED: 'ATLAS took the type from the document\'s title or from its layout, such as “Letter” or “Email”.',
   LOW_CONFIDENCE: 'The model was unsure of its reading. If you look at this name, start with the date and the parties.',
 };
 
