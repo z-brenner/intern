@@ -100,15 +100,18 @@ describe('update summary', () => {
       expect(changesSince(packageInfo.version, release.version)).toEqual(expect.arrayContaining([...release.changes]));
     }
     // Newest first in the file, oldest first in the summary of several.
+    const alpha21 = releaseNotes.find((release) => release.version === '0.1.0-alpha.21')!;
     const alpha20 = releaseNotes.find((release) => release.version === '0.1.0-alpha.20')!;
     const alpha19 = releaseNotes.find((release) => release.version === '0.1.0-alpha.19')!;
     const alpha18 = releaseNotes.find((release) => release.version === '0.1.0-alpha.18')!;
     const alpha17 = releaseNotes.find((release) => release.version === '0.1.0-alpha.17')!;
     const alpha16 = releaseNotes.find((release) => release.version === '0.1.0-alpha.16')!;
+    expect(releaseNotes.indexOf(alpha21)).toBeLessThan(releaseNotes.indexOf(alpha20));
     expect(releaseNotes.indexOf(alpha20)).toBeLessThan(releaseNotes.indexOf(alpha19));
     expect(releaseNotes.indexOf(alpha19)).toBeLessThan(releaseNotes.indexOf(alpha18));
     expect(releaseNotes.indexOf(alpha18)).toBeLessThan(releaseNotes.indexOf(alpha17));
     expect(releaseNotes.indexOf(alpha17)).toBeLessThan(releaseNotes.indexOf(alpha16));
+    expect(changesSince('0.1.0-alpha.20', '0.1.0-alpha.21')).toEqual([...alpha21.changes]);
     expect(changesSince('0.1.0-alpha.19', '0.1.0-alpha.20')).toEqual([...alpha20.changes]);
     expect(changesSince('0.1.0-alpha.18', '0.1.0-alpha.20')).toEqual([...alpha19.changes, ...alpha20.changes]);
     expect(changesSince('0.1.0-alpha.18', '0.1.0-alpha.19')).toEqual([...alpha19.changes]);
