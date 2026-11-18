@@ -9,8 +9,9 @@ import { acceptedFidelity } from './release-evidence-lib.mjs';
  * Everything the release workflow's last step requires of a commit that can
  * be known before anything is built, checked in seconds instead.
  *
- * The final evidence validation in release.yml runs after about ninety minutes
- * of Windows build and real inference, and until now it was the first place a
+ * The final evidence validation in release.yml runs after the whole Windows
+ * build (it ran after about ninety minutes of build and real inference when
+ * this was written), and until then it was the first place a
  * stale rendered-fidelity sign-off, a missing release-notes file, or a version
  * that one file forgot to bump was noticed. None of those depend on the build.
  * This reads the committed tree directly and names every problem at once, so a

@@ -10,6 +10,13 @@ Set-StrictMode -Version Latest
 $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $ManifestPath = Join-Path $RepositoryRoot "src-tauri/resources/runtime-assets.json"
 $Manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+# The worker's package identity in the runtime inventory is the app's own
+# version, read from the build's config rather than restated here. This script
+# is part of the runtime-asset cache key (ci.yml), and a literal bumped with
+# every release changed that key: the first CI, QA and release runs after each
+# bump all rebuilt Tesseract from nothing.
+$InternVersion = [string](Get-Content -LiteralPath (Join-Path $RepositoryRoot "src-tauri/tauri.conf.json") -Raw | ConvertFrom-Json).version
+if (-not $InternVersion) { throw "src-tauri/tauri.conf.json states no version" }
 $WorkDirectory = if ($CacheDirectory) {
     [System.IO.Path]::GetFullPath($CacheDirectory)
 } else {
@@ -183,7 +190,7 @@ function Get-PackagedRuntimePath {
 function Get-RuntimePackages {
     param([Parameter(Mandatory = $true)][string]$Path)
     $Leaf = Split-Path -Leaf $Path
-    if ($Leaf -eq "intern-worker-$TargetTriple.exe") { return @([ordered]@{ name = "Intern"; version = "0.1.0-alpha.20" }) }
+    if ($Leaf -eq "intern-worker-$TargetTriple.exe") { return @([ordered]@{ name = "Intern"; version = $InternVersion }) }
     if ($RuntimePackages.ContainsKey($Path)) { return @($RuntimePackages[$Path]) }
     throw "No package identity for staged runtime file: $Path"
 }

@@ -14,8 +14,12 @@ async function evidenceFixture() {
   await mkdir(join(root, 'docs/qa/logs'), { recursive: true });
   await mkdir(join(root, 'release'), { recursive: true });
   const commit = 'a'.repeat(40);
-  const workflow = 'Release v0.1.0-alpha.20';
+  const workflow = 'Release v0.1.0-alpha.21';
   const runId = '123456';
+  // The QA run the release ships on: its model evaluation, scored there on
+  // the same release inputs, is the release's.
+  const qaCommit = 'e'.repeat(40);
+  const qaRunId = '777';
   const screenshot = 'rendered screenshot';
   const files = {
     model: 'docs/qa/model-evaluation.json',
@@ -28,19 +32,20 @@ async function evidenceFixture() {
     runtime: 'release/runtime-assets.json',
     notices: 'release/THIRD_PARTY_NOTICES.md',
     checksum: 'release/SHA256SUMS.txt',
-    applicationSbom: 'release/Intern-v0.1.0-alpha.20.spdx.json',
-    runtimeSbom: 'release/Intern-v0.1.0-alpha.20-runtime-tesseract.spdx.json',
+    applicationSbom: 'release/Intern-v0.1.0-alpha.21.spdx.json',
+    runtimeSbom: 'release/Intern-v0.1.0-alpha.21-runtime-tesseract.spdx.json',
     cargoLog: 'release/cargo-test.log',
     modelLog: 'release/model-evaluation.log',
     installerLog: 'release/installer-smoke.log',
+    updateLog: 'release/update-smoke.log',
   };
   await writeFile(join(root, files.model), JSON.stringify({
     schema_version: 3,
     pipeline: 'evidence',
     status: 'completed',
-    commit,
+    commit: qaCommit,
     release_inputs_sha256: 'c'.repeat(64),
-    runner: { os: 'Windows', arch: 'X64', ci_run_id: runId },
+    runner: { os: 'Windows', arch: 'X64', ci_run_id: qaRunId },
     acceptance: { status: 'accepted', failures: [] },
   }));
   await writeFile(join(root, files.screenshot), screenshot);
@@ -73,12 +78,12 @@ async function evidenceFixture() {
     },
   }));
   await writeFile(join(root, files.installer), 'installer bytes');
-  await writeFile(join(root, files.latest), JSON.stringify({ version: '0.1.0-alpha.20' }));
-  await writeFile(join(root, files.runtime), JSON.stringify({ schema_version: 1, packages: [{ name: 'Intern', version: '0.1.0-alpha.20' }] }));
-  await writeFile(join(root, files.notices), 'Intern 0.1.0-alpha.20 notices');
+  await writeFile(join(root, files.latest), JSON.stringify({ version: '0.1.0-alpha.21' }));
+  await writeFile(join(root, files.runtime), JSON.stringify({ schema_version: 1, packages: [{ name: 'Intern', version: '0.1.0-alpha.21' }] }));
+  await writeFile(join(root, files.notices), 'Intern 0.1.0-alpha.21 notices');
   await writeFile(join(root, files.applicationSbom), JSON.stringify({
-    spdxVersion: 'SPDX-2.2', SPDXID: 'SPDXRef-DOCUMENT', name: 'Intern 0.1.0-alpha.20',
-    documentNamespace: 'https://example.test/intern-alpha.7', packages: [{ SPDXID: 'SPDXRef-Package', name: 'Intern', versionInfo: '0.1.0-alpha.20' }],
+    spdxVersion: 'SPDX-2.2', SPDXID: 'SPDXRef-DOCUMENT', name: 'Intern 0.1.0-alpha.21',
+    documentNamespace: 'https://example.test/intern-alpha.7', packages: [{ SPDXID: 'SPDXRef-Package', name: 'Intern', versionInfo: '0.1.0-alpha.21' }],
   }));
   // Runtime SBOMs intentionally carry their component's pinned version, not the
   // application release version. Filename classification makes this distinction
@@ -90,11 +95,23 @@ async function evidenceFixture() {
   await writeFile(join(root, files.cargoLog), 'cargo test passed');
   await writeFile(join(root, files.modelLog), 'model evaluation passed');
   await writeFile(join(root, files.installerLog), 'installer smoke passed');
-  const checksumFiles = [files.installer, files.latest, files.runtime, files.notices, files.applicationSbom, files.runtimeSbom, files.cargoLog, files.modelLog, files.installerLog];
+  await writeFile(join(root, files.updateLog), 'update over alpha.14 passed');
+  const checksumFiles = [files.installer, files.latest, files.runtime, files.notices, files.applicationSbom, files.runtimeSbom, files.cargoLog, files.modelLog, files.installerLog, files.updateLog];
   const sums = (await Promise.all(checksumFiles.map(async (path) => `${sha(await readFile(join(root, path)))}  ${path.split('/').at(-1)}`)))
     .sort().join('\n');
   await writeFile(join(root, files.checksum), `${sums}\n`);
-  return { root, commit, workflow, runId, files };
+  return { root, commit, workflow, runId, qaCommit, qaRunId, files };
+}
+
+/** The QA run a release names, as release.yml passes it, and this commit's release inputs. */
+function qaArguments(fixture: Awaited<ReturnType<typeof evidenceFixture>>, { releaseInputs = 'c'.repeat(64) } = {}) {
+  return [
+    `--qa-commit=${fixture.qaCommit}`,
+    '--qa-workflow=Whole-product QA evidence',
+    `--qa-run-id=${fixture.qaRunId}`,
+    '--qa-run-attempt=1',
+    `--release-inputs=${releaseInputs}`,
+  ];
 }
 
 async function checksumContents(
@@ -102,7 +119,7 @@ async function checksumContents(
   { omit, replace }: { omit?: string; replace?: [string, string] } = {},
 ) {
   const { files, root } = fixture;
-  const checksumFiles = [files.installer, files.latest, files.runtime, files.notices, files.applicationSbom, files.runtimeSbom, files.cargoLog, files.modelLog, files.installerLog]
+  const checksumFiles = [files.installer, files.latest, files.runtime, files.notices, files.applicationSbom, files.runtimeSbom, files.cargoLog, files.modelLog, files.installerLog, files.updateLog]
     .filter((path) => path !== omit);
   const sums = await Promise.all(checksumFiles.map(async (path) => {
     const hash = replace?.[0] === path ? replace[1] : sha(await readFile(join(root, path)));
@@ -111,7 +128,7 @@ async function checksumContents(
   return `${sums.sort().join('\n')}\n`;
 }
 
-async function createManifest(fixture: Awaited<ReturnType<typeof evidenceFixture>>) {
+async function createManifest(fixture: Awaited<ReturnType<typeof evidenceFixture>>, { qa = true } = {}) {
   const output = join(fixture.root, 'release/release-evidence-manifest.json');
   await exec(process.execPath, [
     'scripts/create-release-evidence.mjs',
@@ -136,6 +153,8 @@ async function createManifest(fixture: Awaited<ReturnType<typeof evidenceFixture
     `--log=${fixture.files.cargoLog}`,
     `--log=${fixture.files.modelLog}`,
     `--log=${fixture.files.installerLog}`,
+    `--log=${fixture.files.updateLog}`,
+    ...(qa ? qaArguments(fixture).filter((argument) => !argument.startsWith('--release-inputs=')) : []),
   ]);
   return output;
 }
@@ -151,7 +170,13 @@ it('creates and validates a manifest bound to all release evidence and the exact
     run_id: fixture.runId,
     run_attempt: '2',
   });
-  expect(manifest.artifacts.logs).toHaveLength(3);
+  expect(manifest.artifacts.logs).toHaveLength(4);
+  expect(manifest.qa).toEqual({
+    commit: fixture.qaCommit,
+    workflow: 'Whole-product QA evidence',
+    run_id: fixture.qaRunId,
+    run_attempt: '1',
+  });
   expect(manifest.distribution.sboms).toHaveLength(2);
   expect(manifest.signoffs).toEqual({
     model_evaluation: 'accepted',
@@ -165,7 +190,7 @@ it('creates and validates a manifest bound to all release evidence and the exact
     `--commit=${fixture.commit}`,
     `--workflow=${fixture.workflow}`,
     `--run-id=${fixture.runId}`,
-    '--run-attempt=2',
+    '--run-attempt=2', ...qaArguments(fixture),
   ])).resolves.toMatchObject({ stdout: expect.stringContaining('"status":"accepted"') });
 });
 
@@ -174,12 +199,12 @@ it('requires the current prerelease workflow contract and rejects regex-like run
   const manifestPath = await createManifest(fixture);
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 
-  for (const workflow of ['Release build v0.1.0-alpha.20', 'Release v0.1.0', 'Release v0.1.0-alpha.5']) {
+  for (const workflow of ['Release build v0.1.0-alpha.21', 'Release v0.1.0', 'Release v0.1.0-alpha.5']) {
     manifest.subject.workflow = workflow;
     await writeFile(manifestPath, JSON.stringify(manifest));
     await expect(exec(process.execPath, [
       'scripts/validate-release-evidence.mjs', manifestPath, `--root=${fixture.root}`,
-      `--commit=${fixture.commit}`, `--workflow=${workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2',
+      `--commit=${fixture.commit}`, `--workflow=${workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2', ...qaArguments(fixture),
     ])).rejects.toMatchObject({ stderr: expect.stringContaining('workflow must be exactly') });
   }
 
@@ -191,7 +216,7 @@ it('requires the current prerelease workflow contract and rejects regex-like run
   await writeFile(manifestPath, JSON.stringify(manifest));
   await expect(exec(process.execPath, [
     'scripts/validate-release-evidence.mjs', manifestPath, `--root=${fixture.root}`,
-    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2',
+    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2', ...qaArguments(fixture),
   ])).rejects.toMatchObject({ stderr: expect.stringContaining('SBOM filename does not match') });
 });
 
@@ -204,7 +229,7 @@ it('rejects release evidence without exactly one filename-identified application
   await writeFile(manifestPath, JSON.stringify(manifest));
   await expect(exec(process.execPath, [
     'scripts/validate-release-evidence.mjs', manifestPath, `--root=${fixture.root}`,
-    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2',
+    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2', ...qaArguments(fixture),
   ])).rejects.toMatchObject({ stderr: expect.stringContaining('exactly one application SBOM') });
 
   const application = allSboms.find((sbom: { path: string }) => sbom.path === fixture.files.applicationSbom);
@@ -213,7 +238,7 @@ it('rejects release evidence without exactly one filename-identified application
   await writeFile(manifestPath, JSON.stringify(manifest));
   await expect(exec(process.execPath, [
     'scripts/validate-release-evidence.mjs', manifestPath, `--root=${fixture.root}`,
-    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2',
+    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2', ...qaArguments(fixture),
   ])).rejects.toMatchObject({ stderr: expect.stringContaining('exactly one application SBOM') });
 });
 
@@ -223,7 +248,7 @@ it('fails closed when an artifact is changed after the manifest is written', asy
   await writeFile(join(fixture.root, fixture.files.installer), 'tampered installer');
   await expect(exec(process.execPath, [
     'scripts/validate-release-evidence.mjs', manifestPath, `--root=${fixture.root}`,
-    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2',
+    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2', ...qaArguments(fixture),
   ])).rejects.toMatchObject({ stderr: expect.stringContaining('hash') });
 });
 
@@ -233,7 +258,7 @@ it('rejects malformed, duplicate, missing, and mismatched checksum coverage befo
   let manifestPath = await createManifest(fixture);
   await expect(exec(process.execPath, [
     'scripts/validate-release-evidence.mjs', manifestPath, `--root=${fixture.root}`,
-    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2',
+    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2', ...qaArguments(fixture),
   ])).rejects.toMatchObject({ stderr: expect.stringContaining('malformed SHA256SUMS') });
 
   const installerHash = sha(await readFile(join(fixture.root, fixture.files.installer)));
@@ -241,7 +266,7 @@ it('rejects malformed, duplicate, missing, and mismatched checksum coverage befo
   manifestPath = await createManifest(fixture);
   await expect(exec(process.execPath, [
     'scripts/validate-release-evidence.mjs', manifestPath, `--root=${fixture.root}`,
-    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2',
+    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2', ...qaArguments(fixture),
   ])).rejects.toMatchObject({ stderr: expect.stringContaining('duplicate SHA256SUMS') });
 
   await writeFile(
@@ -251,7 +276,7 @@ it('rejects malformed, duplicate, missing, and mismatched checksum coverage befo
   manifestPath = await createManifest(fixture);
   await expect(exec(process.execPath, [
     'scripts/validate-release-evidence.mjs', manifestPath, `--root=${fixture.root}`,
-    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2',
+    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2', ...qaArguments(fixture),
   ])).rejects.toMatchObject({ stderr: expect.stringContaining('SHA256SUMS must cover every distributable release file exactly once') });
 
   await writeFile(
@@ -261,7 +286,7 @@ it('rejects malformed, duplicate, missing, and mismatched checksum coverage befo
   manifestPath = await createManifest(fixture);
   await expect(exec(process.execPath, [
     'scripts/validate-release-evidence.mjs', manifestPath, `--root=${fixture.root}`,
-    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2',
+    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2', ...qaArguments(fixture),
   ])).rejects.toMatchObject({ stderr: expect.stringContaining('SHA256SUMS hash does not match Intern.exe') });
 });
 
@@ -275,7 +300,7 @@ it('fails closed unless rendered fidelity and the installed core path are accept
   const manifestPath = await createManifest(fixture);
   await expect(exec(process.execPath, [
     'scripts/validate-release-evidence.mjs', manifestPath, `--root=${fixture.root}`,
-    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2',
+    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2', ...qaArguments(fixture),
   ])).rejects.toMatchObject({ stderr: expect.stringContaining('rendered fidelity') });
 
   fidelity.status = 'accepted';
@@ -289,7 +314,7 @@ it('fails closed unless rendered fidelity and the installed core path are accept
   await createManifest(fixture);
   await expect(exec(process.execPath, [
     'scripts/validate-release-evidence.mjs', manifestPath, `--root=${fixture.root}`,
-    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2',
+    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2', ...qaArguments(fixture),
   ])).rejects.toMatchObject({ stderr: expect.stringContaining('installed core path') });
 });
 
@@ -298,7 +323,7 @@ it('rejects copied evidence that names a different commit or workflow run', asyn
   const manifestPath = await createManifest(fixture);
   await expect(exec(process.execPath, [
     'scripts/validate-release-evidence.mjs', manifestPath, `--root=${fixture.root}`,
-    `--commit=${'b'.repeat(40)}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2',
+    `--commit=${'b'.repeat(40)}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2', ...qaArguments(fixture),
   ])).rejects.toMatchObject({ stderr: expect.stringContaining('commit') });
 });
 
@@ -310,7 +335,7 @@ it('does not accept invented installed-core check names', async () => {
   const manifestPath = await createManifest(fixture);
   await expect(exec(process.execPath, [
     'scripts/validate-release-evidence.mjs', manifestPath, `--root=${fixture.root}`,
-    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2',
+    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2', ...qaArguments(fixture),
   ])).rejects.toMatchObject({ stderr: expect.stringContaining('installed core path') });
 });
 
@@ -322,7 +347,7 @@ it('allow-pending permits only an unreviewed screenshot, never a rejected sign-o
   const manifestPath = await createManifest(fixture);
   await expect(exec(process.execPath, [
     'scripts/validate-release-evidence.mjs', manifestPath, '--allow-pending', `--root=${fixture.root}`,
-    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2',
+    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2', ...qaArguments(fixture),
   ])).rejects.toMatchObject({ stderr: expect.stringContaining('rendered fidelity') });
 });
 
@@ -334,6 +359,75 @@ it('binds a recaptured release screenshot by digest even when its packaged path 
   const manifestPath = await createManifest(fixture);
   await expect(exec(process.execPath, [
     'scripts/validate-release-evidence.mjs', manifestPath, `--root=${fixture.root}`,
-    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2',
+    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2', ...qaArguments(fixture),
   ])).resolves.toMatchObject({ stdout: expect.stringContaining('"status":"accepted"') });
+});
+
+// A release no longer scores the corpus itself: it ships on the QA run whose
+// evaluation was scored on byte-identical release inputs, and binds that run.
+it('binds the model evaluation to the QA run the release names, on this commit\'s release inputs', async () => {
+  const fixture = await evidenceFixture();
+  const manifestPath = await createManifest(fixture);
+  const validate = (qa: string[]) => exec(process.execPath, [
+    'scripts/validate-release-evidence.mjs', manifestPath, `--root=${fixture.root}`,
+    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2', ...qa,
+  ]);
+  await expect(validate(qaArguments(fixture))).resolves.toMatchObject({ stdout: expect.stringContaining('"status":"accepted"') });
+  // Another QA run than the one the release checked.
+  const otherRun = qaArguments(fixture).map((argument) => argument.startsWith('--qa-run-id=') ? '--qa-run-id=778' : argument);
+  await expect(validate(otherRun)).rejects.toMatchObject({ stderr: expect.stringContaining('QA run run_id does not match') });
+  const otherWorkflow = qaArguments(fixture).map((argument) => argument.startsWith('--qa-workflow=') ? '--qa-workflow=CI' : argument);
+  await expect(validate(otherWorkflow)).rejects.toMatchObject({ stderr: expect.stringContaining('must be a "Whole-product QA evidence" run') });
+  // Scored on other release inputs than this commit's.
+  await expect(validate(qaArguments(fixture, { releaseInputs: 'd'.repeat(64) })))
+    .rejects.toMatchObject({ stderr: expect.stringContaining('scored on release inputs') });
+  // The release inputs are stated by the release, never left open.
+  await expect(validate(qaArguments(fixture).filter((argument) => !argument.startsWith('--release-inputs='))))
+    .rejects.toMatchObject({ stderr: expect.stringContaining('--release-inputs is required') });
+});
+
+it('refuses a model evaluation the release ran itself, or one from another QA run', async () => {
+  for (const ciRunId of ['123456', '778']) {
+    const fixture = await evidenceFixture();
+    const model = JSON.parse(await readFile(join(fixture.root, fixture.files.model), 'utf8'));
+    model.runner.ci_run_id = ciRunId;
+    await writeFile(join(fixture.root, fixture.files.model), JSON.stringify(model));
+    const manifestPath = await createManifest(fixture);
+    await expect(exec(process.execPath, [
+      'scripts/validate-release-evidence.mjs', manifestPath, `--root=${fixture.root}`,
+      `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2', ...qaArguments(fixture),
+    ]), ciRunId).rejects.toMatchObject({ stderr: expect.stringContaining('production model evaluation is not accepted') });
+  }
+});
+
+it('requires release evidence to name its QA run, and QA evidence not to', async () => {
+  const fixture = await evidenceFixture();
+  await expect(createManifest(fixture, { qa: false })).rejects.toMatchObject({ stderr: expect.stringContaining('go together') });
+  const manifestPath = await createManifest(fixture);
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  delete manifest.qa;
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  await expect(exec(process.execPath, [
+    'scripts/validate-release-evidence.mjs', manifestPath, `--root=${fixture.root}`,
+    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2', ...qaArguments(fixture),
+  ])).rejects.toMatchObject({ stderr: expect.stringContaining('must name the QA run') });
+  manifest.qa = { commit: fixture.qaCommit, workflow: 'Whole-product QA evidence', run_id: fixture.qaRunId, run_attempt: '1' };
+  delete manifest.distribution;
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  await expect(exec(process.execPath, [
+    'scripts/validate-release-evidence.mjs', manifestPath, '--allow-pending', `--root=${fixture.root}`,
+    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2',
+  ])).rejects.toMatchObject({ stderr: expect.stringContaining('only release evidence names a QA run') });
+});
+
+it('requires the update over alpha.14 among a release\'s logs', async () => {
+  const fixture = await evidenceFixture();
+  const manifestPath = await createManifest(fixture);
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  manifest.artifacts.logs = manifest.artifacts.logs.filter((log: { path: string }) => log.path !== fixture.files.updateLog);
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  await expect(exec(process.execPath, [
+    'scripts/validate-release-evidence.mjs', manifestPath, `--root=${fixture.root}`,
+    `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2', ...qaArguments(fixture),
+  ])).rejects.toMatchObject({ stderr: expect.stringContaining('missing required log update-smoke.log') });
 });

@@ -3,7 +3,14 @@
 A release is a deliberate act. Nothing is published by merging; a maintainer
 dispatches the release workflow against one exact `main` commit, and every gate
 in it refuses anything else. This is the sequence that gets a release out
-without a two-hour run failing at its last step.
+without a long run failing at its last step.
+
+A release takes one QA run and one release run. QA does the testing: every
+gate, the Windows build and its smoke tests, and the corpus scored with real
+inference. The release does the shipping: it checks that the QA run it names
+tested exactly what it is about to build, then builds, signs, smoke-tests,
+attests and publishes the installer, with that QA run's evaluation and logs as
+its evidence.
 
 ## The one rule
 
@@ -13,10 +20,13 @@ The rendered-fidelity sign-off is bound to `release_inputs_sha256`, which
 `scripts/hash-release-inputs.mjs` computes over every tracked file in the
 commit's tree except `docs/qa/`. That includes the README, `site/`, the
 workflows, the tests, and the release notes, not just application code. Change
-any of them after QA and the sign-off no longer describes what would ship; the
-release preflight refuses it in seconds, and the final evidence validation
-would refuse it after ninety minutes. So every pull request for the release,
-the version bump, and the release notes merge **before** QA, and the only
+any of them after QA and the sign-off no longer describes what would ship, and
+the QA run no longer tested it; the release preflight refuses it in seconds,
+and so does the release's check of the QA run it names. The same digest is
+what lets the release ship on QA's testing instead of repeating it: the commit
+QA ran on and the release commit must digest the same. So every pull request
+for the release, the version bump, and the release notes merge **before** QA,
+and the only
 commit between QA and release is the sign-off itself, which touches nothing
 but `docs/qa/`.
 
@@ -77,21 +87,30 @@ the version when the person selects Continue or dismisses the summary.
      QA would set a stale accepted record aside on its own runner anyway, but
      the committed file should say what is true.
 3. **Dispatch "Whole-product QA evidence"** (`qa.yml`) on `main` at that commit.
-   It takes about two hours: every gate CI runs, the Windows build, the
-   installer smoke test, and the whole corpus scored with real inference. Its
-   first step prints the release-input digest this commit's sign-off has to
-   carry, and if the committed sign-off was accepted for other inputs it is
-   treated as pending for the run, with a note in the job summary. Download the
-   `intern-whole-product-qa-<run>-<attempt>` artifact.
+   It takes about 45 minutes (69 for alpha.19, before its runtime came from
+   CI's cache): every gate CI runs, the Windows browser tests, the Windows
+   build, the installer smoke test, an update over an old release, and the
+   whole corpus scored with real inference. Its first step prints the
+   release-input digest this commit's sign-off has to carry, and if the
+   committed sign-off was accepted for other inputs it is treated as pending
+   for the run, with a note in the job summary. Download the
+   `intern-whole-product-qa-<run>-<attempt>` artifact, and note the run's ID
+   (the number in its URL): the release names it.
 
-   Dispatch **CI** (`ci.yml`) on `main` at the same commit as well; it runs
-   beside QA and changes nothing. Only a dispatched run takes the Windows step
-   "Smoke test an update over v0.1.0-alpha.14", which installs that release's
-   published installer and then this build's over it with `/UPDATE`, as the
-   in-app updater does, and requires the old root llama.cpp build gone and an
-   empty folder after the uninstall (`src-tauri/windows/hooks.nsh`). QA and the
-   release workflow do not run it. It must pass before the release is
-   dispatched.
+   QA reads the pinned Windows runtime (Tesseract and its closure, built by
+   vcpkg) from the cache CI's Windows packaging job saves on `main`. If this
+   release changes the runtime pins (`src-tauri/resources/runtime-assets.json`
+   or `scripts/fetch-windows-assets.ps1`), wait for CI on `main` to finish
+   before dispatching QA, or QA builds the runtime itself, about 16 minutes
+   more. A version bump alone does not change the cache.
+
+   QA also takes the step "Smoke test an update over v0.1.0-alpha.14", which
+   installs that release's published installer and then this build's over it
+   with `/UPDATE`, as the in-app updater does, and requires the old root
+   llama.cpp build gone and an empty folder after the uninstall
+   (`src-tauri/windows/hooks.nsh`). Its log is part of QA's evidence, and the
+   release refuses a QA run without it. No separate CI run is needed for it
+   any more.
 4. **Review the capture and record the sign-off**, following the reviewer rule
    below. In one commit that changes nothing outside `docs/qa/`:
    - `docs/qa/latest-implementation.png`: the capture from the artifact,
@@ -104,6 +123,11 @@ the version when the person selects Continue or dismisses the summary.
      checked.
    - `docs/qa/fidelity-ledger.md` and `docs/qa/release-checklist.md`, updated
      from the run.
+
+   The release names the QA run whose capture this is and checks that the
+   committed capture is byte for byte the one in that run's evidence. CI on
+   the sign-off's pull request runs only its Ubuntu jobs, a few minutes, since
+   nothing outside `docs/qa/` changed.
 5. **Run the preflight** on `main` after the sign-off merges:
 
    ```sh
@@ -116,16 +140,33 @@ the version when the person selects Continue or dismisses the summary.
    package.json, Cargo.toml, `tauri.conf.json`, the workflow name and the
    workflow name the final evidence validation accepts all state one version.
    It names every problem at once.
-6. **Dispatch "Release v&lt;version&gt;"** (`release.yml`) on `main`. Its first
-   job refuses any ref but `main`, a tag that already names another commit, and
-   anything the preflight refuses, all in under a minute. The release job then
-   takes about ninety minutes: the gates again, the signed installer, the
-   installer smoke test, real inference on the corpus, the updater signature
-   verified offline, SBOMs and checksums, the evidence manifest validated, the
-   provenance attestation, the annotated tag, and the release published as
-   **latest** (a prerelease would be invisible to `/releases/latest`, which is
-   where installed copies look for updates). A last, short job starts the
-   Pages workflow from `main`, so the download page is deployed again.
+6. **Dispatch "Release v&lt;version&gt;"** (`release.yml`) on `main`, with
+   `qa_run` set to the ID of the QA run whose capture was accepted:
+
+   ```sh
+   gh workflow run release.yml --ref main -f qa_run=<QA run ID>
+   ```
+
+   Its first job refuses any ref but `main`, a tag that already names another
+   commit, and anything the preflight refuses. It then checks the QA run
+   (`scripts/verify-qa-run.mjs`): a successful QA run dispatched on `main` in
+   this repository, on this commit or an ancestor with this commit's release
+   inputs, whose evidence manifest validates (an accepted model evaluation
+   scored on these release inputs, an accepted installer smoke, the update over
+   alpha.14), and whose capture is the committed one. All of it takes about a
+   minute and names every problem at once. The release job then takes about
+   half an hour (94 minutes for alpha.19, which repeated QA's work): it checks
+   the same QA run again where it uses its files, builds the worker and stages
+   the pinned runtime, builds and signs the installer, smoke-tests it
+   installed, verifies the updater signature offline, writes SBOMs and
+   checksums, validates the evidence manifest (its own installer smoke, and the
+   QA run's model evaluation and logs, bound to that run), records the
+   provenance attestation, creates the annotated tag, and publishes the
+   release as **latest** (a prerelease would be invisible to
+   `/releases/latest`, which is where installed copies look for updates). It
+   does not run the gates or score the corpus again: the QA run did, on
+   byte-identical release inputs. A last, short job starts the Pages workflow
+   from `main`, so the download page is deployed again.
 7. **Check what shipped.** Download the installer from the release page and
    verify it:
 
@@ -180,13 +221,24 @@ and accepts it. It is only worth anything if that is true.
   commit. If a release was published from it, bump the version instead; never
   move a published tag.
 - **The release job failed after tagging, on the same commit.** Re-run the
-  failed job, or dispatch again on the same commit: the tag already names it, so
-  it is accepted, and the publish step creates the release, or repairs and
-  publishes a draft one left behind. A release that is already published is
-  left as it is.
+  failed job, or dispatch again on the same commit with the same `qa_run`: the
+  tag already names it, so it is accepted, and the publish step creates the
+  release, or repairs and publishes a draft one left behind. A release that is
+  already published is left as it is.
 - **The release job failed before tagging.** Fix the cause. If the fix is
   outside `docs/qa/`, it changes the release inputs, so QA runs again first.
-- **QA's corpus scoring hit its 60-minute limit.** Usually a wedged
+- **The release refuses the QA run it was given.** Its first job names every
+  reason. "Whose release inputs are ... this commit's are ..." means something
+  outside `docs/qa/` changed after that QA run: run QA on the current `main`
+  and review its capture. "The committed sign-off accepted ..." means the
+  capture in that run is not the reviewed one: name the QA run whose capture
+  was reviewed. "Not completed/success", "not a ... run", or "dispatched on
+  main" mean the ID is not a passing QA run dispatched on `main`. "Run again in
+  between" means the QA run was re-run while the release was starting:
+  dispatch the release again. "Did not smoke an update over v0.1.0-alpha.14"
+  means a QA run from before QA did that: run QA again. A QA artifact expires
+  after 90 days; an older QA run cannot be shipped on.
+- **QA's corpus scoring hit its 150-minute limit.** Usually a wedged
   llama-server: upstream llama.cpp from the staged runtime's `llama-upstream`
   folder, running the accurate model, which is the one the corpus is scored
   on.

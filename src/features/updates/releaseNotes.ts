@@ -3,6 +3,15 @@ export interface ReleaseNotes { version: string; changes: readonly string[] }
 
 export const releaseNotes: readonly ReleaseNotes[] = [
   {
+    version: '0.1.0-alpha.21',
+    // Nothing in the window changed: this release tested a faster release
+    // process (docs/releases/v0.1.0-alpha.21.md). One line, so someone
+    // updating from alpha.20 is not left wondering what to look for.
+    changes: [
+      'Nothing in ATLAS changed in this update: it was built and checked by a faster release process.',
+    ],
+  },
+  {
     version: '0.1.0-alpha.20',
     // Shown whole in a dialog that must not scroll at the app's smallest
     // window, 800 by 600 (tests/e2e/updates.spec.ts): short lines, the rest

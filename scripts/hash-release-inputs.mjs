@@ -25,9 +25,13 @@ import { resolve } from 'node:path';
  * blob object ids it lists are content addressed, so this still changes the
  * moment any committed byte changes - which is what the sign-off must detect.
  */
-export function releaseInputsDigest(root = '.') {
+export function releaseInputsDigest(root = '.', commit = 'HEAD') {
   const repositoryRoot = resolve(root);
-  const entries = execFileSync('git', ['ls-tree', '-r', '-z', '--full-tree', 'HEAD'], { cwd: repositoryRoot })
+  // Any commit, not only HEAD: the release workflow compares the digest of
+  // the commit a QA run read with its own, to know that the QA run it ships
+  // on tested exactly these release inputs. `^{tree}` lists the same entries
+  // as the commit and refuses anything that does not name one.
+  const entries = execFileSync('git', ['ls-tree', '-r', '-z', '--full-tree', `${commit}^{tree}`], { cwd: repositoryRoot })
     .toString('utf8')
     .split('\0')
     .filter(Boolean)
@@ -52,6 +56,6 @@ export function requireAncestor(commit, root = '.') {
 
 const invokedPath = process.argv[1] && resolve(process.argv[1]);
 if (invokedPath === fileURLToPath(import.meta.url)) {
-  const rootArgument = process.argv.find((argument) => argument.startsWith('--root='));
-  process.stdout.write(`${releaseInputsDigest(rootArgument?.slice('--root='.length) ?? '.')}\n`);
+  const argument = (name) => process.argv.find((value) => value.startsWith(`--${name}=`))?.slice(name.length + 3);
+  process.stdout.write(`${releaseInputsDigest(argument('root') ?? '.', argument('commit') ?? 'HEAD')}\n`);
 }

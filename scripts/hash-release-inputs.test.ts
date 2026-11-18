@@ -58,6 +58,26 @@ describe('release inputs digest', () => {
     expect(releaseInputsDigest(root)).not.toBe(before);
   });
 
+  // The release checks that the QA run it ships on read its release inputs:
+  // the commit QA ran on and the release commit (the sign-off after it)
+  // digest the same, and anything else committed in between does not.
+  it('digests any commit, so a QA run\'s commit can be compared with the release commit', async () => {
+    const root = await repository();
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+    const qa = git('rev-parse', 'HEAD');
+    await writeFile(join(root, 'docs', 'qa', 'signoff.json'), '{"status":"accepted","note":"reviewed"}\n');
+    git('add', '-A');
+    git('commit', '-qm', 'record signoff');
+    expect(releaseInputsDigest(root, qa)).toBe(releaseInputsDigest(root));
+    expect(releaseInputsDigest(root, 'HEAD')).toBe(releaseInputsDigest(root));
+
+    await appendFile(join(root, 'source.txt'), 'changed after QA\n');
+    git('add', '-A');
+    git('commit', '-qm', 'change');
+    expect(releaseInputsDigest(root, qa)).not.toBe(releaseInputsDigest(root));
+    expect(() => releaseInputsDigest(root, 'f'.repeat(40))).toThrow();
+  });
+
   it('ignores docs/qa so a sign-off can be recorded without invalidating itself', async () => {
     const root = await repository();
     const before = releaseInputsDigest(root);

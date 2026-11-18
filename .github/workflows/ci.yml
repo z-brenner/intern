@@ -3,7 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+  # The default types plus ready_for_review: a draft pull request skips the
+  # Windows installer job, and marking it ready runs the whole workflow again.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 permissions:
@@ -11,7 +14,7 @@ permissions:
 
 # One run per pull request (or branch) at a time. A new push to a pull request
 # makes its running checks obsolete, so they are canceled rather than left to
-# hold a Windows runner for half an hour. On main nothing in progress is
+# hold a Windows runner for twenty minutes. On main nothing in progress is
 # canceled: a run always finishes, and of the pushes that land meanwhile only
 # the newest waits to run next. A release is still gated on its own commit by
 # the release workflow, whichever main runs were skipped.
@@ -109,7 +112,7 @@ jobs:
             internbench-report.md
           if-no-files-found: ignore
 
-  # Rust feedback in minutes rather than the Windows job's half hour: format,
+  # Rust feedback in minutes rather than the Windows job's twenty: format,
   # Clippy with warnings denied, and the workspace tests. Code that only exists
   # on Windows (#[cfg(windows)]) is still compiled and linted only there, so
   # this job is the fast signal, not the last word.
@@ -158,7 +161,7 @@ jobs:
       - name: Generate the clean-room fixtures the worker tests read
         run: node fixtures/generate-fixtures.mjs
       # Tauri's build script refuses to compile the desktop crate unless every
-      # sidecar and resource it bundles exists. The Windows job below stages
+      # sidecar and resource it bundles exists. The Windows Rust job below stages
       # the same placeholders under its own target triple. A Linux build
       # bundles its own runtime folder instead (tauri.linux.conf.json), so it
       # needs a placeholder of its own too.
@@ -246,10 +249,37 @@ jobs:
             target/release/bundle/deb/*.deb
             src-tauri/resources/runtime/runtime-inventory.json
 
-  windows-release-gates:
-    name: Windows Rust, assets, E2E, and NSIS
+  # Which Windows jobs a pull request needs. The Windows jobs are the slow
+  # ones, and a pull request that changes only documentation (every release's
+  # rendered-fidelity sign-off among them) or only the React app used to hold
+  # a Windows runner for most of an hour all the same. Pushes to main and runs
+  # started by hand run everything. See scripts/ci-changes.mjs for what each
+  # kind of change can reach; a path it does not recognise needs everything.
+  changes:
+    name: Windows jobs this change needs
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.changes.outputs.rust }}
+      package: ${{ steps.changes.outputs.package }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # A pull request's run checks out GitHub's merge commit; its first
+          # parent is the base branch, so the two commits are all it needs.
+          fetch-depth: 2
+      - id: changes
+        name: Classify the changed paths
+        run: node scripts/ci-changes.mjs --event="$GITHUB_EVENT_NAME"
+
+  # The Rust that only compiles on Windows (#[cfg(windows)]), formatted,
+  # linted and tested. Nothing here needs the pinned runtime, npm or the
+  # installer, so it runs beside the packaging job instead of before it.
+  windows-rust:
+    name: Windows Rust (fmt, Clippy, tests)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: windows-latest
-    timeout-minutes: 240
+    timeout-minutes: 90
     env:
       CARGO_TERM_COLOR: always
       INTERN_REQUIRE_GENERATED_FIXTURES: "1"
@@ -262,68 +292,22 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24.15.0
-          cache: npm
       - name: Install pinned Rust toolchain
         shell: pwsh
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
           rustup default 1.88.0
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            ~\.cargo\registry
-            ~\.cargo\git
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'src-tauri/resources/runtime-assets.json') }}
-      # Restore and save separately, because actions/cache declares
-      # `post-if: success()` and therefore saves nothing when a later step fails.
-      # This step builds Tesseract from a pinned vcpkg baseline, and vcpkg pulls
-      # each port's sources from GitHub archive URLs that have been returning 503
-      # and curl error 56 - which vcpkg classifies as non-transient and refuses to
-      # retry. Discarding every tarball on failure guaranteed the next run started
-      # from zero against the same failing endpoint. Saving on failure means a run
-      # keeps whatever it managed to fetch. Nothing here is trusted on the strength
-      # of being cached: pinned downloads are still checked against their committed
-      # size and SHA-256, and vcpkg verifies every archive against the baseline's
-      # own hashes.
+      # No cargo cache on Windows. The target directory this job used to cache
+      # was 4.7 GB compressed, three workflows each kept one under a name of
+      # their own, and the repository's 10 GB cache limit evicted every entry
+      # before anything asked for it: in the runs measured for alpha.19 and
+      # pull request #85 every Windows cargo and runtime-asset restore missed,
+      # and each run then spent 4 to 11 minutes uploading a cache nobody read.
+      # Downloading the crates themselves takes about 7 seconds.
       #
-      # The key is computed once, here, and the save steps reuse it. They used to
-      # recompute hashFiles() after the fetch, which rewrites runtime-assets.json
-      # in place (and records the freshly built worker's digest in it), so every
-      # run saved ~470 MB under a key no restore would ever ask for, and rebuilt
-      # Tesseract from nothing for 24 minutes. A complete cache is saved under
-      # this key; a failed fetch saves its progress under a "-partial-" key of
-      # its own, which the next run restores and then completes. A partial
-      # cache saved under the primary key would instead be restored as a hit
-      # for ever and never upgraded.
-      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        id: assets-cache
-        with:
-          path: ${{ runner.temp }}\intern-assets-cache
-          key: runtime-assets-${{ runner.os }}-${{ hashFiles('src-tauri/resources/runtime-assets.json', 'scripts/fetch-windows-assets.ps1') }}
-          restore-keys: runtime-assets-${{ runner.os }}-${{ hashFiles('src-tauri/resources/runtime-assets.json', 'scripts/fetch-windows-assets.ps1') }}-partial-
-      # npm ci has exited at once (about a second, exit 1, nothing printed)
-      # on Windows runners three times: alpha.15's and alpha.17's release runs
-      # and a pull request's CI. A second attempt has always passed. Retry it,
-      # and print npm's own log and versions so the next one says why.
-      - name: Install npm packages
-        shell: pwsh
-        run: |
-          for ($Attempt = 1; $Attempt -le 3; $Attempt++) {
-            npm ci
-            if ($LASTEXITCODE -eq 0) { exit 0 }
-            Write-Host "::warning::npm ci exited $LASTEXITCODE on attempt $Attempt"
-            Write-Host "node $(node --version), npm $(npm --version)"
-            $Log = Get-ChildItem (Join-Path (npm config get cache) "_logs") -Filter *.log -ErrorAction SilentlyContinue |
-              Sort-Object LastWriteTime | Select-Object -Last 1
-            if ($Log) { Get-Content -LiteralPath $Log.FullName -Tail 80 }
-            Start-Sleep -Seconds (10 * $Attempt)
-          }
-          exit 1
-      - run: npm run fixtures
-      - run: npm run check
-      - run: npx playwright install chromium
-      - run: npm run test:e2e
+      # The generator uses nothing but Node itself, so no npm install.
+      - name: Generate the clean-room fixtures the worker tests read
+        run: node fixtures/generate-fixtures.mjs
       - name: Stage parser worker for desktop compile checks
         shell: pwsh
         run: |
@@ -351,6 +335,95 @@ jobs:
       # anyway.
       - run: cargo clippy --locked -p intern-worker --all-targets --features windows-native -- -D warnings
       - run: cargo test --locked --workspace --all-targets
+
+  # The installer, built from the pinned runtime and smoke-tested installed.
+  # On a draft pull request it waits until the pull request is marked ready
+  # (ready_for_review starts this workflow again); pushes to main, runs
+  # started by hand and ready pull requests always build it. The browser
+  # tests are not repeated here: the Ubuntu frontend job runs them on every
+  # change, and QA runs them on Windows before every release.
+  windows-package:
+    name: Windows installer (NSIS) and smoke
+    needs: changes
+    if: needs.changes.outputs.package == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      INTERN_REQUIRE_GENERATED_FIXTURES: "1"
+      INTERN_PDFIUM_DIR: ${{ github.workspace }}\src-tauri\resources\native\pdfium
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Require committed Rust dependency lock
+        shell: pwsh
+        run: if (-not (Test-Path -LiteralPath Cargo.lock -PathType Leaf)) { throw "Cargo.lock must be committed; CI never resolves release dependencies implicitly" }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.15.0
+          cache: npm
+      - name: Install pinned Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+      # Restore and save separately, because actions/cache declares
+      # `post-if: success()` and therefore saves nothing when a later step fails.
+      # This step builds Tesseract from a pinned vcpkg baseline, and vcpkg pulls
+      # each port's sources from GitHub archive URLs that have been returning 503
+      # and curl error 56 - which vcpkg classifies as non-transient and refuses to
+      # retry. Discarding every tarball on failure guaranteed the next run started
+      # from zero against the same failing endpoint. Saving on failure means a run
+      # keeps whatever it managed to fetch. Nothing here is trusted on the strength
+      # of being cached: pinned downloads are still checked against their committed
+      # size and SHA-256, and vcpkg verifies every archive against the baseline's
+      # own hashes.
+      #
+      # The key is computed once, here, and the save steps reuse it. They used to
+      # recompute hashFiles() after the fetch, which rewrites runtime-assets.json
+      # in place (and records the freshly built worker's digest in it), so every
+      # run saved ~470 MB under a key no restore would ever ask for, and rebuilt
+      # Tesseract from nothing for 24 minutes. A complete cache is saved under
+      # this key; a failed fetch saves its progress under a "-partial-" key of
+      # its own, which the next run restores and then completes. A partial
+      # cache saved under the primary key would instead be restored as a hit
+      # for ever and never upgraded.
+      #
+      # This is the only runtime-asset cache. QA and the release restore this
+      # same key, complete entries only, and never save one, so they reuse what
+      # a CI run on main built instead of each building Tesseract again for
+      # 16 to 22 minutes under a name of their own. A pull request's run reads
+      # main's entry; what it saves is visible to that pull request alone.
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        id: assets-cache
+        with:
+          path: ${{ runner.temp }}\intern-assets-cache
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('src-tauri/resources/runtime-assets.json', 'scripts/fetch-windows-assets.ps1') }}
+          restore-keys: runtime-assets-${{ runner.os }}-${{ hashFiles('src-tauri/resources/runtime-assets.json', 'scripts/fetch-windows-assets.ps1') }}-partial-
+      # npm ci has exited at once (about a second, exit 1, nothing printed)
+      # on Windows runners three times: alpha.15's and alpha.17's release runs
+      # and a pull request's CI. A second attempt has always passed. Retry it,
+      # and print npm's own log and versions so the next one says why.
+      - name: Install npm packages
+        shell: pwsh
+        run: |
+          for ($Attempt = 1; $Attempt -le 3; $Attempt++) {
+            npm ci
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Host "::warning::npm ci exited $LASTEXITCODE on attempt $Attempt"
+            Write-Host "node $(node --version), npm $(npm --version)"
+            $Log = Get-ChildItem (Join-Path (npm config get cache) "_logs") -Filter *.log -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime | Select-Object -Last 1
+            if ($Log) { Get-Content -LiteralPath $Log.FullName -Tail 80 }
+            Start-Sleep -Seconds (10 * $Attempt)
+          }
+          exit 1
+      - run: npm run fixtures
+      # Vitest on Windows paths (the packaging scripts run here), TypeScript,
+      # and the frontend build the installer bundles.
+      - run: npm run check
+      # No compile placeholders: nothing in this job compiles the desktop crate
+      # before the pinned runtime is staged, so nothing could be left behind
+      # for the installer to bundle.
       - name: Build parser worker sidecar
         shell: pwsh
         run: |
@@ -360,14 +433,7 @@ jobs:
       - name: Fetch and verify pinned Windows assets
         id: fetch-assets
         shell: pwsh
-        run: |
-          Remove-Item src-tauri\resources\licenses\compile-placeholder.txt -Force
-          Remove-Item src-tauri\resources\tessdata\compile-placeholder.traineddata -Force
-          Remove-Item src-tauri\resources\native\pdfium\compile-placeholder.dll -Force
-          Remove-Item src-tauri\resources\native\sidecars\compile-placeholder.dll -Force
-          Remove-Item src-tauri\resources\native\llama-upstream\compile-placeholder.dll -Force
-          Remove-Item src-tauri\resources\ocr-models\compile-placeholder.onnx -Force
-          ./scripts/fetch-windows-assets.ps1 -CacheDirectory "${{ runner.temp }}\intern-assets-cache"
+        run: ./scripts/fetch-windows-assets.ps1 -CacheDirectory "${{ runner.temp }}\intern-assets-cache"
       # A complete fetch is saved under the key the restore step looked for.
       # Skipped on an exact hit, where that key already exists.
       - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -398,7 +464,8 @@ jobs:
           ./scripts/smoke-worker.ps1 -WorkerPath (Join-Path $Stage "intern-worker.exe") -RuntimeDirectory $Stage
       # The last unpinned network dependency in the build. See the script header:
       # the bundler fetches its own NSIS toolset at bundle time, and a connection
-      # reset there failed two consecutive runs of the same commit.
+      # reset there failed two consecutive runs of the same commit. QA and the
+      # release restore this entry and do not save it.
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}\intern-nsis-cache
@@ -413,40 +480,10 @@ jobs:
           $Installer = Get-ChildItem target\release\bundle\nsis\*.exe | Select-Object -First 1
           if (-not $Installer) { throw "NSIS installer was not produced" }
           ./scripts/smoke-installer.ps1 -InstallerPath $Installer.FullName
-      # The in-app updater runs a new installer over the old files with
-      # /UPDATE, never uninstalling first, so whatever an older release put at
-      # the install root and this one does not ship stays unless
-      # src-tauri/windows/hooks.nsh removes it. alpha.14 is the last release
-      # that installed a llama.cpp build there. The smoke installs it, then
-      # this installer over it as the updater does, and requires the folder
-      # empty after the uninstall as before. Only when the workflow is started
-      # by hand: it downloads the 65 MB release installer, checked against the
-      # SHA-256 in that release's SHA256SUMS.txt.
-      - name: Smoke test an update over v0.1.0-alpha.14
-        if: github.event_name == 'workflow_dispatch'
-        shell: pwsh
-        run: |
-          $Previous = Join-Path $env:RUNNER_TEMP "Intern_0.1.0-alpha.14_x64-setup.exe"
-          for ($Attempt = 1; -not (Test-Path -LiteralPath $Previous); $Attempt++) {
-            try {
-              Invoke-WebRequest -Uri "https://github.com/z-brenner/intern/releases/download/v0.1.0-alpha.14/Intern_0.1.0-alpha.14_x64-setup.exe" -OutFile $Previous -MaximumRedirection 5
-            } catch {
-              if (Test-Path -LiteralPath $Previous) { Remove-Item -LiteralPath $Previous -Force }
-              if ($Attempt -ge 3) { throw }
-              Start-Sleep -Seconds (15 * $Attempt)
-            }
-          }
-          $Digest = (Get-FileHash -LiteralPath $Previous -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($Digest -ne "20177531ab3f5f0b428ac79a63f813a83b2d5b460ee695c39f607aeec76f218f") { throw "The alpha.14 installer has SHA-256 $Digest, not the published one" }
-          # The smoke above leaves the install folder empty, or gone.
-          $InstallDirectory = Join-Path $env:LOCALAPPDATA "Intern"
-          if (Test-Path -LiteralPath $InstallDirectory) { Remove-Item -LiteralPath $InstallDirectory }
-          $Installer = Get-ChildItem target\release\bundle\nsis\*.exe | Select-Object -First 1
-          ./scripts/smoke-installer.ps1 -InstallerPath $Installer.FullName -PreviousInstallerPath $Previous
       - name: Upload Windows installer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: intern-v0.1.0-alpha.20-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          name: intern-v0.1.0-alpha.21-windows-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
           path: |
             target/release/bundle/nsis/*.exe

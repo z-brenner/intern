@@ -61,21 +61,16 @@ jobs:
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
           rustup default 1.88.0
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            ~\.cargo\registry
-            ~\.cargo\git
-            target
-          key: qa-cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'src-tauri/resources/runtime-assets.json') }}
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      # The runtime assets CI's Windows packaging job built and saved on main
+      # (see the matching step in ci.yml), restored under exactly CI's key and
+      # never saved from here. No cargo or Playwright cache: QA's own 4.7 GB
+      # target cache and 314 MB browser cache were evicted before any run
+      # read them (the alpha.19 QA run missed all four of its caches and spent
+      # six minutes saving them), and Chromium installs in 14 seconds.
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}\intern-assets-cache
-          key: qa-runtime-assets-${{ runner.os }}-${{ hashFiles('src-tauri/resources/runtime-assets.json', 'scripts/fetch-windows-assets.ps1') }}
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~\AppData\Local\ms-playwright
-          key: qa-playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('src-tauri/resources/runtime-assets.json', 'scripts/fetch-windows-assets.ps1') }}
       # npm ci has exited at once (about a second, exit 1, nothing printed)
       # on Windows runners three times: alpha.15's and alpha.17's release runs
       # and a pull request's CI. A second attempt has always passed. Retry it,
@@ -182,10 +177,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "PP-OCR runtime tests failed" }
       # Same pinned toolset the CI and release builds use; see
       # scripts/prefetch-nsis.ps1 for why the bundler must not fetch its own.
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}\intern-nsis-cache
-          key: qa-nsis-toolset-${{ runner.os }}-${{ hashFiles('scripts/prefetch-nsis.ps1') }}
+          key: nsis-toolset-${{ runner.os }}-${{ hashFiles('scripts/prefetch-nsis.ps1') }}
       - name: Stage the pinned NSIS toolset
         shell: pwsh
         run: ./scripts/prefetch-nsis.ps1 -CacheDirectory "${{ runner.temp }}\intern-nsis-cache"
@@ -203,6 +198,40 @@ jobs:
           # while the output still showed in the step log. See release.yml.
           & ./scripts/smoke-installer.ps1 -InstallerPath $Installer.FullName -EvidencePath docs\qa\installed-core-smoke.json *>&1 | Tee-Object -FilePath docs\qa\logs\installer-smoke.log
           if (-not (Test-Path -LiteralPath 'docs\qa\logs\installer-smoke.log')) { throw "Installer smoke produced no log" }
+      # The in-app updater runs a new installer over the old files with
+      # /UPDATE, never uninstalling first, so whatever an older release put at
+      # the install root and this one does not ship stays unless
+      # src-tauri/windows/hooks.nsh removes it. alpha.14 is the last release
+      # that installed a llama.cpp build there. The smoke installs it, then
+      # this installer over it as the updater does, and requires the folder
+      # empty after the uninstall as before. It downloads the 65 MB release
+      # installer, checked against the SHA-256 in that release's
+      # SHA256SUMS.txt. It used to run only in a CI run started by hand beside
+      # QA; it runs here on every QA run now, so the one QA run a release
+      # names covers it, and its log is part of QA's evidence, which the
+      # release workflow checks for it.
+      - name: Smoke test an update over v0.1.0-alpha.14
+        shell: pwsh
+        run: |
+          $Previous = Join-Path $env:RUNNER_TEMP "Intern_0.1.0-alpha.14_x64-setup.exe"
+          for ($Attempt = 1; -not (Test-Path -LiteralPath $Previous); $Attempt++) {
+            try {
+              Invoke-WebRequest -Uri "https://github.com/z-brenner/intern/releases/download/v0.1.0-alpha.14/Intern_0.1.0-alpha.14_x64-setup.exe" -OutFile $Previous -MaximumRedirection 5
+            } catch {
+              if (Test-Path -LiteralPath $Previous) { Remove-Item -LiteralPath $Previous -Force }
+              if ($Attempt -ge 3) { throw }
+              Start-Sleep -Seconds (15 * $Attempt)
+            }
+          }
+          $Digest = (Get-FileHash -LiteralPath $Previous -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($Digest -ne "20177531ab3f5f0b428ac79a63f813a83b2d5b460ee695c39f607aeec76f218f") { throw "The alpha.14 installer has SHA-256 $Digest, not the published one" }
+          # The smoke above leaves the install folder empty, or gone.
+          $InstallDirectory = Join-Path $env:LOCALAPPDATA "Intern"
+          if (Test-Path -LiteralPath $InstallDirectory) { Remove-Item -LiteralPath $InstallDirectory }
+          $Installer = Get-ChildItem target\release\bundle\nsis\*.exe | Select-Object -First 1
+          # *>&1 for the same reason as the step above.
+          & ./scripts/smoke-installer.ps1 -InstallerPath $Installer.FullName -PreviousInstallerPath $Previous *>&1 | Tee-Object -FilePath docs\qa\logs\update-smoke.log
+          if (-not (Test-Path -LiteralPath 'docs\qa\logs\update-smoke.log')) { throw "Update smoke produced no log" }
       - name: Score the whole corpus through the shipping pipeline with real inference
         shell: pwsh
         # Bounded like the release run's scoring step. Without a limit a wedged
@@ -254,6 +283,7 @@ jobs:
           | pass | native ``generated_fixtures`` | 0 | $NativeTests native fixture tests |
           | pass | ``npm run tauri build -- --bundles nsis -- --locked`` | 0 | one NSIS installer |
           | pass | ``scripts/smoke-installer.ps1`` | 0 | install, packaged worker PDF/OCR, uninstall, user-data retention |
+          | pass | ``scripts/smoke-installer.ps1 -PreviousInstallerPath`` | 0 | update over v0.1.0-alpha.14 with /UPDATE, its root llama.cpp build removed, empty folder after uninstall |
           | pass | ``scripts/run-model-evaluation.ps1`` | 0 | $($Evaluation.summary.evaluated) documents scored on $($Evaluation.model_file); peak model RSS $([math]::Round($Evaluation.peak_model_rss_bytes / 1MB)) MB |
           | pass | ``scripts/validate-model-evaluation.mjs`` | 0 | date/type/party/description accuracy and trap-date gates |
 
@@ -282,7 +312,8 @@ jobs:
             --log=docs/qa/logs/playwright.log `
             --log=docs/qa/logs/cargo-test.log `
             --log=docs/qa/logs/native-fixtures.log `
-            --log=docs/qa/logs/installer-smoke.log
+            --log=docs/qa/logs/installer-smoke.log `
+            --log=docs/qa/logs/update-smoke.log
           node scripts/validate-release-evidence.mjs docs/qa/release-evidence-manifest.json `
             --allow-pending `
             --root=. `

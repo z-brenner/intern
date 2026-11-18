@@ -45,15 +45,16 @@ it('never publishes as a side effect of merging to main', async () => {
   // Releasing is dispatched deliberately; a merge must not tag or publish.
   expect(workflow).toContain('workflow_dispatch:');
   expect(workflow).not.toContain('branches: [main]');
-  expect(workflow).toContain('group: intern-v0.1.0-alpha.20-release');
+  expect(workflow).toContain('group: intern-v0.1.0-alpha.21-release');
   expect(workflow).toContain('release_target:');
 });
 
 it('gates the exact main commit before creating its annotated tag and publishing', async () => {
   const workflow = await readFile('.github/workflows/release.yml', 'utf8');
-  expect(workflow).toContain('cargo build --locked -p intern-engine --release --bin intern-evaluate');
-  expect(workflow).toContain('run-model-evaluation.ps1');
-  expect(workflow).toContain('-OutputPath release\\model-evaluation.json');
+  // The model evaluation it ships is the QA run's, copied from that run's
+  // verified evidence and bound to it, not one it scores again.
+  expect(workflow).toContain('Copy-Item (Join-Path $env:INTERN_QA_EVIDENCE "docs\\qa\\model-evaluation.json") (Join-Path $Release "model-evaluation.json")');
+  expect(workflow).toContain('--model-evaluation=release/model-evaluation.json');
   expect(workflow).toContain('create-release-evidence.mjs');
   expect(workflow).toContain('validate-release-evidence.mjs');
   expect(workflow).toContain('git tag -a $Tag $env:GITHUB_SHA');
@@ -68,8 +69,8 @@ it('gates the exact main commit before creating its annotated tag and publishing
   // the QA workflow, which still sets INTERN_QA_CAPTURE.
   expect(workflow).not.toContain('INTERN_QA_CAPTURE: "1"');
   expect(workflow).toContain('docs/qa/latest-implementation.png is missing');
-  expect(workflow).toContain('release\\cargo-test.log');
-  expect(workflow).toContain('--log=release/cargo-test.log');
+  expect(workflow).toContain('foreach ($Log in @("cargo-test.log", "model-evaluation.log", "update-smoke.log"))');
+  for (const log of ['cargo-test', 'model-evaluation', 'update-smoke', 'installer-smoke']) expect(workflow).toContain(`--log=release/${log}.log`);
   expect(workflow).toContain('Copy-Item docs\\qa\\latest-implementation.png $Release');
   expect(workflow).toContain('--screenshot=release/latest-implementation.png');
   expect(workflow).toContain('--fidelity-signoff=release/rendered-fidelity-signoff.json');
@@ -93,10 +94,11 @@ it('captures smoke output that is written to the host, not just stdout', async (
   expect(installer).toContain('Write-Host');
   expect(worker).toContain('Write-Host');
 
-  for (const [name, workflow] of [['release.yml', release], ['qa.yml', qa]] as const) {
+  // QA tees two: the plain install and the update over alpha.14.
+  for (const [name, workflow, smokes] of [['release.yml', release, 1], ['qa.yml', qa, 2]] as const) {
     const teed = workflow.split('\n').filter((line) => line.includes('Tee-Object') && line.includes('smoke-installer.ps1'));
-    expect(teed.length, `${name} should tee the installer smoke log`).toBe(1);
-    expect(teed[0], `${name} must redirect all streams, not just stderr`).toContain('*>&1');
+    expect(teed.length, `${name} should tee each installer smoke log`).toBe(smokes);
+    for (const line of teed) expect(line, `${name} must redirect all streams, not just stderr`).toContain('*>&1');
   }
   // And the log must be checked where it is written, not where it is consumed.
   expect(release).toContain('Installer smoke produced no log');
@@ -190,7 +192,7 @@ it('tag_mismatch_is_fatal: a tag at another commit fails the run and says how to
 });
 
 // CI_RELEASE_DOCS-3. Everything the final evidence validation needs from the
-// commit itself is checked before the ninety-minute Windows job starts.
+// commit itself is checked before the Windows release job starts.
 it('preflights the sign-off, notes, and versions before the release job can start', async () => {
   const release = await readFile('.github/workflows/release.yml', 'utf8');
   const target = jobOf(release, 'release_target');
@@ -200,6 +202,54 @@ it('preflights the sign-off, notes, and versions before the release job can star
   // The lead's call: no new code inspects whether a secret exists. The signing
   // key is checked where it is used, in the build step, as it always was.
   expect(target).not.toContain('secrets.');
+});
+
+// The release used to run every gate again and score the corpus again, about
+// forty of alpha.19's ninety-four minutes, on release inputs the preflight
+// had already required to be the ones QA ran on. It names the QA run instead,
+// checks it before the Windows job starts and again where its files are used,
+// and binds it into the final evidence.
+it('ships on a named, verified QA run instead of repeating its gates and scoring', async () => {
+  const release = await readFile('.github/workflows/release.yml', 'utf8');
+  expect(release).toMatch(/^ {2}workflow_dispatch:\n {4}inputs:\n {6}qa_run:\n/m);
+  expect(release).toMatch(/^ {6}qa_run:\n(?: {8}.*\n)*? {8}required: true$/m);
+  expect(release).toMatch(/^permissions:\n(?: {2}.*\n)*? {2}actions: read$/m);
+
+  const target = jobOf(release, 'release_target');
+  const verify = stepsOf(target).find((step) => step.includes('name: Verify the QA run this release ships on'))!;
+  // After the preflight, and only through the environment: the input is never
+  // pasted into the script.
+  expect(target.indexOf('scripts/release-preflight.mjs')).toBeLessThan(target.indexOf('scripts/verify-qa-run.mjs'));
+  expect(verify).toContain('QA_RUN: ${{ inputs.qa_run }}');
+  expect(verify.slice(verify.indexOf('run: |'))).not.toContain('${{');
+  expect(verify).toContain('gh run download "$QA_RUN" --repo "$GITHUB_REPOSITORY" --name "intern-whole-product-qa-$QA_RUN-$attempt"');
+  expect(verify).toContain('node scripts/verify-qa-run.mjs --root=. --run="$RUNNER_TEMP/qa-run.json" --artifact="$RUNNER_TEMP/qa-evidence" --repository="$GITHUB_REPOSITORY" --expect-attempt="$attempt"');
+  expect(target).toContain('qa_commit: ${{ steps.qa.outputs.commit }}');
+  expect(target).toContain('qa_attempt: ${{ steps.qa.outputs.attempt }}');
+  // The QA workflow's artifact name, which the download asks for.
+  expect(await readFile('.github/workflows/qa.yml', 'utf8')).toContain('name: intern-whole-product-qa-${{ github.run_id }}-${{ github.run_attempt }}');
+
+  const job = jobOf(release, 'release');
+  const steps = stepsOf(job);
+  const download = steps.findIndex((step) => step.includes("name: Download and verify the QA run's evidence"));
+  const build = steps.findIndex((step) => step.includes('name: Build the installer and sign the update artifact'));
+  expect(download).toBeGreaterThan(0);
+  expect(download).toBeLessThan(build);
+  expect(steps[download]).toContain('"--expect-attempt=$env:QA_RUN_ATTEMPT"');
+  expect(steps[download]).toContain('if ($LASTEXITCODE -ne 0) { throw "QA run $env:QA_RUN\'s evidence was not accepted" }');
+  // The same QA run is bound into the evidence the release validates.
+  for (const option of ['--qa-commit=$env:QA_COMMIT', '--qa-workflow="Whole-product QA evidence"', '--qa-run-id=$env:QA_RUN', '--qa-run-attempt=$env:QA_RUN_ATTEMPT']) {
+    expect(release.split(option).length - 1, option).toBe(2);
+  }
+  expect(release).toContain('--release-inputs=$ReleaseInputs');
+  // What it no longer repeats.
+  for (const repeated of ['run-model-evaluation.ps1', 'intern-evaluate', 'cargo test', 'cargo clippy', 'cargo fmt', 'npm run check', 'test:e2e', 'playwright']) {
+    expect(job, repeated).not.toContain(repeated);
+  }
+  // What it still does itself, to the installer it publishes.
+  for (const own of ['npm run tauri build -- --bundles nsis --config src-tauri/tauri.release.conf.json -- --locked', './scripts/smoke-installer.ps1 -InstallerPath $Installer.FullName -EvidencePath release\\installed-core-smoke.json', 'cargo run --locked -p intern-release-verifier --', './scripts/generate-sbom.ps1']) {
+    expect(job, own).toContain(own);
+  }
 });
 
 it('sets a stale sign-off aside on the QA runner before anything else runs', async () => {
