@@ -544,6 +544,21 @@ impl ModelClient {
         let token_confidence = completion.token_confidence();
         let token_trace = self.token_trace.then(|| completion.token_trace()).flatten();
         let timings = completion.model_timings();
+        #[cfg(feature = "benchmark-transport")]
+        if self
+            .benchmark_transport
+            .as_ref()
+            .is_some_and(|profile| profile.is_nuextract())
+        {
+            let content = completion_text(completion)?;
+            let proposal = crate::benchmark_transport::nuextract::proposal(&content, request)?;
+            return Ok(ProposerReply {
+                proposal,
+                // NuExtract uses a different output format and decoding constraint.
+                token_confidence: None,
+                timings,
+            });
+        }
         decode(completion, request.evidence.as_ref()).map(|proposal| ProposerReply {
             proposal,
             token_confidence,
@@ -924,6 +939,10 @@ pub(crate) fn decode(
     completion: ChatCompletion,
     evidence: Option<&EvidenceHandles>,
 ) -> Result<ModelProposal, AttemptError> {
+    proposal_from_text(&completion_text(completion)?, evidence)
+}
+
+fn completion_text(completion: ChatCompletion) -> Result<String, AttemptError> {
     let choice = completion
         .choices
         .into_iter()
@@ -941,12 +960,11 @@ pub(crate) fn decode(
     if finish_reason == Some("length") {
         return Err(AttemptError(EngineErrorCode::ModelReplyTruncated));
     }
-    let content = choice
+    choice
         .message
         .content
         .and_then(AssistantContent::into_text)
-        .ok_or(AttemptError(EngineErrorCode::ModelResponseInvalid))?;
-    proposal_from_text(&content, evidence)
+        .ok_or(AttemptError(EngineErrorCode::ModelResponseInvalid))
 }
 
 /// Reads a proposal out of the text a model replied with, fences and
