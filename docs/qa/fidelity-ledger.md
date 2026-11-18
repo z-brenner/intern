@@ -806,3 +806,45 @@ alpha.13, alpha.14, alpha.17, alpha.18 and alpha.19 records were written
 under theirs, and says so rather than naming a person who did not look.
 Acceptance was recorded at `2026-11-17T23:52:47Z`. No acceptance from alpha.19
 or an earlier release is carried forward.
+
+
+## Alpha.21 fresh capture — accepted by Claude Code under the maintainer's instruction
+
+Whole-product QA run `44229682022`, attempt `1`, completed successfully on
+main commit `3ef23e8838ce191d851a316bbcc2b7147adf2a78`.
+Release-input digest: `ceaa274b32d0a6e07cff6b45deb1c1993c5006dc496d44a93a72452202960f9b`.
+Capture SHA-256: `01a6e62e660a13351be3b5a45be14227a1330e7cdad9698e2e82b4705904362c`.
+The committed capture is the exact 1536x1024 image from that artifact. The
+artifact's own digest was checked against the one GitHub reports, all twelve
+hashed files its manifest names were verified (the update-over-alpha.14 log
+among them, now that QA takes that step), and the release-input digest was
+recomputed on main and equals the one the run recorded. Model and
+installed-core gates passed. The artifact correctly recorded
+rendered-fidelity acceptance as pending.
+
+This capture is byte for byte the accepted alpha.20 capture. That is the
+expected result: alpha.21 changes nothing in the window, and the browser
+build's demonstration queue renders deterministically. The identity was
+checked from this run's own image, not assumed, and Claude Code still opened
+the image at full size. The header states “Private · On this device” beside
+ATLAS and its expansion, Analyze · Title · Label · Approve · Store. The counts
+strip and toolbar, the queue table and the review panel read as distinct
+planes. Status comes first, with original filename, proposed filename,
+description and check contiguous; proposed filenames are date-first, with
+em-dashes for absent values. Ready, Needs review, Proposing a name and Waiting
+have distinct icons as well as color. Approve & rename and Keep original stay
+pinned with their shortcuts. Filename focus and row selection remain visibly
+distinct. No unintended clipping, collisions or illegible text were observed;
+the ellipses in the Description and Check cells are deliberate one-line
+truncation. What alpha.20's record says about the concept and about what this
+frame cannot show (the organization-led names, the reason chips, the document
+viewer, Clear queue and the double-click, covered by browser tests) holds
+unchanged.
+
+No person looked at this capture. The maintainer, Zachary Brenner, instructed
+Claude Code in this session to sign off on its own and to keep going until
+the release is cut. This record is written under that instruction, as the
+alpha.13, alpha.14, alpha.17, alpha.18, alpha.19 and alpha.20 records were
+written under theirs, and says so rather than naming a person who did not
+look. Acceptance was recorded at `2026-11-18T04:48:51Z`. No acceptance from alpha.20 or an
+earlier release is carried forward.
