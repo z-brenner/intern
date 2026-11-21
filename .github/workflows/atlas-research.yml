@@ -1,0 +1,343 @@
+# ATLAS model research: live InternBench runs of candidate models on GitHub's
+# free Linux runners, started by committing a run spec to an ATLAS research
+# branch. Laboratory only: nothing here is staged, packaged or shipped, and no
+# model file is ever committed. See research/atlas-models/README.md.
+#
+# A run spec is research/atlas-models/runs/<name>.json:
+#
+#   {"name": "2026-11-21-screen1",
+#    "candidates": [{"label": "qwen3.5-0.8b-q4km",
+#                    "repo": "unsloth/Qwen3.5-0.8B-GGUF",
+#                    "revision": "main" | "<commit>",
+#                    "file": "Qwen3.5-0.8B-Q4_K_M.gguf",
+#                    "sha256": "" | "<64 hex>"}],
+#    "sets": ["real1", "real2"],        # accuracy: one job per candidate x set
+#    "speed_set": "internbench" | "",   # speed: every candidate in turn on ONE runner
+#    "gate": 0.7, "threads": 4}
+#
+# A candidate's revision is resolved to a commit by the plan job and recorded
+# with the file's SHA-256 beside every result, so each measurement names the
+# exact bytes it came from. real7 and real8 are refused: they are never
+# screened. Results (compressed reports, the recording's exchanges without the
+# documents, memory, wall time, CPU) are committed back under
+# research/atlas-models/results/<name>/ on the same branch.
+name: ATLAS research
+
+on:
+  push:
+    branches:
+      - "claude/atlas-model-research-**"
+    paths:
+      - "research/atlas-models/runs/*.json"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atlas-research-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan the run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      name: ${{ steps.plan.outputs.name }}
+      accuracy: ${{ steps.plan.outputs.accuracy }}
+      speed: ${{ steps.plan.outputs.speed }}
+      has_accuracy: ${{ steps.plan.outputs.has_accuracy }}
+      has_speed: ${{ steps.plan.outputs.has_speed }}
+      gate: ${{ steps.plan.outputs.gate }}
+      threads: ${{ steps.plan.outputs.threads }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Read the run spec and resolve every candidate
+        id: plan
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          python3 -I - <<'EOF'
+          import json, os, re, subprocess, sys, urllib.request
+
+          SAMPLES = {
+              "internbench": "",
+              "real1": "sample.json",
+              "real2": "sample-heldout.json",
+              "real3": "sample-heldout2.json",
+              "real4": "sample-heldout3.json",
+              "real5": "sample-heldout4.json",
+              "real6": "sample-heldout5.json",
+          }
+          before, after = os.environ["BEFORE"], os.environ["AFTER"]
+          if re.fullmatch(r"0+", before or "0"):
+              changed = subprocess.run(["git", "show", "--name-only", "--format=", after],
+                                       capture_output=True, text=True, check=True).stdout.split()
+          else:
+              changed = subprocess.run(["git", "diff", "--name-only", before, after],
+                                       capture_output=True, text=True, check=True).stdout.split()
+          specs = [p for p in changed if re.fullmatch(r"research/atlas-models/runs/[a-z0-9._-]+\.json", p) and os.path.exists(p)]
+          if len(specs) != 1:
+              sys.exit(f"expected exactly one changed run spec, found {specs}")
+          spec = json.load(open(specs[0], encoding="utf-8"))
+          name = spec.get("name", "")
+          if not re.fullmatch(r"[a-z0-9._-]+", name):
+              sys.exit("name must match [a-z0-9._-]+")
+          if os.path.exists(f"research/atlas-models/results/{name}"):
+              sys.exit(f"results for {name} already exist; give the run a new name")
+          gate = float(spec.get("gate", 0.7))
+          threads = int(spec.get("threads", 4))
+          if not (0 <= gate <= 1) or not (1 <= threads <= 16):
+              sys.exit("gate must be in [0, 1] and threads in [1, 16]")
+          candidates = []
+          for c in spec["candidates"]:
+              label, repo, revision, file = c["label"], c["repo"], c.get("revision", "main"), c["file"]
+              sha256 = c.get("sha256", "")
+              if not re.fullmatch(r"[a-z0-9._-]+", label): sys.exit(f"bad label {label!r}")
+              if not re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", repo): sys.exit(f"bad repo {repo!r}")
+              if not re.fullmatch(r"[A-Za-z0-9._-]+", revision): sys.exit(f"bad revision {revision!r}")
+              if not re.fullmatch(r"[A-Za-z0-9._-]+\.gguf", file): sys.exit(f"bad file {file!r}")
+              if sha256 and not re.fullmatch(r"[0-9a-f]{64}", sha256): sys.exit(f"bad sha256 for {label}")
+              if not re.fullmatch(r"[0-9a-f]{40}", revision):
+                  request = urllib.request.Request(f"https://huggingface.co/api/models/{repo}/revision/{revision}",
+                                                   headers={"User-Agent": "Intern ATLAS research (https://github.com/z-brenner/intern)"})
+                  revision = json.load(urllib.request.urlopen(request, timeout=60))["sha"]
+              url = f"https://huggingface.co/{repo}/resolve/{revision}/{file}"
+              candidates.append({"label": label, "url": url, "sha256": sha256, "repo": repo,
+                                 "revision": revision, "file": file})
+          sets = list(dict.fromkeys(spec.get("sets", [])))
+          for s in sets + ([spec["speed_set"]] if spec.get("speed_set") else []):
+              if s not in SAMPLES:
+                  sys.exit(f"set {s!r} is not one of {', '.join(SAMPLES)} (real7 and real8 are never screened)")
+          accuracy = [{**c, "set": s, "sample": SAMPLES[s]} for c in candidates for s in sets]
+          speed_set = spec.get("speed_set", "")
+          speed = {"set": speed_set, "sample": SAMPLES.get(speed_set, ""), "candidates": candidates}
+          print(json.dumps({"accuracy": accuracy, "speed": speed}, indent=1))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"name={name}\n")
+              out.write(f"gate={gate}\n")
+              out.write(f"threads={threads}\n")
+              out.write("accuracy=" + json.dumps({"include": accuracy or [{"label": "none"}]}) + "\n")
+              out.write("speed=" + json.dumps(speed) + "\n")
+              out.write(f"has_accuracy={'true' if accuracy else 'false'}\n")
+              out.write(f"has_speed={'true' if speed_set else 'false'}\n")
+          EOF
+
+  accuracy:
+    name: ${{ matrix.label }} on ${{ matrix.set }}
+    needs: plan
+    if: needs.plan.outputs.has_accuracy == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.accuracy) }}
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Lay out the lab directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/lab/out"
+          { echo "LAB=$RUNNER_TEMP/lab"; echo "OUT=$RUNNER_TEMP/lab/out"; } >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.15.0
+          cache: npm
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+      - name: Install the build and OCR dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xvfb dbus x11-utils tesseract-ocr
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-candidate-bench-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/intern-linux-assets-cache
+          key: linux-runtime-${{ runner.os }}-${{ hashFiles('scripts/fetch-linux-assets.sh', 'scripts/fetch-ocr-runtime.sh', 'src-tauri/resources/runtime-assets.json') }}
+      - run: npm ci
+      - name: Build the parser worker and the benchmark
+        run: cargo build --locked --release -p intern-worker -p intern-bench --features intern-worker/windows-native
+      - name: Fetch and verify the pinned Linux runtime
+        run: scripts/fetch-linux-assets.sh "${{ runner.temp }}/intern-linux-assets-cache"
+      - name: Stage the runtime as the package lays it out
+        run: |
+          scripts/stage-linux-runtime.sh "$LAB/stage"
+          echo "LLAMA_SERVER=$LAB/stage/runtime/llama-upstream/llama-server" >> "$GITHUB_ENV"
+      - name: Fetch the candidate model and record its bytes
+        env:
+          MODEL_URL: ${{ matrix.url }}
+          MODEL_SHA256: ${{ matrix.sha256 }}
+          MODEL_REPO: ${{ matrix.repo }}
+          MODEL_REVISION: ${{ matrix.revision }}
+          MODEL_FILE: ${{ matrix.file }}
+          MODEL: ${{ runner.temp }}/lab/model/${{ matrix.label }}.gguf
+        run: |
+          mkdir -p "$(dirname "$MODEL")"
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 --retry 3 --retry-delay 10 \
+            --user-agent "Intern ATLAS research (https://github.com/z-brenner/intern)" \
+            --output "$MODEL" "$MODEL_URL"
+          actual="$(sha256sum "$MODEL" | cut -d' ' -f1)"
+          if [ -n "$MODEL_SHA256" ] && [ "$actual" != "$MODEL_SHA256" ]; then
+            echo "SHA-256 mismatch: expected $MODEL_SHA256, got $actual" >&2; exit 1
+          fi
+          python3 -I -c 'import json,os,sys; json.dump({"repo":os.environ["MODEL_REPO"],"revision":os.environ["MODEL_REVISION"],"file":os.environ["MODEL_FILE"],"url":os.environ["MODEL_URL"],"sha256":sys.argv[1],"bytes":os.path.getsize(os.environ["MODEL"]),"pinned":bool(os.environ["MODEL_SHA256"])}, open(os.path.join(os.environ["OUT"],"model.json"),"w"), indent=1)' "$actual"
+          cat "$OUT/model.json"
+          echo "MODEL=$MODEL" >> "$GITHUB_ENV"
+      - name: Fetch the real-document set
+        if: matrix.sample != ''
+        env:
+          SAMPLE: ${{ matrix.sample }}
+          SET: ${{ matrix.set }}
+        run: |
+          python3 -I scripts/realdocs-eval/fetch.py "$LAB/$SET" "$SAMPLE" \
+            || echo "::warning::some documents of $SET were not fetched; the run scores the rest"
+          { echo "CORPUS=$LAB/$SET/corpus"; echo "GOLD=$LAB/$SET/gold.json"; echo "MANIFEST="; } >> "$GITHUB_ENV"
+      - name: Run InternBench live at the app's gate
+        env:
+          INTERN_RUNTIME_DIR: ${{ runner.temp }}/lab/stage/runtime
+          INTERN_WORKER: ${{ github.workspace }}/target/release/intern-worker
+          INTERN_BENCH: ${{ github.workspace }}/target/release/intern-bench
+          THREADS: ${{ needs.plan.outputs.threads }}
+          GATE: ${{ needs.plan.outputs.gate }}
+          SERVER_MEMORY_FILE: ${{ runner.temp }}/lab/out/server-memory.txt
+          INTERN_BENCH_TOKEN_TRACE: "1"
+        run: |
+          started=$(date +%s)
+          status=0
+          scripts/run-internbench.sh "$OUT" -- --min-token-confidence "$GATE" 2>&1 | tee "$OUT/run.log" || status=$?
+          echo $(( $(date +%s) - started )) > "$OUT/wall-seconds.txt"
+          lscpu > "$OUT/lscpu.txt" || true
+          exit "$status"
+      - name: Commit the results to the research branch
+        if: always()
+        env:
+          NAME: ${{ needs.plan.outputs.name }}
+          LABEL: ${{ matrix.label }}
+          SET: ${{ matrix.set }}
+        run: |
+          research/atlas-models/scripts/collect_results.sh "$OUT" "$LAB/keep"
+          research/atlas-models/scripts/push_results.sh "$LAB/keep" \
+            "research/atlas-models/results/$NAME/$LABEL-on-$SET" \
+            "ATLAS research results: $NAME, $LABEL on $SET"
+
+  speed:
+    name: Speed, every candidate on one runner
+    needs: plan
+    if: needs.plan.outputs.has_speed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Lay out the lab directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/lab"
+          echo "LAB=$RUNNER_TEMP/lab" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.15.0
+          cache: npm
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+      - name: Install the build and OCR dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xvfb dbus x11-utils tesseract-ocr
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-candidate-bench-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/intern-linux-assets-cache
+          key: linux-runtime-${{ runner.os }}-${{ hashFiles('scripts/fetch-linux-assets.sh', 'scripts/fetch-ocr-runtime.sh', 'src-tauri/resources/runtime-assets.json') }}
+      - run: npm ci
+      - name: Build the parser worker and the benchmark
+        run: cargo build --locked --release -p intern-worker -p intern-bench --features intern-worker/windows-native
+      - name: Fetch and verify the pinned Linux runtime
+        run: scripts/fetch-linux-assets.sh "${{ runner.temp }}/intern-linux-assets-cache"
+      - name: Stage the runtime as the package lays it out
+        run: |
+          scripts/stage-linux-runtime.sh "$LAB/stage"
+          echo "LLAMA_SERVER=$LAB/stage/runtime/llama-upstream/llama-server" >> "$GITHUB_ENV"
+      - name: Fetch the real-document set
+        if: fromJSON(needs.plan.outputs.speed).sample != ''
+        env:
+          SAMPLE: ${{ fromJSON(needs.plan.outputs.speed).sample }}
+          SET: ${{ fromJSON(needs.plan.outputs.speed).set }}
+        run: |
+          python3 -I scripts/realdocs-eval/fetch.py "$LAB/$SET" "$SAMPLE" \
+            || echo "::warning::some documents of $SET were not fetched; the run scores the rest"
+          { echo "CORPUS=$LAB/$SET/corpus"; echo "GOLD=$LAB/$SET/gold.json"; echo "MANIFEST="; } >> "$GITHUB_ENV"
+      - name: Run every candidate in turn on this runner
+        env:
+          SPEED: ${{ needs.plan.outputs.speed }}
+          INTERN_RUNTIME_DIR: ${{ runner.temp }}/lab/stage/runtime
+          INTERN_WORKER: ${{ github.workspace }}/target/release/intern-worker
+          INTERN_BENCH: ${{ github.workspace }}/target/release/intern-bench
+          THREADS: ${{ needs.plan.outputs.threads }}
+          GATE: ${{ needs.plan.outputs.gate }}
+          INTERN_BENCH_TOKEN_TRACE: "1"
+        run: |
+          lscpu > "$LAB/lscpu.txt" || true
+          count=$(python3 -I -c 'import json,os; print(len(json.loads(os.environ["SPEED"])["candidates"]))')
+          for i in $(seq 0 $((count - 1))); do
+            eval "$(python3 -I - "$i" <<'EOF'
+          import json, os, shlex, sys
+          c = json.loads(os.environ["SPEED"])["candidates"][int(sys.argv[1])]
+          for key in ("label", "url", "sha256", "repo", "revision", "file"):
+              print(f"C_{key.upper()}={shlex.quote(c[key])}")
+          EOF
+            )"
+            out="$LAB/speed/$C_LABEL"
+            mkdir -p "$out"
+            export MODEL="$LAB/model/$C_LABEL.gguf"
+            mkdir -p "$LAB/model"
+            curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 --retry 3 --retry-delay 10 \
+              --user-agent "Intern ATLAS research (https://github.com/z-brenner/intern)" \
+              --output "$MODEL" "$C_URL"
+            actual="$(sha256sum "$MODEL" | cut -d' ' -f1)"
+            if [ -n "$C_SHA256" ] && [ "$actual" != "$C_SHA256" ]; then
+              echo "SHA-256 mismatch for $C_LABEL" >&2; rm -f "$MODEL"; continue
+            fi
+            printf '{"repo":"%s","revision":"%s","file":"%s","url":"%s","sha256":"%s","bytes":%s}\n' \
+              "$C_REPO" "$C_REVISION" "$C_FILE" "$C_URL" "$actual" "$(stat -c %s "$MODEL")" > "$out/model.json"
+            cp "$LAB/lscpu.txt" "$out/lscpu.txt"
+            started=$(date +%s)
+            SERVER_MEMORY_FILE="$out/server-memory.txt" \
+              scripts/run-internbench.sh "$out" -- --min-token-confidence "$GATE" 2>&1 | tee "$out/run.log" || true
+            echo $(( $(date +%s) - started )) > "$out/wall-seconds.txt"
+            rm -f "$MODEL"
+          done
+      - name: Commit the results to the research branch
+        if: always()
+        env:
+          NAME: ${{ needs.plan.outputs.name }}
+        run: |
+          for out in "$LAB"/speed/*/; do
+            label="$(basename "$out")"
+            research/atlas-models/scripts/collect_results.sh "$out" "$LAB/keep/$label-on-speed"
+          done
+          research/atlas-models/scripts/push_results.sh "$LAB/keep" \
+            "research/atlas-models/results/$NAME/speed" \
+            "ATLAS research results: $NAME, same-runner speed"
