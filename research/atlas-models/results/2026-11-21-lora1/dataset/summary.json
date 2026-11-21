@@ -1,0 +1,38 @@
+{
+ "train": {
+  "generated": 1500,
+  "verified": 1500,
+  "families": {
+   "company-letter": 182,
+   "agency-letter": 427,
+   "invoice": 259,
+   "statement": 118,
+   "enforcement-notice": 237,
+   "court-notice": 168,
+   "receipt": 109
+  },
+  "formats": {
+   "pdf": 930,
+   "docx": 287,
+   "txt": 283
+  }
+ },
+ "val": {
+  "generated": 200,
+  "verified": 200,
+  "families": {
+   "agency-letter": 69,
+   "enforcement-notice": 37,
+   "receipt": 11,
+   "invoice": 37,
+   "statement": 12,
+   "company-letter": 10,
+   "court-notice": 24
+  },
+  "formats": {
+   "pdf": 120,
+   "txt": 41,
+   "docx": 39
+  }
+ }
+}
