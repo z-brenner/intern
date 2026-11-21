@@ -1,0 +1,11 @@
+{
+ "name": "2026-11-21-lora1",
+ "base": {"repo": "Qwen/Qwen3.5-0.8B", "revision": "main"},
+ "dataset": {"seed": "atlas-2026-11", "train": 1500, "val": 200},
+ "train": {"budget_minutes": 250, "rank": 16, "alpha": 32, "lr": 0.0002, "accumulate": 8, "epochs": 1,
+           "max_tokens": 2600, "max_examples": 600},
+ "quant": "Q4_K_M",
+ "sets": ["real4", "real5", "real6", "atlas-val"],
+ "gate": 0.7,
+ "threads": 4
+}

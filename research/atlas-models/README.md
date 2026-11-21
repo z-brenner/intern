@@ -8,7 +8,9 @@ Nothing here is used by the app. No model weights or training data are committed
 |---|---|---|
 | [`BASELINE.md`](BASELINE.md) | What the model does today, how well, how fast, from committed measurements | Written 2026-11-21 |
 | `scripts/simulate_cascade.py` | Offline 2B/4B to 9B escalation replay of committed readings | Runs, no model needed |
-| `DATASET.md`, `TRAINING.md`, `DISTILLATION.md` | Training data and fine-tuning | Next |
+| [`DATASET.md`](DATASET.md), `dataset/` | Synthetic documents, labels verified by the engine itself, exported as the exact production exchange | Built and verified locally (1,000 of 1,000) |
+| [`TRAINING.md`](TRAINING.md), `training/`, `train-runs/` | CPU LoRA fine-tune, GGUF conversion at the app's llama.cpp pin, student vs. untrained control | First run started 2026-11-21 |
+| `DISTILLATION.md` | Teacher-assisted and error-focused training | Next |
 | `MOE_EVALUATION.md`, `BENCHMARK_RESULTS.md`, `MODEL_COMPARISON.md` | Measured comparisons | After runner screens |
 | `DEPLOYMENT.md`, `RECOMMENDATION.md` | What to ship and how | Last |
 

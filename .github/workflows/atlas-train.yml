@@ -1,0 +1,425 @@
+# ATLAS model research: a small LoRA fine-tune of a student model on a free
+# GitHub runner's CPU, converted to GGUF exactly as its untouched base (the
+# control), and both benchmarked live with InternBench. Started by committing a
+# training spec to an ATLAS research branch. Laboratory only: nothing here is
+# staged, packaged or shipped, no model or dataset file is ever committed, and
+# nothing is paid for. See research/atlas-models/TRAINING.md.
+#
+# A training spec is research/atlas-models/train-runs/<name>.json:
+#
+#   {"name": "2026-11-21-lora1",
+#    "base": {"repo": "Qwen/Qwen3.5-0.8B", "revision": "main" | "<commit>"},
+#    "dataset": {"seed": "atlas-2026-11", "train": 1500, "val": 200},
+#    "train": {"budget_minutes": 250, "rank": 16, "alpha": 32, "lr": 0.0001,
+#              "accumulate": 8, "epochs": 1, "max_tokens": 2600,
+#              "max_examples": 600},   # 0 = all; size it so the cosine schedule ends inside the budget
+#    "quant": "Q4_K_M",
+#    "sets": ["real4", "real5", "real6", "atlas-val"],
+#    "gate": 0.7, "threads": 4}
+#
+# Jobs:
+#   plan     reads the spec, resolves the base revision to a commit, refuses real7/real8.
+#   dataset  generates the synthetic train and validation splits (the validation split refuses
+#            any party in the training split), verifies every label through the engine itself
+#            (research/atlas-models/dataset/verify.sh, no model involved) and keeps the result
+#            as a workflow artifact, never in Git.
+#   train    LoRA on every language-model linear layer (training/train_lora.py), merged over
+#            the base's own safetensors, then both the merged student and the untouched base
+#            go through the same llama.cpp converter and quantizer at the app's llama.cpp pin.
+#            The two GGUFs are artifacts; the training log is committed.
+#   eval     student and control on every set, live at the app's gate, results committed under
+#            research/atlas-models/results/<name>/.
+name: ATLAS train
+
+on:
+  push:
+    branches:
+      - "claude/atlas-model-research-**"
+    paths:
+      - "research/atlas-models/train-runs/*.json"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atlas-train-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan the training run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      name: ${{ steps.plan.outputs.name }}
+      spec: ${{ steps.plan.outputs.spec }}
+      eval: ${{ steps.plan.outputs.eval }}
+      has_eval: ${{ steps.plan.outputs.has_eval }}
+      gate: ${{ steps.plan.outputs.gate }}
+      threads: ${{ steps.plan.outputs.threads }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Read the training spec and resolve the base
+        id: plan
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          python3 -I - <<'EOF'
+          import json, os, re, subprocess, sys, urllib.request
+
+          SAMPLES = {
+              "real1": "sample.json",
+              "real2": "sample-heldout.json",
+              "real3": "sample-heldout2.json",
+              "real4": "sample-heldout3.json",
+              "real5": "sample-heldout4.json",
+              "real6": "sample-heldout5.json",
+              "atlas-val": "",
+          }
+          before, after = os.environ["BEFORE"], os.environ["AFTER"]
+          if re.fullmatch(r"0+", before or "0"):
+              changed = subprocess.run(["git", "show", "--name-only", "--format=", after],
+                                       capture_output=True, text=True, check=True).stdout.split()
+          else:
+              changed = subprocess.run(["git", "diff", "--name-only", before, after],
+                                       capture_output=True, text=True, check=True).stdout.split()
+          specs = [p for p in changed if re.fullmatch(r"research/atlas-models/train-runs/[a-z0-9._-]+\.json", p) and os.path.exists(p)]
+          if len(specs) != 1:
+              sys.exit(f"expected exactly one changed training spec, found {specs}")
+          spec = json.load(open(specs[0], encoding="utf-8"))
+          name = spec.get("name", "")
+          if not re.fullmatch(r"[a-z0-9._-]+", name):
+              sys.exit("name must match [a-z0-9._-]+")
+          if os.path.exists(f"research/atlas-models/results/{name}"):
+              sys.exit(f"results for {name} already exist; give the run a new name")
+          base = spec["base"]
+          repo, revision = base["repo"], base.get("revision", "main")
+          if not re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", repo): sys.exit(f"bad repo {repo!r}")
+          if not re.fullmatch(r"[A-Za-z0-9._-]+", revision): sys.exit(f"bad revision {revision!r}")
+          if not re.fullmatch(r"[0-9a-f]{40}", revision):
+              request = urllib.request.Request(f"https://huggingface.co/api/models/{repo}/revision/{revision}",
+                                               headers={"User-Agent": "Intern ATLAS research (https://github.com/z-brenner/intern)"})
+              revision = json.load(urllib.request.urlopen(request, timeout=60))["sha"]
+          dataset = spec.get("dataset", {})
+          train = spec.get("train", {})
+          seed = str(dataset.get("seed", "atlas-2026-11"))
+          if not re.fullmatch(r"[A-Za-z0-9._-]+", seed): sys.exit("bad dataset seed")
+          numbers = {
+              "train_count": int(dataset.get("train", 1500)), "val_count": int(dataset.get("val", 200)),
+              "budget_minutes": float(train.get("budget_minutes", 250)), "rank": int(train.get("rank", 16)),
+              "alpha": int(train.get("alpha", 32)), "lr": float(train.get("lr", 1e-4)),
+              "accumulate": int(train.get("accumulate", 8)), "epochs": float(train.get("epochs", 1)),
+              "max_tokens": int(train.get("max_tokens", 2600)),
+              "max_examples": int(train.get("max_examples", 0)),
+          }
+          if not (10 <= numbers["train_count"] <= 20000 and 10 <= numbers["val_count"] <= 2000):
+              sys.exit("dataset sizes out of range")
+          if not (5 <= numbers["budget_minutes"] <= 300):
+              sys.exit("budget_minutes must be in [5, 300]: the runner's job limit is 360 minutes")
+          quant = spec.get("quant", "Q4_K_M")
+          if quant not in ("Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0"): sys.exit(f"bad quant {quant!r}")
+          gate = float(spec.get("gate", 0.7))
+          threads = int(spec.get("threads", 4))
+          if not (0 <= gate <= 1) or not (1 <= threads <= 16):
+              sys.exit("gate must be in [0, 1] and threads in [1, 16]")
+          sets = list(dict.fromkeys(spec.get("sets", [])))
+          for s in sets:
+              if s not in SAMPLES:
+                  sys.exit(f"set {s!r} is not one of {', '.join(SAMPLES)} (real7 and real8 are never screened)")
+          resolved = {"name": name, "repo": repo, "revision": revision, "seed": seed, "quant": quant, **numbers}
+          evaluation = [{"model": model, "set": s, "sample": SAMPLES[s]} for model in ("student", "control") for s in sets]
+          print(json.dumps({"spec": resolved, "eval": evaluation}, indent=1))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"name={name}\n")
+              out.write(f"gate={gate}\n")
+              out.write(f"threads={threads}\n")
+              out.write("spec=" + json.dumps(resolved) + "\n")
+              out.write("eval=" + json.dumps({"include": evaluation or [{"model": "none"}]}) + "\n")
+              out.write(f"has_eval={'true' if evaluation else 'false'}\n")
+          EOF
+
+  dataset:
+    name: Generate and verify the training data
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+      SPEC: ${{ needs.plan.outputs.spec }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Lay out the lab directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/lab/data"
+          { echo "LAB=$RUNNER_TEMP/lab"; echo "DATA=$RUNNER_TEMP/lab/data"; } >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.15.0
+          cache: npm
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+      - name: Install the build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xvfb dbus x11-utils tesseract-ocr
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-candidate-bench-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/intern-linux-assets-cache
+          key: linux-runtime-${{ runner.os }}-${{ hashFiles('scripts/fetch-linux-assets.sh', 'scripts/fetch-ocr-runtime.sh', 'src-tauri/resources/runtime-assets.json') }}
+      - run: npm ci
+      - name: Build the parser worker and the benchmark
+        run: cargo build --locked --release -p intern-worker -p intern-bench --features intern-worker/windows-native
+      - name: Fetch and verify the pinned Linux runtime
+        run: scripts/fetch-linux-assets.sh "${{ runner.temp }}/intern-linux-assets-cache"
+      - name: Stage the runtime as the package lays it out
+        run: scripts/stage-linux-runtime.sh "$LAB/stage"
+      - name: Generate the training and validation splits
+        run: |
+          seed="$(jq -r .seed <<< "$SPEC")"
+          node research/atlas-models/dataset/generate.mjs --out "$DATA/train-corpus" --split train \
+            --count "$(jq -r .train_count <<< "$SPEC")" --seed "$seed"
+          node research/atlas-models/dataset/generate.mjs --out "$DATA/val-corpus" --split val \
+            --count "$(jq -r .val_count <<< "$SPEC")" --seed "$seed" --avoid "$DATA/train-corpus/gold.json"
+      - name: Verify every label through the engine (no model)
+        env:
+          INTERN_RUNTIME_DIR: ${{ runner.temp }}/lab/stage/runtime
+        run: |
+          research/atlas-models/dataset/verify.sh "$DATA/train-corpus" "$LAB/verify-train" 2>&1 | tee "$DATA/verify-train.log"
+          research/atlas-models/dataset/verify.sh "$DATA/val-corpus" "$LAB/verify-val" 2>&1 | tee "$DATA/verify-val.log"
+          cp "$LAB/verify-train/sft.jsonl" "$DATA/train.jsonl"
+          cp "$LAB/verify-val/sft.jsonl" "$DATA/val.jsonl"
+          python3 -I - "$DATA" <<'EOF'
+          import collections, json, os, sys
+          data = sys.argv[1]
+          summary = {}
+          for split in ("train", "val"):
+              rows = [json.loads(line) for line in open(os.path.join(data, f"{split}.jsonl"), encoding="utf-8")]
+              gold = json.load(open(os.path.join(data, f"{split}-corpus", "gold.json"), encoding="utf-8"))
+              summary[split] = {"generated": len(gold["documents"]), "verified": len(rows),
+                                "families": dict(collections.Counter(r["family"] for r in rows)),
+                                "formats": dict(collections.Counter(r["format"] for r in rows))}
+          json.dump(summary, open(os.path.join(data, "summary.json"), "w"), indent=1)
+          print(json.dumps(summary, indent=1))
+          EOF
+      - name: Keep the data as a workflow artifact (never in Git)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: atlas-data-${{ needs.plan.outputs.name }}
+          path: ${{ runner.temp }}/lab/data
+          retention-days: 30
+      - name: Commit the dataset summary
+        env:
+          NAME: ${{ needs.plan.outputs.name }}
+        run: |
+          mkdir -p "$LAB/keep"
+          cp "$DATA/summary.json" "$DATA/verify-train.log" "$DATA/verify-val.log" "$LAB/keep/"
+          research/atlas-models/scripts/push_results.sh "$LAB/keep" \
+            "research/atlas-models/results/$NAME/dataset" "ATLAS train: $NAME dataset summary"
+
+  train:
+    name: Fine-tune on CPU and convert student and control to GGUF
+    needs: [plan, dataset]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    env:
+      SPEC: ${{ needs.plan.outputs.spec }}
+      NAME: ${{ needs.plan.outputs.name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Lay out the lab directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/lab/out" "$RUNNER_TEMP/lab/gguf"
+          { echo "LAB=$RUNNER_TEMP/lab"; echo "OUT=$RUNNER_TEMP/lab/out"; echo "GGUF=$RUNNER_TEMP/lab/gguf"; } >> "$GITHUB_ENV"
+      - name: Free disk space for the checkpoints
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h "$RUNNER_TEMP"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: atlas-data-${{ needs.plan.outputs.name }}
+          path: ${{ runner.temp }}/lab/data
+      - name: Fetch llama.cpp at the app's pin (converter source and quantizer)
+        run: |
+          release="$(sed -n 's/^LLAMA_UPSTREAM_RELEASE="\(.*\)"$/\1/p' scripts/fetch-linux-assets.sh)"
+          sha256="$(sed -n 's/^LLAMA_UPSTREAM_SHA256="\(.*\)"$/\1/p' scripts/fetch-linux-assets.sh)"
+          git clone --quiet --depth 1 --branch "$release" https://github.com/ggml-org/llama.cpp "$LAB/llama-src"
+          archive="llama-$release-bin-ubuntu-x64.tar.gz"
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 --retry 3 \
+            --output "$LAB/$archive" "https://github.com/ggml-org/llama.cpp/releases/download/$release/$archive"
+          echo "$sha256  $LAB/$archive" | sha256sum -c -
+          mkdir -p "$LAB/llama-bin" && tar -xzf "$LAB/$archive" -C "$LAB/llama-bin"
+          { echo "LLAMA_RELEASE=$release"; echo "QUANTIZE=$LAB/llama-bin/llama-$release/llama-quantize"; } >> "$GITHUB_ENV"
+      - name: Install the pinned Python training stack (CPU)
+        run: |
+          python3 -m venv "$LAB/venv"
+          "$LAB/venv/bin/pip" install --quiet --upgrade pip
+          "$LAB/venv/bin/pip" install --quiet --index-url https://download.pytorch.org/whl/cpu torch==2.15.0 \
+            || "$LAB/venv/bin/pip" install --quiet torch==2.15.0
+          "$LAB/venv/bin/pip" install --quiet transformers==5.23.0 peft==0.22.0 safetensors huggingface_hub sentencepiece "$LAB/llama-src/gguf-py"
+          "$LAB/venv/bin/pip" freeze > "$OUT/pip-freeze.txt"
+      - name: Download the base checkpoint at its resolved commit
+        run: |
+          "$LAB/venv/bin/python" -I - <<'EOF'
+          import json, os
+          from huggingface_hub import snapshot_download
+          spec = json.loads(os.environ["SPEC"])
+          path = snapshot_download(spec["repo"], revision=spec["revision"], local_dir=os.path.join(os.environ["LAB"], "base"))
+          print(path)
+          EOF
+          ls -la "$LAB/base"
+      - name: Train the LoRA within the time budget
+        run: |
+          "$LAB/venv/bin/python" -I research/atlas-models/training/train_lora.py \
+            --base "$LAB/base" --train "$LAB/data/train.jsonl" --val "$LAB/data/val.jsonl" --out "$LAB/student" \
+            --rank "$(jq -r .rank <<< "$SPEC")" --alpha "$(jq -r .alpha <<< "$SPEC")" --lr "$(jq -r .lr <<< "$SPEC")" \
+            --accumulate "$(jq -r .accumulate <<< "$SPEC")" --epochs "$(jq -r .epochs <<< "$SPEC")" \
+            --max-tokens "$(jq -r .max_tokens <<< "$SPEC")" --max-examples "$(jq -r .max_examples <<< "$SPEC")" --budget-minutes "$(jq -r .budget_minutes <<< "$SPEC")" \
+            --threads "$(nproc)" 2>&1 | tee "$OUT/train.log"
+          cp "$LAB/student/train-log.json" "$OUT/"
+      - name: Convert student and control the same way
+        run: |
+          quant="$(jq -r .quant <<< "$SPEC")"
+          for model in control student; do
+            source="$LAB/base"; [ "$model" = student ] && source="$LAB/student/merged"
+            "$LAB/venv/bin/python" "$LAB/llama-src/convert_hf_to_gguf.py" "$source" --outtype bf16 --no-mtp \
+              --outfile "$LAB/$model-bf16.gguf" 2>&1 | tail -5
+            "$QUANTIZE" "$LAB/$model-bf16.gguf" "$GGUF/$model.gguf" "$quant" 2>&1 | tail -3
+            rm -f "$LAB/$model-bf16.gguf"
+          done
+          (cd "$GGUF" && sha256sum *.gguf | tee "$OUT/gguf-sha256.txt")
+          python3 -I -c 'import json,os,sys; s=json.loads(os.environ["SPEC"]); s["llama_cpp"]=os.environ["LLAMA_RELEASE"]; json.dump(s, open(sys.argv[1],"w"), indent=1)' "$OUT/spec-resolved.json"
+      - name: Keep the GGUFs as a workflow artifact (never in Git)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: atlas-gguf-${{ needs.plan.outputs.name }}
+          path: ${{ runner.temp }}/lab/gguf
+          retention-days: 30
+          compression-level: 0
+      - name: Commit the training log
+        if: always()
+        run: |
+          research/atlas-models/scripts/push_results.sh "$OUT" \
+            "research/atlas-models/results/$NAME/train" "ATLAS train: $NAME training log"
+
+  eval:
+    name: ${{ matrix.model }} on ${{ matrix.set }}
+    needs: [plan, train]
+    if: needs.plan.outputs.has_eval == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.eval) }}
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Lay out the lab directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/lab/out"
+          { echo "LAB=$RUNNER_TEMP/lab"; echo "OUT=$RUNNER_TEMP/lab/out"; } >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.15.0
+          cache: npm
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+      - name: Install the build and OCR dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xvfb dbus x11-utils tesseract-ocr
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-candidate-bench-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/intern-linux-assets-cache
+          key: linux-runtime-${{ runner.os }}-${{ hashFiles('scripts/fetch-linux-assets.sh', 'scripts/fetch-ocr-runtime.sh', 'src-tauri/resources/runtime-assets.json') }}
+      - run: npm ci
+      - name: Build the parser worker and the benchmark
+        run: cargo build --locked --release -p intern-worker -p intern-bench --features intern-worker/windows-native
+      - name: Fetch and verify the pinned Linux runtime
+        run: scripts/fetch-linux-assets.sh "${{ runner.temp }}/intern-linux-assets-cache"
+      - name: Stage the runtime as the package lays it out
+        run: |
+          scripts/stage-linux-runtime.sh "$LAB/stage"
+          echo "LLAMA_SERVER=$LAB/stage/runtime/llama-upstream/llama-server" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: atlas-gguf-${{ needs.plan.outputs.name }}
+          path: ${{ runner.temp }}/lab/gguf
+      - name: Pick the model and record its bytes
+        env:
+          MODEL_NAME: ${{ matrix.model }}
+          SPEC: ${{ needs.plan.outputs.spec }}
+        run: |
+          model="$LAB/gguf/$MODEL_NAME.gguf"
+          actual="$(sha256sum "$model" | cut -d' ' -f1)"
+          python3 -I -c 'import json,os,sys; s=json.loads(os.environ["SPEC"]); json.dump({"model":os.environ["MODEL_NAME"],"base_repo":s["repo"],"base_revision":s["revision"],"quant":s["quant"],"sha256":sys.argv[1],"bytes":os.path.getsize(sys.argv[2]),"trained":os.environ["MODEL_NAME"]=="student"}, open(os.path.join(os.environ["OUT"],"model.json"),"w"), indent=1)' "$actual" "$model"
+          cat "$OUT/model.json"
+          echo "MODEL=$model" >> "$GITHUB_ENV"
+      - name: Fetch the real-document set
+        if: matrix.sample != ''
+        env:
+          SAMPLE: ${{ matrix.sample }}
+          SET: ${{ matrix.set }}
+        run: |
+          python3 -I scripts/realdocs-eval/fetch.py "$LAB/$SET" "$SAMPLE" \
+            || echo "::warning::some documents of $SET were not fetched; the run scores the rest"
+          { echo "CORPUS=$LAB/$SET/corpus"; echo "GOLD=$LAB/$SET/gold.json"; echo "MANIFEST="; } >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: matrix.set == 'atlas-val'
+        with:
+          name: atlas-data-${{ needs.plan.outputs.name }}
+          path: ${{ runner.temp }}/lab/data
+      - name: Use the synthetic validation split
+        if: matrix.set == 'atlas-val'
+        run: |
+          { echo "CORPUS=$LAB/data/val-corpus"; echo "GOLD=$LAB/data/val-corpus/gold.json"; echo "MANIFEST="; } >> "$GITHUB_ENV"
+      - name: Run InternBench live at the app's gate
+        env:
+          INTERN_RUNTIME_DIR: ${{ runner.temp }}/lab/stage/runtime
+          INTERN_WORKER: ${{ github.workspace }}/target/release/intern-worker
+          INTERN_BENCH: ${{ github.workspace }}/target/release/intern-bench
+          THREADS: ${{ needs.plan.outputs.threads }}
+          GATE: ${{ needs.plan.outputs.gate }}
+          SERVER_MEMORY_FILE: ${{ runner.temp }}/lab/out/server-memory.txt
+          INTERN_BENCH_TOKEN_TRACE: "1"
+        run: |
+          started=$(date +%s)
+          status=0
+          scripts/run-internbench.sh "$OUT" -- --min-token-confidence "$GATE" 2>&1 | tee "$OUT/run.log" || status=$?
+          echo $(( $(date +%s) - started )) > "$OUT/wall-seconds.txt"
+          lscpu > "$OUT/lscpu.txt" || true
+          exit "$status"
+      - name: Commit the results to the research branch
+        if: always()
+        env:
+          NAME: ${{ needs.plan.outputs.name }}
+          MODEL_NAME: ${{ matrix.model }}
+          SET: ${{ matrix.set }}
+        run: |
+          research/atlas-models/scripts/collect_results.sh "$OUT" "$LAB/keep"
+          research/atlas-models/scripts/push_results.sh "$LAB/keep" \
+            "research/atlas-models/results/$NAME/$MODEL_NAME-on-$SET" \
+            "ATLAS train results: $NAME, $MODEL_NAME on $SET"
