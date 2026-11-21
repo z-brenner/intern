@@ -1,0 +1,18 @@
+{
+ "name": "2026-11-21-lora1",
+ "repo": "Qwen/Qwen3.5-0.8B",
+ "revision": "2fc06364715b967f1860aea9cf38778875588b17",
+ "seed": "atlas-2026-11",
+ "quant": "Q4_K_M",
+ "train_count": 1500,
+ "val_count": 200,
+ "budget_minutes": 250.0,
+ "rank": 16,
+ "alpha": 32,
+ "lr": 0.0002,
+ "accumulate": 8,
+ "epochs": 1.0,
+ "max_tokens": 2600,
+ "max_examples": 600,
+ "llama_cpp": "b11946"
+}
