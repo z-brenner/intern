@@ -1,9 +1,7 @@
 # ATLAS training runs
 
-Status, 2026-11-21: no model has been trained yet. The training script has been tested end to
-end on a tiny random Qwen3.5 model (trains, merges, converts to GGUF with llama.cpp's converter
-at the app's pin), and its speed and memory were measured on a randomly initialised model with
-the real Qwen3.5-0.8B shape. The first real run is `train-runs/2026-11-21-lora1.json`.
+Status, 2026-11-21: one model trained, `train-runs/2026-11-21-lora1.json` (Qwen3.5 0.8B,
+LoRA on CPU). Results are in MODEL_COMPARISON.md.
 
 ## How a run works
 
@@ -51,8 +49,10 @@ example (prompt plus reply) per step:
 | Gradient checkpointing (default) | 20 | 5.8 GB |
 | No checkpointing | 14 | about 14 GB |
 
-So a 250-minute budget covers about 600-700 examples on a similar CPU. The run caps at 600 so
-the learning-rate schedule finishes inside the budget. These are training costs only; a
+So a 250-minute budget looked like about 600-700 examples. On the runner it was slower: run
+`2026-11-21-lora1` saw 396 of 600 examples in 256.6 minutes, about 39 seconds per example,
+and stopped at 50 of 75 optimizer steps with the learning-rate schedule unfinished. A future CPU
+run should cap at about 380 examples per 250 minutes so the schedule completes. These are training costs only; a
 runner's CPU will differ, and a Windows laptop's inference speed is a separate measurement
 (BENCHMARK_RESULTS.md).
 

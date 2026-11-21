@@ -4,8 +4,8 @@ Measured candidates against the repository's own switch rule (BASELINE.md, secti
 smaller model replaces the 9B only if, on the same run, it names at least as many documents
 right, files no more wrong, and takes at most 0.6 of the 9B's time.
 
-Status, 2026-11-21: off-the-shelf models screened; the first fine-tuned student
-(`2026-11-21-lora1`, Qwen3.5 0.8B) is training. This file is updated as runs land.
+Status, 2026-11-21: off-the-shelf models screened, and the first fine-tuned student
+(`2026-11-21-lora1`, Qwen3.5 0.8B) trained and evaluated. This file is updated as runs land.
 
 ## Off-the-shelf models (run 2026-11-21-screen1)
 
@@ -35,6 +35,41 @@ documents every model scored. Not measured on a laptop.
 
 ## Fine-tuned students
 
-| Student | Base | Training | Right vs its own untrained control | Status |
-|---|---|---|---|---|
-| 2026-11-21-lora1 | Qwen3.5 0.8B | LoRA r16, up to 600 verified synthetic examples, CPU | pending | training |
+### 2026-11-21-lora1: Qwen3.5 0.8B, LoRA on CPU
+
+Workflow run 44868846152, results in `results/2026-11-21-lora1/`. LoRA rank 16 on every language
+model linear layer, 396 verified synthetic examples seen (the 250-minute budget stopped it at 50
+of 75 planned optimizer steps, so the learning-rate schedule did not finish). Held-out synthetic
+loss on the reply went from 0.712 to 0.013.
+
+Compared with the control (the same base, converted and quantized the same way, no LoRA), live at
+the app's 0.7 gate, on documents both scored:
+
+| Set | Docs | Control right | Student right | Student right where control wrong | Student wrong where control right | Student unsafe ready |
+|---|---|---|---|---|---|---|
+| real4 | 55 | 16 | 18 | 8 | 6 | 1 |
+| real5 | 55 | 5 | 8 | 5 | 2 | 1 |
+| real6 | 50 | 8 | 11 | 3 | 0 | 0 |
+| real4-6 | 160 | 29 (18.1%) | 37 (23.1%) | 16 | 8 | 2 |
+| synthetic validation | 200 | 107 (53.5%) | 197 (98.5%) | 92 | 2 | 0 |
+
+What this shows:
+
+- The training data teaches the task. On held-out synthetic documents whose parties never appear
+  in training, the student goes from about half right to almost all right and marks 183 of 200
+  ready with none wrong.
+- Most of that does not carry over to real documents. The real-set gain is 8 documents of 160,
+  and with 16 gains against 8 losses it is not statistically distinguishable from no change
+  (exact McNemar test, p = 0.15). The gap between 98.5% on synthetic and 23.1% on real documents
+  says the synthetic documents are much easier than real ones, so data realism, not only model
+  size, is what limits a trained student.
+- The student starts filing some documents without review, and 2 of its 4 ready real documents
+  are wrong (a garbled title on real4-notice-15, the wrong sender on real5-notice-10). The
+  control filed none. Any trained student needs its readiness calibrated before it can file on
+  its own.
+- The student was faster: each real set finished 22% to 38% sooner in wall time than the control
+  on the same kind of runner, consistent with shorter, cleaner replies. That is wall time per
+  job, not a controlled speed measurement.
+
+For scale, the untrained 2B scored 39 and the 9B 69 on 153 real4-6 documents in the screen
+(different quantization, so only a rough reference).
