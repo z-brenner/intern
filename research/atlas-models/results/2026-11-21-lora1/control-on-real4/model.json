@@ -1,0 +1,9 @@
+{
+ "model": "control",
+ "base_repo": "Qwen/Qwen3.5-0.8B",
+ "base_revision": "2fc06364715b967f1860aea9cf38778875588b17",
+ "quant": "Q4_K_M",
+ "sha256": "97291f77f59ac3bdb4c11deb9d4dc72d48c35e7f87ff23ee95744d1a555196b3",
+ "bytes": 529297440,
+ "trained": false
+}
