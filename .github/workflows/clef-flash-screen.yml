@@ -1,0 +1,90 @@
+name: Clef-Flash decision screen
+
+# One-off, on this branch only: asks Cloudflare's Clef-Flash decision model (llama.cpp
+# /v1/systemone, CPU) the date, sender, recipient and relation questions prepared in
+# bench/reports/clef-flash-2026-11/requests.jsonl, then commits the answers back to the branch.
+# Gates nothing; never meant for main.
+on:
+  push:
+    branches: [claude/project-thread-uushfr]
+    paths: [.github/workflows/clef-flash-screen.yml, bench/reports/clef-flash-2026-11/run.txt]
+
+permissions:
+  contents: write
+
+env:
+  LLAMA_CPP_COMMIT: d35dc4d9e6827db8e08426a2340d8a71ea863cd9
+  GGUF_URL: https://huggingface.co/ggml-org/Clef-Flash-GGUF/resolve/main/Clef-Flash-Q4_K_M.gguf
+
+jobs:
+  ask:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    strategy:
+      fail-fast: false
+      matrix:
+        set: [internbench, real1, real2, real3, real4, real5, real6]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build llama-server
+        run: |
+          set -euo pipefail
+          git init -q llama.cpp && cd llama.cpp
+          git fetch -q --depth 1 https://github.com/ggml-org/llama.cpp "$LLAMA_CPP_COMMIT"
+          git checkout -q FETCH_HEAD
+          cmake -B build -DGGML_NATIVE=ON -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release > /dev/null
+          cmake --build build --target llama-server -j 4 > build.log 2>&1 || (tail -50 build.log; exit 1)
+          ls -la build/bin/llama-server
+      - name: Download Clef-Flash
+        run: |
+          set -euo pipefail
+          curl -sSL --retry 4 -o clef.gguf "$GGUF_URL"
+          ls -la clef.gguf
+          sha256sum clef.gguf | tee gguf-sha256.txt
+          curl -sSL https://huggingface.co/api/models/ggml-org/Clef-Flash-GGUF | python3 -c "import json,sys; print('revision', json.load(sys.stdin).get('sha'))" | tee -a gguf-sha256.txt
+      - name: Ask
+        run: |
+          set -euo pipefail
+          lscpu > lscpu.txt
+          ./llama.cpp/build/bin/llama-server -m clef.gguf -c 8192 -b 8192 -ub 8192 -t 4 -np 1 \
+            --host 127.0.0.1 --port 8080 > server.log 2>&1 &
+          SERVER=$!
+          for i in $(seq 1 120); do curl -sf http://127.0.0.1:8080/health > /dev/null && break; sleep 5; done
+          curl -sf http://127.0.0.1:8080/health
+          ( while kill -0 $SERVER 2>/dev/null; do ps -o rss= -p $SERVER >> rss.txt; sleep 20; done ) &
+          mkdir -p out
+          python3 -I bench/reports/clef-flash-2026-11/ask.py bench/reports/clef-flash-2026-11/requests.jsonl \
+            ${{ matrix.set }} out/answers-${{ matrix.set }}.jsonl
+          sort -n rss.txt | tail -1 | awk '{print "peak_rss_mb", $1/1024}' | tee out/meta-${{ matrix.set }}.txt
+          cat gguf-sha256.txt lscpu.txt >> out/meta-${{ matrix.set }}.txt
+          kill $SERVER || true
+      - name: Server log tail
+        if: always()
+        run: tail -60 server.log || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: clef-${{ matrix.set }}
+          path: out/
+
+  commit:
+    needs: ask
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: claude/project-thread-uushfr
+      - uses: actions/download-artifact@v4
+        with:
+          path: art
+      - name: Commit answers
+        run: |
+          set -euo pipefail
+          mkdir -p bench/reports/clef-flash-2026-11/answers
+          cp art/*/* bench/reports/clef-flash-2026-11/answers/ || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bench/reports/clef-flash-2026-11/answers
+          git commit -m "bench: Clef-Flash decision answers (run ${{ github.run_id }})" || exit 0
+          for i in 1 2 3 4; do git pull -q --rebase origin claude/project-thread-uushfr && git push origin HEAD:claude/project-thread-uushfr && break; sleep 10; done
