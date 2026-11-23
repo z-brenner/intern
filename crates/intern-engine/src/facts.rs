@@ -10837,7 +10837,9 @@ Dated May 12, 2026";
         );
         assert_eq!(outcome.status, ProposalStatus::NeedsReview);
         assert!(
-            outcome.reasons.contains(&ReviewReason::PartyRoleUnconfirmed),
+            outcome
+                .reasons
+                .contains(&ReviewReason::PartyRoleUnconfirmed),
             "{:?}",
             outcome.reasons
         );
@@ -15510,7 +15512,9 @@ Notice Date: April 16, 2025";
             outcome.proposal
         );
         assert!(
-            outcome.reasons.contains(&ReviewReason::PartyRoleUnconfirmed),
+            outcome
+                .reasons
+                .contains(&ReviewReason::PartyRoleUnconfirmed),
             "{:?}",
             outcome.reasons
         );
