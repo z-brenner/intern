@@ -1974,8 +1974,18 @@ fn validate_reading(
     // does one the reply's own reading speaks against
     // ([`Relation::doubtful`]): the document did not say, and the reply
     // said otherwise.
-    if relation.on_proposed_roles || relation.doubtful || published_between {
+    //
+    // A name that rests on the reply's roles alone - every party found in
+    // the document, the default not doubted, no release named between its
+    // sides - says so with a reason of its own
+    // ([`ReviewReason::PartyRoleUnconfirmed`]): the parties are the
+    // document's, only the joining word is the reply's. It holds all the
+    // same: on real sets 1 to 8 the names it alone held were about one in
+    // five really wrong.
+    if relation.doubtful || published_between {
         push(&mut reasons, ReviewReason::PartyUnsupported);
+    } else if relation.on_proposed_roles {
+        push(&mut reasons, ReviewReason::PartyRoleUnconfirmed);
     }
     // A party no rule could join to the document is named after a dash,
     // with no joining word: "Purchase Order - Kestrel Instruments Ltd".
@@ -10827,7 +10837,7 @@ Dated May 12, 2026";
         );
         assert_eq!(outcome.status, ProposalStatus::NeedsReview);
         assert!(
-            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            outcome.reasons.contains(&ReviewReason::PartyRoleUnconfirmed),
             "{:?}",
             outcome.reasons
         );
@@ -14417,7 +14427,7 @@ The penalty is due within thirty days of this notice.";
         assert_eq!(outcome.proposal.parties, vec!["Calder Freight LLC"]);
         assert_eq!(
             outcome.reasons,
-            vec![ReviewReason::PartyUnsupported],
+            vec![ReviewReason::PartyRoleUnconfirmed],
             "{:?}",
             outcome.facts
         );
@@ -14500,7 +14510,7 @@ Human Resources Manager";
             );
             assert_eq!(
                 outcome.reasons,
-                vec![ReviewReason::PartyUnsupported],
+                vec![ReviewReason::PartyRoleUnconfirmed],
                 "{company_role:?}"
             );
             assert_eq!(
@@ -14558,7 +14568,7 @@ Klamath Falls, OR 97601",
         );
         assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
         assert_eq!(outcome.proposal.parties, vec!["Calder Plywood Corporation"]);
-        assert_eq!(outcome.reasons, vec![ReviewReason::PartyUnsupported]);
+        assert_eq!(outcome.reasons, vec![ReviewReason::PartyRoleUnconfirmed]);
         assert_eq!(
             basis(&outcome).as_deref(),
             Some("notice: the recipient, on the reply's roles")
@@ -14568,7 +14578,7 @@ Klamath Falls, OR 97601",
         let outcome = penalty("Odalys Brandt\n400 Mill Road\nKlamath Falls, OR 97601");
         assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
         assert_eq!(outcome.proposal.parties, vec!["Calder Plywood Corporation"]);
-        assert_eq!(outcome.reasons, vec![ReviewReason::PartyUnsupported]);
+        assert_eq!(outcome.reasons, vec![ReviewReason::PartyRoleUnconfirmed]);
         assert_eq!(
             basis(&outcome).as_deref(),
             Some("notice: the recipient, for it on the reply's roles")
@@ -14619,7 +14629,7 @@ Six cartons arrived crushed. We claim $2,340.00.";
             );
             assert_eq!(
                 outcome.reasons,
-                vec![ReviewReason::PartyUnsupported],
+                vec![ReviewReason::PartyRoleUnconfirmed],
                 "{sender_role:?}"
             );
             assert_eq!(
@@ -15500,7 +15510,7 @@ Notice Date: April 16, 2025";
             outcome.proposal
         );
         assert!(
-            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            outcome.reasons.contains(&ReviewReason::PartyRoleUnconfirmed),
             "{:?}",
             outcome.reasons
         );

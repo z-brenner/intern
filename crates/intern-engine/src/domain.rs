@@ -746,11 +746,12 @@ pub enum ReviewReason {
     /// person should confirm it names the document.
     TypeInferred,
     /// The document does not settle the filename's party: a named party
-    /// could not be found in it, or the name rests on roles only the reply
-    /// gave, on a default the reply's own reading speaks against, or on no
-    /// joining word at all; or the document is addressed to a class of
-    /// recipients rather than a party, whether the name gives the class or
-    /// the party the document comes from.
+    /// could not be found in it, or the name rests on a default the
+    /// reply's own reading speaks against, or on no joining word at all;
+    /// or the document is addressed to a class of recipients rather than a
+    /// party, whether the name gives the class or the party the document
+    /// comes from. A name resting only on roles the reply gave is
+    /// [`Self::PartyRoleUnconfirmed`].
     PartyUnsupported,
     /// A party the filename needs is missing: an agreement named only one
     /// of its two sides, an issued document no issuer, or any document no
@@ -787,6 +788,16 @@ pub enum ReviewReason {
     /// for a person, whatever validation made of them and at every review
     /// level ([`crate::tiers::hold_fast_reading`]).
     FastModelReading,
+    /// Every party in the name is in the document, but the document's own
+    /// wording says nothing of which side each is on - no label, no defined
+    /// term, no letterhead - so the joining word ("from", "to", "for")
+    /// rests on the roles the reply gave, which nothing in the document
+    /// contradicts ([`crate::compose::Relation::on_proposed_roles`]).
+    /// Raised instead of [`Self::PartyUnsupported`] for that case alone, so
+    /// a reviewer and a measurement can tell it apart. It holds at every
+    /// level ([`crate::review_level::readiness`]): the names it covers were
+    /// one in five really wrong on the real sets.
+    PartyRoleUnconfirmed,
 }
 
 impl ReviewReason {
@@ -810,6 +821,7 @@ impl ReviewReason {
             Self::DateIsPeriod => "DATE_IS_PERIOD",
             Self::DateIsFormula => "DATE_IS_FORMULA",
             Self::FastModelReading => "FAST_MODEL_READING",
+            Self::PartyRoleUnconfirmed => "PARTY_ROLE_UNCONFIRMED",
         }
     }
 }
