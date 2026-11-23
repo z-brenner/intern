@@ -12,12 +12,15 @@ Status, 2026-11-21: off-the-shelf models screened, and the first fine-tuned stud
 | Model | Right (of 299) | vs 9B | Unsafe ready | Time vs 9B | Passes the rule |
 |---|---|---|---|---|---|
 | Qwen3.5 9B (today's accurate tier) | 156 | | 1 | 1.00 | reference |
+| Qwen3.5 4B (today's fast tier, screen2, 315 docs) | 129 of 315 | -33 vs 162 | 7 vs 4 | 0.61 | no: accuracy, unsafe filing, and just over the time limit |
 | Qwen3.5 2B | 100 | -56 | 5 | 0.23 | no: accuracy and unsafe filing |
 | Granite 4.0 H Tiny (MoE) | 82 | -74 | 9 | 0.25 | no |
 | Qwen3.5 0.8B | 67 | -89 | 0 | 0.12 | no: accuracy |
 
 Speed is from the same-runner speed job; accuracy from the six real development sets on
-documents every model scored. Not measured on a laptop.
+documents every model scored. The 4B row comes from a second run with its own same-run 9B. On
+the 301 documents both runs share, the ladder is 9B 155-156, 4B 124, 2B 101. Not measured on a
+laptop.
 
 ## What the gap looks like
 

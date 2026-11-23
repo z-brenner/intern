@@ -61,15 +61,48 @@ another, so the CPU is the same for each.
 Accuracy on that synthetic set, for completeness: 9B 72 of 77, 2B 67, Granite 54, 0.8B 41.
 InternBench barely separates the 9B from the 2B, as BASELINE.md found; the real sets do.
 
+## Run 2026-11-23-screen2: the shipped 4B fast tier
+
+Spec: `runs/2026-11-23-screen2.json`. Workflow run 45219400851. Results:
+`results/2026-11-23-screen2/`. Qwen3.5 4B at the app's own manifest pin (unsloth/Qwen3.5-4B-GGUF,
+Q4_K_M, 2.74 GB) against a same-run Qwen3.5 9B.
+
+### Accuracy, same 315 real documents
+
+| Model | Right | Right % | Ready | Unsafe ready | Right where 9B wrong | Wrong where 9B right |
+|---|---|---|---|---|---|---|
+| Qwen3.5 9B | 162 | 51.4 | 29 | 4 | | |
+| Qwen3.5 4B | 129 | 41.0 | 25 | 7 | 17 | 50 |
+
+The 4B is behind on every one of the six sets (by 3 to 7 documents per set).
+
+### Run-to-run variation of the 9B
+
+The 9B ran in both screens. On the 301 documents both runs scored, it named 155 right in the
+first and 156 in the second, and the two runs disagreed on 7 documents. So a gap of a few
+documents between models is within noise, and the gaps measured here (25 or more) are not.
+On those same 301 documents: 9B 155 and 156, 4B 124, 2B 101.
+
+### Speed and memory, both models on one runner
+
+This run's speed job landed on an Intel Xeon 6975P-C runner, not the AMD EPYC 7763 of the first
+screen, so its seconds are not comparable with the first screen's; the ratio between the two
+models on the same runner is.
+
+| Model | p50 per document | p95 | Server peak RSS | Time vs 9B |
+|---|---|---|---|---|
+| Qwen3.5 9B | 49.3 s | 97.9 s | 6.2 GB | 1.00 |
+| Qwen3.5 4B | 29.9 s | 58.4 s | 3.3 GB | 0.61 |
+
 ## What these numbers are not
 
 - **Not laptop speed.** A runner has 4 vCPUs of a server chip and Linux. A 16 GB Windows
   laptop will be slower or faster depending on its cores and its power plan. The ratios between
   models are the useful part; they should carry over roughly, because every model ran the same
   way on the same CPU, but that is an expectation, not a measurement.
-- **One run each.** The repo's switch rule asks for two runs. Run-to-run variation at
-  temperature 0 comes mostly from document fetch failures, which the common-document counts
-  remove.
+- **One run per candidate.** The repo's switch rule asks for two runs. The 9B, run twice, moved
+  by one document of 301 (see screen2), so one run is enough to separate gaps of 25 or more but
+  not small ones.
 - **Prefill dominates.** For every model, 61% (0.8B) to 77% (Granite) of the median time per
   document is reading the prompt (median 978 tokens of instructions and evidence with the Qwen
   tokenizer), not writing the answer.
