@@ -51,9 +51,5 @@ jobs:
             grep -n "decision\|n_ubatch\|flash_attn\|compute buffer" s.log | head -12
             kill $P 2>/dev/null; wait $P 2>/dev/null; sleep 2
           }
-          try -c 8192 -b 8192 -ub 8192 -fit off
-          try -c 4096 -b 4096 -ub 4096
-          try -c 4096 -b 4096 -ub 4096 -fit off
-          try -c 8192 -b 8192 -ub 8192 -fa off
-          try -c 4096 -b 1024 -ub 1024
-          try -c 4096 -b 1024 -ub 1024 -fit off -fa off
+          try -nr -c 8192 -b 8192 -ub 8192
+          try -nr -c 8192 -b 8192 -ub 8192 -fa off

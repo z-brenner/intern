@@ -46,7 +46,7 @@ jobs:
         run: |
           set -euo pipefail
           lscpu > lscpu.txt
-          ./llama.cpp/build/bin/llama-server -m clef.gguf -c 8192 -b 8192 -ub 8192 -t 4 -np 1 \
+          ./llama.cpp/build/bin/llama-server -m clef.gguf -nr -c 8192 -b 8192 -ub 8192 -t 4 -np 1 \
             --host 127.0.0.1 --port 8080 > server.log 2>&1 &
           SERVER=$!
           for i in $(seq 1 120); do curl -sf http://127.0.0.1:8080/health > /dev/null && break; sleep 5; done
