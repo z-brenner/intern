@@ -980,7 +980,6 @@ mod tests {
             min,
             mean: min,
             tokens: 12,
-            value: None,
         });
         analysis
     }

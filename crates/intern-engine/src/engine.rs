@@ -135,7 +135,6 @@ pub struct Engine {
     client: Box<dyn Proposer>,
     budget: DigestBudget,
     min_token_confidence: Option<f32>,
-    whole_value_gate: Option<f32>,
     pipeline: Pipeline,
     retrieval: RetrievalConfig,
     profile: Option<PromptProfile>,
@@ -153,7 +152,6 @@ impl Engine {
             client,
             budget: DigestBudget::default(),
             min_token_confidence: None,
-            whole_value_gate: None,
             pipeline: Pipeline::default(),
             retrieval: RetrievalConfig::default(),
             profile: None,
@@ -203,38 +201,6 @@ impl Engine {
     pub fn with_min_token_confidence(mut self, threshold: f32) -> Self {
         self.min_token_confidence = Some(threshold);
         self
-    }
-
-    /// Holds a reading whose whole-value figure
-    /// ([`crate::client::whole_value_confidence`], [`TokenConfidence::value`])
-    /// is below `threshold`, in place of the least-token gate. Off by
-    /// default; the candidate is
-    /// [`crate::tiers::REVIEW_BELOW_WHOLE_VALUE_CONFIDENCE`].
-    ///
-    /// The threshold is its own: a product of probabilities sits below its
-    /// least factor, so the least-token threshold
-    /// ([`Self::with_min_token_confidence`], 0.7 in the app) would hold more
-    /// readings than today if compared with this figure, and never is. A
-    /// reply that carries no whole-value figure - one read without two token
-    /// alternatives, or with no date or party - is judged by the least-token
-    /// gate, as before.
-    ///
-    /// [`TokenConfidence::value`]: crate::domain::TokenConfidence::value
-    pub fn with_whole_value_gate(mut self, threshold: f32) -> Self {
-        self.whole_value_gate = Some(threshold);
-        self
-    }
-
-    /// Whether `confidence` is below the gate that applies to it: the
-    /// whole-value gate where one is set and the reply carries the figure,
-    /// the least-token gate otherwise.
-    fn below_gate(&self, confidence: &TokenConfidence) -> bool {
-        match (self.whole_value_gate, confidence.value) {
-            (Some(threshold), Some(value)) => value < threshold,
-            _ => self
-                .min_token_confidence
-                .is_some_and(|threshold| confidence.min < threshold),
-        }
     }
 
     pub fn with_budget(mut self, budget: DigestBudget) -> Self {
@@ -454,8 +420,8 @@ impl Engine {
             }
             outcome.status = ProposalStatus::NeedsReview;
         }
-        if let Some(confidence) = token_confidence
-            && self.below_gate(&confidence)
+        if let (Some(threshold), Some(confidence)) = (self.min_token_confidence, token_confidence)
+            && confidence.min < threshold
         {
             if !outcome.reasons.contains(&ReviewReason::LowConfidence) {
                 outcome.reasons.push(ReviewReason::LowConfidence);
@@ -1055,7 +1021,6 @@ mod tests {
         min: 0.2,
         mean: 0.7,
         tokens: 12,
-        value: None,
     };
 
     /// Token confidence is data first: it rides along on the analysis and
@@ -1098,40 +1063,6 @@ mod tests {
                 .with_min_token_confidence(0.5),
         );
         assert_eq!(unmeasured.status, ProposalStatus::Ready);
-    }
-
-    /// The whole-value figure is read only where it was asked for, and only
-    /// where the reply carries one: otherwise the least token decides.
-    #[test]
-    fn the_whole_value_figure_gates_only_when_asked_for() {
-        let surer = crate::domain::TokenConfidence {
-            value: Some(0.9),
-            ..LOW
-        };
-        let gate = |confidence, whole_value: Option<f32>| {
-            let engine = Engine::with_proposer(Box::new(Scored(Some(confidence))))
-                .with_pipeline(Pipeline::Digest)
-                .with_min_token_confidence(0.5);
-            analyze_with(match whole_value {
-                Some(threshold) => engine.with_whole_value_gate(threshold),
-                None => engine,
-            })
-            .status
-        };
-        assert_eq!(gate(surer, None), ProposalStatus::NeedsReview);
-        assert_eq!(gate(surer, Some(0.6)), ProposalStatus::Ready);
-        // No whole-value figure: the least token decides.
-        assert_eq!(gate(LOW, Some(0.1)), ProposalStatus::NeedsReview);
-        let doubtful = crate::domain::TokenConfidence {
-            min: 0.9,
-            value: Some(0.55),
-            ..LOW
-        };
-        assert_eq!(gate(doubtful, None), ProposalStatus::Ready);
-        assert_eq!(gate(doubtful, Some(0.6)), ProposalStatus::NeedsReview);
-        // The whole-value gate has its own threshold: the least-token one
-        // is never compared with the whole-value figure.
-        assert_eq!(gate(doubtful, Some(0.5)), ProposalStatus::Ready);
     }
 
     /// A proposer that records every prompt it is sent and answers the `n`th

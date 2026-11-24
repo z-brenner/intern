@@ -11693,7 +11693,6 @@ mod runtime_tests {
                     min: 0.97,
                     mean: 0.99,
                     tokens: 12,
-                    value: None,
                 }),
                 token_trace: None,
                 timings: None,
@@ -14575,7 +14574,6 @@ mod approval_dto_tests {
             min: 0.74,
             mean: 0.9,
             tokens: 12,
-            value: None,
         });
         assert!(close(shown(unsure_tokens), 0.74));
 

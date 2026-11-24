@@ -49,8 +49,7 @@ const USAGE: &str = "usage:
                    [--pipeline evidence|digest] [--id-style stable|ordinal]
                    [--retrieval-tier auto|whole|small|normal|dense] [--context-tokens N]
                    [--prompt-profile bonsai_2] [--min-token-confidence X]
-                   [--review-level strict|balanced] [--confidence-score min|whole-value]
-                   [--whole-value-threshold X]
+                   [--review-level strict|balanced]
   intern-bench compare --before A.json --after B.json [--markdown DIFF.md] [--output DIFF.json]
   intern-bench report --input REPORT.json --markdown OUT.md
   intern-bench merge-recordings --base A.json --add B.json --output C.json
@@ -93,8 +92,6 @@ const RUN_KEYS: &[&str] = &[
     "prompt-profile",
     "min-token-confidence",
     "review-level",
-    "confidence-score",
-    "whole-value-threshold",
     "bench-profile",
     "wire-output",
 ];

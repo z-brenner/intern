@@ -683,18 +683,6 @@ pub fn escalation_with(
 /// they were.
 pub const REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE: f32 = 0.7;
 
-/// The candidate whole-value gate for the accurate model's readings
-/// ([`crate::Engine::with_whole_value_gate`]): not used by the app. Fixed on
-/// 2026-11-24 from real sets 1 to 9 before real set 10 was read, by the rule
-/// in bench/reports/whole-value-confidence-2026-11: the threshold that files
-/// the most right names while filing no more really wrong names than the
-/// least-token gate at 0.7 (0.5945 there), rounded up to the next 0.05 so
-/// that it does not sit on a really wrong reading's figure (0.5935). On the
-/// nine sets it files 55 right, 10 minor and 2 really wrong names where
-/// 0.7 on the least token files 41, 6 and 2. It ships only if set 10
-/// passes the rule written there.
-pub const REVIEW_BELOW_WHOLE_VALUE_CONFIDENCE: f32 = 0.60;
-
 /// The same for the quick model's readings. A quick reading always goes to
 /// a person ([`hold_fast_reading`]), so this decides only whether a cascade
 /// sends it on to the accurate model ([`escalation_with`]): the 4B filed
@@ -1081,7 +1069,6 @@ mod tests {
                 min,
                 mean: 0.9,
                 tokens: 12,
-                value: None,
             }),
             facts: None,
         }
