@@ -47,8 +47,10 @@ The worst case took 11.6 minutes.
 
 ## Reproduce
 
-Bump `run.txt` to rerun `.github/workflows/clef-flash-screen.yml`. Answers land in
-`answers/`. Then run:
+The one-off runner workflow (`.github/workflows/clef-flash-screen.yml`) lived on branch
+`claude/project-thread-uushfr` at commit `700790a0` and was removed before review, because it
+commits to whatever branch it runs on. Restore it on a scratch branch and push `run.txt` to
+rerun. Answers land in `answers/`. Then run:
 
     cat answers/answers-*.jsonl > all.jsonl
     python3 -I score.py requests.jsonl all.jsonl > scored.json
