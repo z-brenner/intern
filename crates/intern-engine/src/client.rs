@@ -2256,7 +2256,10 @@ mod tests {
         assert!(close(confidence.mean, 0.7), "{confidence:?}");
     }
 
-    fn traced(pieces: &[(&str, f32, &[(&str, f32)])]) -> Vec<TokenTraceEntry> {
+    /// A token, its probability, and the alternatives the server listed.
+    type Piece<'a> = (&'a str, f32, &'a [(&'a str, f32)]);
+
+    fn traced(pieces: &[Piece<'_>]) -> Vec<TokenTraceEntry> {
         pieces
             .iter()
             .map(|(token, p, top)| TokenTraceEntry {
