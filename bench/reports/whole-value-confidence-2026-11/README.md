@@ -1,5 +1,10 @@
 # A whole-value token score for the review gate, November 2026
 
+**Result on real set 10 (2026-11-24): rejected.** On the one pre-registered run (reported on PR 94),
+today's gate filed 6 names (2 right, 3 minor, 1 really wrong). The candidate at 0.60 filed 9 (2 right,
+5 minor, 2 really wrong), so all three pass conditions below failed. The score stays off. 0.60 was
+not tuned on set 10, and no unread held-out set remains to test a successor.
+
 Status: measured on 2026-11-24 on development data only (real sets 1 to 9, all already read).
 The candidate threshold, **0.60**, and the rule set 10 must pass were fixed below on 2026-11-24,
 before real set 10 was read. The score ships off by default (`Engine::with_whole_value_gate`;
