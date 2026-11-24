@@ -1,0 +1,3 @@
+filename 9/44 (20.4%) · type 38/45 (84.4%) · date 30/44 (68.2%) · parties 24/45 (53.3%) · routing 5/28 (17.9%)
+unsafe ready 0 · trap dates 4 · forbidden parties 10 · unsupported claims 0/109
+total per document: p50 23.09 s · p95 45.20 s · max 51.88 s

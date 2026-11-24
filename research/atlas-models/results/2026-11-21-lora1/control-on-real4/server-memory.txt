@@ -1,0 +1,2 @@
+VmHWM:	  893792 kB
+VmRSS:	  893792 kB

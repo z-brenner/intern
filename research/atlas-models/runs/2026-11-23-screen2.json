@@ -1,0 +1,12 @@
+{
+  "name": "2026-11-23-screen2",
+  "purpose": "Required comparison the first screen left out: the app's shipped fast tier, Qwen3.5 4B at its manifest pin, against a same-run Qwen3.5 9B control on the six development real sets at the app's 0.7 gate, plus both in turn on one runner over InternBench for comparable speed and memory.",
+  "candidates": [
+    {"label": "fast-qwen3.5-4b-q4km", "repo": "unsloth/Qwen3.5-4B-GGUF", "revision": "e87f176479d0855a907a41277aca2f8ee7a09523", "file": "Qwen3.5-4B-Q4_K_M.gguf", "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4"},
+    {"label": "control-qwen3.5-9b-q4km", "repo": "unsloth/Qwen3.5-9B-GGUF", "revision": "3885219b6810b007914f3a7950a8d1b469d598a5", "file": "Qwen3.5-9B-Q4_K_M.gguf", "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8"}
+  ],
+  "sets": ["real1", "real2", "real3", "real4", "real5", "real6"],
+  "speed_set": "internbench",
+  "gate": 0.7,
+  "threads": 4
+}
