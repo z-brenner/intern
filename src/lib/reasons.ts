@@ -71,6 +71,11 @@ const SENTENCES: Record<string, string> = {
   // for each of them.
   PARTY_UNSUPPORTED: 'The document does not confirm which party this name should give, most often because it never says which side a party is on.',
   PARTY_MISSING: 'The name lacks a party it needs, such as the other side of an agreement or who issued the document.',
+  // Split from PARTY_UNSUPPORTED in November 2026: every party in the name
+  // is in the document, but its wording never says which side each is on,
+  // so "from", "to" or "for" is the model's reading
+  // (Relation::on_proposed_roles). It holds at both levels.
+  PARTY_ROLE_UNCONFIRMED: 'The parties are in the document, but it never says which side each is on, so "from", "to" or "for" is the model\'s reading.',
   DESCRIPTION_UNSUPPORTED: 'The description asserts something the document does not contain.',
   DESCRIPTION_INVALID: 'The description was not a single usable sentence.',
   // Raised two ways: the model rated its own answer low, or - nearly always,
@@ -200,6 +205,7 @@ const PARTY_CHECK = 'Check who the document is from, to, for or between.';
 const CLOSINGS: Record<string, string> = {
   PARTY_UNSUPPORTED: PARTY_CHECK,
   PARTY_MISSING: PARTY_CHECK,
+  PARTY_ROLE_UNCONFIRMED: PARTY_CHECK,
 };
 
 /**
@@ -360,6 +366,7 @@ const LABELS: Record<string, string> = {
   TYPE_INFERRED: 'Type guessed',
   PARTY_UNSUPPORTED: 'Party unclear',
   PARTY_MISSING: 'Party missing',
+  PARTY_ROLE_UNCONFIRMED: 'Party side unconfirmed',
   DESCRIPTION_UNSUPPORTED: 'Description unsupported',
   DESCRIPTION_INVALID: 'Description unusable',
   LOW_CONFIDENCE: 'Model unsure',

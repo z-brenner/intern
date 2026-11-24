@@ -156,7 +156,9 @@ pub const MINOR: [ReviewReason; 4] = [
 ///    it.
 /// 2. Every reason on it is minor ([`MINOR`]) or, at balanced, a note:
 ///    [`ReviewReason::TypeMissing`], [`ReviewReason::TypeUnsupported`] or
-///    [`ReviewReason::LowConfidence`]. Any other reason holds it: every date
+///    [`ReviewReason::LowConfidence`]. [`ReviewReason::PartyRoleUnconfirmed`]
+///    holds at both levels: as a note at balanced it filed 89 more names on
+///    real sets 1 to 8, 19 of them really wrong (November 2026). Any other reason holds it: every date
 ///    reason but a missing date the queue has filled in, every party
 ///    reason, a parser warning, the model's own request for review, the
 ///    quick model's readings ([`ReviewReason::FastModelReading`]), at strict
@@ -431,7 +433,7 @@ mod tests {
     /// Every reason there is. [`listed`] does not compile until a new one
     /// is added here, so a new reason is tested as holding until someone
     /// decides otherwise.
-    const EVERY_REASON: [ReviewReason; 18] = [
+    const EVERY_REASON: [ReviewReason; 19] = [
         ReviewReason::DateMissing,
         ReviewReason::DateUnsupported,
         ReviewReason::TypeMissing,
@@ -450,6 +452,7 @@ mod tests {
         ReviewReason::DateIsPeriod,
         ReviewReason::DateIsFormula,
         ReviewReason::FastModelReading,
+        ReviewReason::PartyRoleUnconfirmed,
     ];
 
     fn listed(reason: ReviewReason) -> bool {
@@ -471,7 +474,8 @@ mod tests {
             | ReviewReason::DateAmbiguous
             | ReviewReason::DateIsPeriod
             | ReviewReason::DateIsFormula
-            | ReviewReason::FastModelReading => EVERY_REASON.contains(&reason),
+            | ReviewReason::FastModelReading
+            | ReviewReason::PartyRoleUnconfirmed => EVERY_REASON.contains(&reason),
         }
     }
 
@@ -554,6 +558,7 @@ mod tests {
             ReviewReason::DateIsFormula,
             ReviewReason::PartyUnsupported,
             ReviewReason::PartyMissing,
+            ReviewReason::PartyRoleUnconfirmed,
             ReviewReason::ParserWarning,
             ReviewReason::ModelRequestedReview,
             ReviewReason::FastModelReading,
