@@ -33,8 +33,7 @@ the students are, before it labels anything.
 | Qwen3.5 35B-A3B (MoE) | 3B active parameters, so fast per token once loaded; about 20 GB at 4-bit | One 24 GB GPU, or a 32 GB CPU host |
 | Qwen3.5 122B-A10B (MoE) | Strongest open Qwen that is still practical to rent | Multi-GPU or a large-memory host |
 
-Licenses, exact hardware and published GGUFs for each are to be confirmed in RESEARCH.md
-before any is run. Paid inference APIs are excluded without Zack's authorization.
+All three are Apache 2.0; published GGUFs and sizes are in RESEARCH.md. Paid inference APIs are excluded without Zack's authorization.
 
 ## Labelling method
 

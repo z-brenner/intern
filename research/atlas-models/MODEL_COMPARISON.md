@@ -76,3 +76,46 @@ What this shows:
 
 For scale, the untrained 2B scored 39 and the 9B 69 on 153 real4-6 documents in the screen
 (different quantization, so only a rough reference).
+
+## Adaptive hybrid: small model first, 9B on the unsure documents
+
+Derived 2026-11-24 from the committed screens, no model run. `scripts/simulate_hybrid.py`
+replays each run's per-document readings: the small model reads every document, and any
+document whose least probable chosen token is under a threshold goes to the same-run 9B as
+well. The threshold is swept; cost is the small model's measured time ratio plus the share
+escalated. Counts here are on the documents the small model and the 9B both scored, so the
+totals differ slightly from the four-model table above.
+
+```
+python3 -I scripts/simulate_hybrid.py results/2026-11-21-screen1 --quick control-qwen3.5-2b-q4km --reference control-qwen3.5-9b --ratio 0.23
+python3 -I scripts/simulate_hybrid.py results/2026-11-23-screen2 --quick fast-qwen3.5-4b-q4km --ratio 0.61
+```
+
+| First model | Docs | 9B alone | Best hybrid within 0.6 of the 9B's time | Escalated | Unsafe ready, hybrid vs 9B | Oracle escalation |
+|---|---|---|---|---|---|---|
+| Qwen3.5 2B | 313 | 160 | 129 | 34% | 5 vs 2 | 179 right at 0.47 |
+| Qwen3.5 0.8B | 311 | 163 | 120 | 47% | 0 vs 1 | 171 right at 0.44 |
+| Granite 4.0 H Tiny | 315 | 162 | 115 | 32% | 10 vs 2 | 175 right at 0.54 |
+| Qwen3.5 4B | 315 | 162 | none: the 4B alone already costs 0.61 | | | 179 right at 0.77 |
+
+What this shows:
+
+- No off-the-shelf hybrid passes the switch rule, even with its threshold fitted on the very
+  documents it is scored on, which flatters it. The best one, 2B first, is 31 documents short.
+- The routing signal is the bottleneck, not the models. If the 2B could tell which of its
+  readings are wrong and fixable, escalating exactly those 24% of documents would name 179 right,
+  19 more than the 9B alone, at under half its time. The 2B's token confidence finds those
+  documents only a little better than chance: escalating the least confident 34% nets 24 more
+  right names, where escalating a random 34% would be expected to net about 19.
+- Escalating on low confidence never removes the 2B's confident wrong filings: its 5 unsafe
+  filings survive every threshold the budget allows. A hybrid cannot be made safe by routing alone;
+  either the small model's readings are always held for review, as the app's quick tier already
+  does, or the small model's readiness has to be calibrated separately.
+- The two models are complementary: the 9B plus the 2B's 17 wins over it is the source of the
+  oracle's 179. That is the case for a trained student whose confidence means something, not for
+  the stock 2B.
+
+So the answer to "does adaptive inference beat either architecture alone" is: not with today's
+models, and the measurement says exactly what a student would have to add, namely a confidence
+that separates its right readings from its wrong ones. The same script scores any future student
+run unchanged.
