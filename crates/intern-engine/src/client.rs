@@ -819,7 +819,7 @@ fn answer_spans(text: &[u8]) -> Vec<(usize, usize)> {
 /// whole, from a reply's token trace: the least, over the values, of the
 /// product of the probabilities of the tokens that write it. An off-by-
 /// default alternative to [`TokenConfidence::min`], which reads only the
-/// single least probable token ([`crate::engine::Engine::with_whole_value_confidence`]).
+/// single least probable token ([`crate::engine::Engine::with_whole_value_gate`]).
 ///
 /// A token's probability counts the alternatives the server listed that
 /// would have written the same value, so that a choice the answer does not

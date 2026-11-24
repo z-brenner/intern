@@ -1,9 +1,9 @@
 # A whole-value token score for the review gate, November 2026
 
-Status: measured on 2026-11-24 on development data only (real sets 1 to 9, all already
-read). **No threshold is chosen here.** The score ships off by default
-(`Engine::with_whole_value_confidence`, `intern-bench --confidence-score whole-value`), and the
-plan is to fix a threshold before real set 10 is read, then confirm it on that set.
+Status: measured on 2026-11-24 on development data only (real sets 1 to 9, all already read).
+The candidate threshold, **0.60**, and the rule set 10 must pass were fixed below on 2026-11-24,
+before real set 10 was read. The score ships off by default (`Engine::with_whole_value_gate`;
+`intern-bench --confidence-score whole-value`).
 
 ## The question
 
@@ -82,6 +82,39 @@ figures come from end-to-end replays through this branch's `intern-bench`.
 AUC (right against really wrong, within the pool): least token 0.729, whole value with
 formatting merged 0.778.
 
+## The candidate, fixed before real set 10
+
+**Rule.** On all nine sets together, the threshold that files the most right names while filing
+no more really-wrong names than today's least-token gate at 0.7 (2), is 0.5945 (58 right, 10
+minor, 2 really wrong). The next reading below it, at 0.5935, is really wrong. The candidate is
+that threshold rounded up to the next multiple of 0.05, so it does not sit on that edge: **0.60**
+(`tiers::REVIEW_BELOW_WHOLE_VALUE_CONFIDENCE`). On the nine sets it files **55 right, 10 minor and 2
+really wrong**, against 41, 6 and 2 today. That figure comes from an end-to-end replay with
+`--confidence-score whole-value --min-token-confidence 0.7`.
+
+**How to run it.** `intern-bench run ... --min-token-confidence 0.7 --confidence-score
+whole-value`. The whole-value gate has its own threshold (0.60, or `--whole-value-threshold X`)
+and is never compared with `--min-token-confidence`. A reply without a token trace has no
+whole-value figure, so it falls back to the least-token gate at that threshold. Turning the option
+on can therefore not hold a reading against 0.7 on the wrong scale. The recording must be traced:
+`candidate-bench` with token traces on, as for real set 9.
+
+**Set 10 pass rule.** One live traced run of set 10 by the 9B, replayed at strict, once with today's
+gate (`--min-token-confidence 0.7`) and once with the candidate (the same plus `--confidence-score
+whole-value`). Names are judged by `review-levels-2026-11/policy/severity.py`, then every filed name
+that is not exactly right is read by hand. Where the script and the hand count differ, the larger
+really-wrong count decides. The candidate passes only if all three hold:
+
+1. **No more really-wrong names filed than today's gate files on set 10.**
+2. **No more than 10% of the names it files are really wrong** (the review-levels bar).
+3. **At least 2 more right names filed than today's gate files on set 10.**
+
+If (1) or (2) fails, the candidate is rejected, and 0.60 is not tuned on set 10. If only (3)
+fails, the result is inconclusive and the score stays off. The nine sets gained 14 right names
+over 498 documents, so a set of about 50 documents is expected to gain about 1.4. Rule (3)
+asks for a bit more than that, which keeps a chance gain of 1 from shipping it. One set cannot
+certify a rate either way.
+
 ## What this does not show
 
 - **Small numbers.** The pool holds 15 really-wrong names, and both scores file 2. The
@@ -91,15 +124,15 @@ formatting merged 0.778.
   and are development data now. The held-out thresholds above are also chosen on sets that shaped
   earlier rules. Only a fresh set can confirm a threshold.
 - **Not a calibration.** A product is lower than its least factor, so the whole-value score's
-  threshold sits lower (about 0.59 here against 0.7). The two numbers are not comparable, and
-  setting `--min-token-confidence 0.7` with `--confidence-score whole-value` would hold *more* than
-  today.
+  threshold sits lower (0.60 against 0.7). The two numbers are not comparable, which is why the
+  whole-value gate has a threshold of its own.
 - **One mismatch with the analysis.** On 132 of 133 readings the engine's figures equal the
   analysis scripts' figures. On `real3-office-14` the scripts map the token trace onto the reply
   differently, and the engine's reading (0.616) is used above.
 - **The app is unchanged.** The desktop app asks for one token alternative and never sets the
   option. Turning the score on would mean asking for two alternatives (`top_logprobs: 2`, which
-  generates no token differently) and choosing a threshold.
+  generates no token differently; `ModelClient::with_whole_value_confidence`) and
+  `Engine::with_whole_value_gate(REVIEW_BELOW_WHOLE_VALUE_CONFIDENCE)`.
 
 ## Reproducing
 
@@ -114,4 +147,5 @@ recording, with the gold from `scripts/realdocs-eval/sample*.json` (minus each e
     python3 loso.py WORKDIR/wv-rows.json
 
 and for the engine's own figures:
-`intern-bench run ... --confidence-score whole-value --min-token-confidence X`.
+`intern-bench run ... --min-token-confidence 0.7 --confidence-score whole-value
+[--whole-value-threshold X]`.

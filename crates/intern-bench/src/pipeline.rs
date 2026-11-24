@@ -17,10 +17,14 @@
 //! --review-level strict|balanced  which readings count as ready, as the
 //!                                 app's setting does (strict by default)
 //! --confidence-score min|whole-value
-//!                                 what --min-token-confidence is compared
-//!                                 with: the least probable token (the app's,
-//!                                 by default) or the whole-value figure
-//!                                 worked out from a traced recording
+//!                                 the token gate: the least probable token
+//!                                 below --min-token-confidence (the app's,
+//!                                 by default), or the whole-value figure,
+//!                                 worked out from a traced recording, below
+//!                                 the candidate gate (0.60,
+//!                                 tiers::REVIEW_BELOW_WHOLE_VALUE_CONFIDENCE)
+//!                                 or --whole-value-threshold X; a reply with
+//!                                 no trace falls back to the least token
 //! ```
 //!
 //! The evidence pipeline's own measurements are here too
@@ -51,6 +55,7 @@ pub const KEYS: &[&str] = &[
     "min-token-confidence",
     "review-level",
     "confidence-score",
+    "whole-value-threshold",
 ];
 
 /// How a run's engine is configured.
@@ -76,10 +81,11 @@ pub struct EngineSettings {
     /// every level, so, like the threshold above, it is scoring alone: it
     /// is not in a recording's header and stales nothing.
     pub review_level: ReviewLevel,
-    /// Whether the threshold is compared with the whole-value figure
-    /// ([`Engine::with_whole_value_confidence`]) rather than the least
-    /// probable token. Off by default; scoring alone, like the threshold.
-    pub whole_value_confidence: bool,
+    /// The whole-value gate ([`Engine::with_whole_value_gate`]), when the
+    /// run is scored by it. Its own threshold, never the least-token one:
+    /// the two figures are on different scales. Off by default; scoring
+    /// alone, like the threshold.
+    pub whole_value_gate: Option<f32>,
 }
 
 impl Default for EngineSettings {
@@ -91,7 +97,7 @@ impl Default for EngineSettings {
             profile: None,
             min_token_confidence: None,
             review_level: ReviewLevel::Strict,
-            whole_value_confidence: false,
+            whole_value_gate: None,
         }
     }
 }
@@ -151,15 +157,31 @@ impl EngineSettings {
                 .ok_or_else(|| format!("--review-level is strict or balanced, not {word}"))?;
         }
         if let Some(word) = values.get("confidence-score") {
-            settings.whole_value_confidence = match word.as_str() {
-                "min" => false,
-                "whole-value" => true,
+            settings.whole_value_gate = match word.as_str() {
+                "min" => None,
+                "whole-value" => Some(intern_engine::tiers::REVIEW_BELOW_WHOLE_VALUE_CONFIDENCE),
                 _ => {
                     return Err(format!(
                         "--confidence-score is min or whole-value, not {word}"
                     ));
                 }
             };
+        }
+        if let Some(value) = values.get("whole-value-threshold") {
+            if settings.whole_value_gate.is_none() {
+                return Err(
+                    "--whole-value-threshold is for --confidence-score whole-value".to_owned(),
+                );
+            }
+            settings.whole_value_gate = Some(
+                value
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|threshold| (0.0..=1.0).contains(threshold))
+                    .ok_or_else(|| {
+                        format!("--whole-value-threshold must be between 0 and 1, not {value}")
+                    })?,
+            );
         }
         Ok(settings)
     }
@@ -169,8 +191,11 @@ impl EngineSettings {
         let engine = engine
             .with_pipeline(self.pipeline)
             .with_retrieval(self.retrieval.clone())
-            .with_prompt_profile(self.profile)
-            .with_whole_value_confidence(self.whole_value_confidence);
+            .with_prompt_profile(self.profile);
+        let engine = match self.whole_value_gate {
+            Some(threshold) => engine.with_whole_value_gate(threshold),
+            None => engine,
+        };
         match self.min_token_confidence {
             Some(threshold) => engine.with_min_token_confidence(threshold),
             None => engine,
@@ -348,11 +373,22 @@ mod tests {
             EngineSettings::default()
         );
         assert_eq!(EngineSettings::default().review_level, ReviewLevel::Strict);
-        assert!(!EngineSettings::default().whole_value_confidence);
-        assert!(
+        assert_eq!(EngineSettings::default().whole_value_gate, None);
+        assert_eq!(
             EngineSettings::parse(&values(&[("confidence-score", "whole-value")]))
                 .unwrap()
-                .whole_value_confidence
+                .whole_value_gate,
+            Some(intern_engine::tiers::REVIEW_BELOW_WHOLE_VALUE_CONFIDENCE)
+        );
+        assert_eq!(
+            EngineSettings::parse(&values(&[
+                ("confidence-score", "whole-value"),
+                ("whole-value-threshold", "0.55"),
+                ("min-token-confidence", "0.7"),
+            ]))
+            .unwrap()
+            .whole_value_gate,
+            Some(0.55)
         );
         assert_eq!(
             EngineSettings::parse(&values(&[("confidence-score", "min")])).unwrap(),
@@ -384,6 +420,7 @@ mod tests {
             ("review-level", "Balanced"),
             ("review-level", ""),
             ("confidence-score", "product"),
+            ("whole-value-threshold", "0.6"),
         ] {
             assert!(
                 EngineSettings::parse(&values(&[(key, value)])).is_err(),
