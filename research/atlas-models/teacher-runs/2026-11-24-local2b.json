@@ -1,0 +1,13 @@
+{
+ "name": "2026-11-24-local2b",
+ "stage": "local",
+ "sets": ["real1", "real2", "real3", "real4", "real5", "real6"],
+ "gate": 0.7,
+ "local": {
+  "label": "replay-qwen3.5-2b-q4km",
+  "repo": "unsloth/Qwen3.5-2B-GGUF",
+  "revision": "f6d5376be1edb4d416d56da11e5397a961aca8ae",
+  "file": "Qwen3.5-2B-Q4_K_M.gguf",
+  "sha256": "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223"
+ }
+}

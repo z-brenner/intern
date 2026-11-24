@@ -8,12 +8,15 @@ GET /health and POST /v1/chat/completions. Every request body is appended to --c
 JSON per line), so the exact system turn, user turn and grammar the engine sends are kept.
 When --answers maps the SHA-256 of a request's last user message to a reply string, that
 string is returned with every token at probability 1, so the engine parses, validates,
-composes and scores it exactly as it would a model's reply. Unknown requests get an empty
+composes and scores it exactly as it would a model's reply. When the mapped value is an object
+from teacher/answer.py ({"content", "logprobs"}), the model's own token probabilities are
+served with it, so the engine's review gate sees what it would have seen live. Unknown requests get an empty
 JSON object, which the engine rejects; nothing about them is invented.
 
 No model, no network beyond 127.0.0.1.
 """
 import argparse
+import gzip
 import hashlib
 import json
 import threading
@@ -49,7 +52,8 @@ def main():
     args = parser.parse_args()
     answers = {}
     if args.answers:
-        with open(args.answers, encoding="utf-8") as file:
+        opener = gzip.open if args.answers.endswith(".gz") else open
+        with opener(args.answers, "rt", encoding="utf-8") as file:
             answers = json.load(file)
     lock = threading.Lock()
 
@@ -85,7 +89,12 @@ def main():
             key = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
             with lock, open(args.capture, "a", encoding="utf-8") as file:
                 file.write(json.dumps({"key": key, "body": body}) + "\n")
-            content = answers.get(key, "{}")
+            answer = answers.get(key, "{}")
+            if isinstance(answer, dict):
+                content = answer.get("content") or ""
+                logprobs = answer.get("logprobs") or {"content": tokens(content)}
+            else:
+                content, logprobs = answer, {"content": tokens(answer)}
             self.send_json(200, {
                 "id": "fake",
                 "object": "chat.completion",
@@ -94,7 +103,7 @@ def main():
                     "index": 0,
                     "finish_reason": "stop",
                     "message": {"role": "assistant", "content": content},
-                    "logprobs": {"content": tokens(content)},
+                    "logprobs": logprobs,
                 }],
                 "usage": {"prompt_tokens": len(prompt) // 4, "completion_tokens": len(content) // 3},
                 "timings": {"prompt_n": len(prompt) // 4, "cache_n": 0, "prompt_ms": 1.0,

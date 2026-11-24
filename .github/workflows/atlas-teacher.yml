@@ -1,0 +1,239 @@
+# ATLAS teacher study: the free half of answering real documents with a model too large for
+# a free runner. Laboratory only: nothing here is staged, packaged or shipped, no model file is
+# committed, and nothing here rents or pays for anything.
+#
+# The engine's request for each document (system turn, evidence, grammar, temperature 0) is
+# captured with dataset/fake_server.py; the rented-GPU job (teacher/hf_job.py) answers those
+# requests with the teacher; the answers are served back through fake_server.py, so the
+# engine parses, gates and scores them exactly as it would a live reply.
+#
+# A run spec is research/atlas-models/teacher-runs/<name>.json:
+#
+#   {"name": "2026-11-24-capture1",
+#    "stage": "capture" | "local" | "score",
+#    "sets": ["real1", ...],                  # real7 and real8 are refused
+#    "gate": 0.7,
+#    # stage "local" (proves the path end to end on CPU, free): one small model answers
+#    "local": {"label": "...", "repo": "...", "revision": "<commit>", "file": "....gguf", "sha256": ""},
+#    # stage "score": answers produced elsewhere, committed under results/teacher/
+#    "score": {"label": "...", "answers_dir": "research/atlas-models/results/teacher/<run>/answers-<label>"}}
+#
+# Results go to research/atlas-models/results/teacher/<name>/: <set>/requests.jsonl.gz for every
+# stage, and <label>-on-<set>/ (report, as scripts/compare_common.py reads it) for local and score.
+name: ATLAS teacher
+
+on:
+  push:
+    branches:
+      - "claude/atlas-model-research-**"
+    paths:
+      - "research/atlas-models/teacher-runs/*.json"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atlas-teacher-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan the run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      name: ${{ steps.plan.outputs.name }}
+      stage: ${{ steps.plan.outputs.stage }}
+      gate: ${{ steps.plan.outputs.gate }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Read the run spec
+        id: plan
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          python3 -I - <<'EOF'
+          import json, os, re, subprocess, sys, urllib.request
+
+          SAMPLES = {"real1": "sample.json", "real2": "sample-heldout.json", "real3": "sample-heldout2.json",
+                     "real4": "sample-heldout3.json", "real5": "sample-heldout4.json", "real6": "sample-heldout5.json"}
+          before, after = os.environ["BEFORE"], os.environ["AFTER"]
+          if re.fullmatch(r"0+", before or "0"):
+              changed = subprocess.run(["git", "show", "--name-only", "--format=", after],
+                                       capture_output=True, text=True, check=True).stdout.split()
+          else:
+              changed = subprocess.run(["git", "diff", "--name-only", before, after],
+                                       capture_output=True, text=True, check=True).stdout.split()
+          specs = [p for p in changed if re.fullmatch(r"research/atlas-models/teacher-runs/[a-z0-9._-]+\.json", p) and os.path.exists(p)]
+          if len(specs) != 1:
+              sys.exit(f"expected exactly one changed teacher run spec, found {specs}")
+          spec = json.load(open(specs[0], encoding="utf-8"))
+          name, stage = spec.get("name", ""), spec.get("stage", "")
+          if not re.fullmatch(r"[a-z0-9._-]+", name):
+              sys.exit("name must match [a-z0-9._-]+")
+          if os.path.exists(f"research/atlas-models/results/teacher/{name}"):
+              sys.exit(f"results for {name} already exist; give the run a new name")
+          if stage not in ("capture", "local", "score"):
+              sys.exit("stage must be capture, local or score")
+          gate = float(spec.get("gate", 0.7))
+          sets = list(dict.fromkeys(spec.get("sets", [])))
+          for s in sets:
+              if s not in SAMPLES:
+                  sys.exit(f"set {s!r} is not one of {', '.join(SAMPLES)} (real7 and real8 are never screened)")
+          extra = {"label": "", "url": "", "sha256": "", "repo": "", "revision": "", "file": "", "answers_dir": ""}
+          if stage == "local":
+              c = spec["local"]
+              label, repo, revision, file = c["label"], c["repo"], c.get("revision", "main"), c["file"]
+              if not re.fullmatch(r"[a-z0-9._-]+", label): sys.exit(f"bad label {label!r}")
+              if not re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", repo): sys.exit(f"bad repo {repo!r}")
+              if not re.fullmatch(r"[A-Za-z0-9._-]+\.gguf", file): sys.exit(f"bad file {file!r}")
+              if c.get("sha256") and not re.fullmatch(r"[0-9a-f]{64}", c["sha256"]): sys.exit("bad sha256")
+              if not re.fullmatch(r"[0-9a-f]{40}", revision):
+                  request = urllib.request.Request(f"https://huggingface.co/api/models/{repo}/revision/{revision}",
+                                                   headers={"User-Agent": "Intern ATLAS research (https://github.com/z-brenner/intern)"})
+                  revision = json.load(urllib.request.urlopen(request, timeout=60))["sha"]
+              extra.update(label=label, repo=repo, revision=revision, file=file, sha256=c.get("sha256", ""),
+                           url=f"https://huggingface.co/{repo}/resolve/{revision}/{file}")
+          if stage == "score":
+              c = spec["score"]
+              label, answers_dir = c["label"], c["answers_dir"].rstrip("/")
+              if not re.fullmatch(r"[a-z0-9._-]+", label): sys.exit(f"bad label {label!r}")
+              if not re.fullmatch(r"research/atlas-models/results/teacher/[a-z0-9._-]+/[a-z0-9._-]+", answers_dir):
+                  sys.exit(f"bad answers_dir {answers_dir!r}")
+              for s in sets:
+                  if not os.path.exists(f"{answers_dir}/answers-{s}.json.gz"):
+                      sys.exit(f"no answers for {s} in {answers_dir}")
+              extra.update(label=label, answers_dir=answers_dir)
+          matrix = [{"set": s, "sample": SAMPLES[s], **extra} for s in sets]
+          print(json.dumps({"name": name, "stage": stage, "matrix": matrix}, indent=1))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"name={name}\nstage={stage}\ngate={gate}\n")
+              out.write("matrix=" + json.dumps({"include": matrix}) + "\n")
+          EOF
+
+  set:
+    name: ${{ needs.plan.outputs.stage }} ${{ matrix.label }} on ${{ matrix.set }}
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+      STAGE: ${{ needs.plan.outputs.stage }}
+      GATE: ${{ needs.plan.outputs.gate }}
+      SET: ${{ matrix.set }}
+      LABEL: ${{ matrix.label }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Lay out the lab directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/lab/keep/$SET"
+          { echo "LAB=$RUNNER_TEMP/lab"; echo "KEEP=$RUNNER_TEMP/lab/keep"; } >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.15.0
+          cache: npm
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+      - name: Install the build and OCR dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xvfb dbus x11-utils tesseract-ocr
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-candidate-bench-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/intern-linux-assets-cache
+          key: linux-runtime-${{ runner.os }}-${{ hashFiles('scripts/fetch-linux-assets.sh', 'scripts/fetch-ocr-runtime.sh', 'src-tauri/resources/runtime-assets.json') }}
+      - run: npm ci
+      - name: Build the parser worker and the benchmark
+        run: cargo build --locked --release -p intern-worker -p intern-bench --features intern-worker/windows-native
+      - name: Fetch and verify the pinned Linux runtime
+        run: scripts/fetch-linux-assets.sh "${{ runner.temp }}/intern-linux-assets-cache"
+      - name: Stage the runtime as the package lays it out
+        run: |
+          scripts/stage-linux-runtime.sh "$LAB/stage"
+          echo "LLAMA_SERVER=$LAB/stage/runtime/llama-upstream/llama-server" >> "$GITHUB_ENV"
+      - name: Fetch the real-document set
+        env:
+          SAMPLE: ${{ matrix.sample }}
+        run: |
+          python3 -I scripts/realdocs-eval/fetch.py "$LAB/$SET" "$SAMPLE" \
+            || echo "::warning::some documents of $SET were not fetched; the run scores the rest"
+          { echo "CORPUS=$LAB/$SET/corpus"; echo "GOLD=$LAB/$SET/gold.json"; } >> "$GITHUB_ENV"
+      - name: Capture the engine's request for every document
+        env:
+          INTERN_RUNTIME_DIR: ${{ runner.temp }}/lab/stage/runtime
+        run: |
+          research/atlas-models/teacher/bench_through_fake.sh "$LAB/capture" "" 18091
+          sort -u "$LAB/capture/capture.jsonl" | gzip -9n > "$KEEP/$SET/requests.jsonl.gz"
+          echo "captured $(zcat "$KEEP/$SET/requests.jsonl.gz" | wc -l) requests"
+      - name: Fetch the local model
+        if: env.STAGE == 'local'
+        env:
+          MODEL_URL: ${{ matrix.url }}
+          MODEL_SHA256: ${{ matrix.sha256 }}
+          MODEL: ${{ runner.temp }}/lab/model/local.gguf
+        run: |
+          mkdir -p "$(dirname "$MODEL")"
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 --retry 3 --retry-delay 10 \
+            --user-agent "Intern ATLAS research (https://github.com/z-brenner/intern)" --output "$MODEL" "$MODEL_URL"
+          actual="$(sha256sum "$MODEL" | cut -d' ' -f1)"
+          if [ -n "$MODEL_SHA256" ] && [ "$actual" != "$MODEL_SHA256" ]; then
+            echo "SHA-256 mismatch: expected $MODEL_SHA256, got $actual" >&2; exit 1
+          fi
+          echo "MODEL=$MODEL" >> "$GITHUB_ENV"
+          echo "MODEL_SHA256_ACTUAL=$actual" >> "$GITHUB_ENV"
+      - name: Answer the captured requests on CPU, as the GPU job would
+        if: env.STAGE == 'local'
+        run: |
+          key="$(head -c 16 /dev/urandom | sha256sum | cut -d' ' -f1)"
+          "$LLAMA_SERVER" --host 127.0.0.1 --port 18095 --api-key "$key" --model "$MODEL" \
+            --parallel 1 --ctx-size 8192 --n-gpu-layers 0 --threads 4 --threads-batch 4 \
+            --jinja --no-webui --no-mmproj --cache-ram 0 -ub 256 > "$LAB/server.log" 2>&1 &
+          server=$!
+          for _ in $(seq 600); do curl -sf "http://127.0.0.1:18095/health" >/dev/null && break; sleep 1; done
+          mkdir -p "$KEEP/answers-$LABEL"
+          python3 -I research/atlas-models/teacher/answer.py --endpoint http://127.0.0.1:18095 --api-key "$key" \
+            --requests "$KEEP/$SET/requests.jsonl.gz" --out "$LAB/answers.json" --parallel 1
+          kill "$server"; wait "$server" 2>/dev/null || true
+          gzip -9n -c "$LAB/answers.json" > "$KEEP/answers-$LABEL/answers-$SET.json.gz"
+          printf '{"repo": "%s", "revision": "%s", "file": "%s", "sha256": "%s"}\n' \
+            "${{ matrix.repo }}" "${{ matrix.revision }}" "${{ matrix.file }}" "$MODEL_SHA256_ACTUAL" > "$KEEP/answers-$LABEL/model-$SET.json"
+          echo "ANSWERS=$KEEP/answers-$LABEL/answers-$SET.json.gz" >> "$GITHUB_ENV"
+      - name: Use the committed answers
+        if: env.STAGE == 'score'
+        env:
+          ANSWERS_DIR: ${{ matrix.answers_dir }}
+        run: echo "ANSWERS=$GITHUB_WORKSPACE/$ANSWERS_DIR/answers-$SET.json.gz" >> "$GITHUB_ENV"
+      - name: Score the answers through the engine
+        if: env.STAGE != 'capture'
+        env:
+          INTERN_RUNTIME_DIR: ${{ runner.temp }}/lab/stage/runtime
+        run: |
+          research/atlas-models/teacher/bench_through_fake.sh "$LAB/score" "$ANSWERS" 18092
+          mkdir -p "$KEEP/$LABEL-on-$SET"
+          gzip -9 -c "$LAB/score/report.json" > "$KEEP/$LABEL-on-$SET/report.json.gz"
+          grep -E '^(filename |unsafe ready |total per document)' "$LAB/score/report.json.log" > "$KEEP/$LABEL-on-$SET/headline.txt" || true
+          cat "$KEEP/$LABEL-on-$SET/headline.txt"
+      - name: Commit the results to the research branch
+        if: always()
+        env:
+          NAME: ${{ needs.plan.outputs.name }}
+        run: |
+          research/atlas-models/scripts/push_results.sh "$KEEP" "research/atlas-models/results/teacher/$NAME" \
+            "ATLAS teacher results: $NAME, $STAGE ${LABEL:-capture} on $SET"

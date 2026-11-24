@@ -10,8 +10,8 @@ Nothing here is used by the app. No model weights or training data are committed
 | `scripts/simulate_cascade.py` | Offline 2B/4B to 9B escalation replay of committed readings | Runs, no model needed |
 | [`DATASET.md`](DATASET.md), `dataset/` | Synthetic documents, labels verified by the engine itself, exported as the exact production exchange | Built and verified locally (1,000 of 1,000) |
 | [`TRAINING.md`](TRAINING.md), `training/`, `train-runs/` | CPU LoRA fine-tune, GGUF conversion at the app's llama.cpp pin, student vs. untrained control | First run started 2026-11-21 |
-| `DISTILLATION.md` | Teacher-assisted and error-focused training | Next |
-| `MOE_EVALUATION.md`, `BENCHMARK_RESULTS.md`, `MODEL_COMPARISON.md` | Measured comparisons | After runner screens |
+| [`DISTILLATION.md`](DISTILLATION.md), `teacher/`, `teacher-runs/` | Teacher choice, labelling method, and the rented-GPU plan with its price; capture and replay scoring run free (`atlas-teacher.yml`), only the teacher's answers need a GPU | Plan and price written 2026-11-24; nothing rented |
+| [`MOE_EVALUATION.md`](MOE_EVALUATION.md), [`BENCHMARK_RESULTS.md`](BENCHMARK_RESULTS.md), [`MODEL_COMPARISON.md`](MODEL_COMPARISON.md) | Measured comparisons | Screens 1 and 2 and the first fine-tune measured |
 | `DEPLOYMENT.md`, `RECOMMENDATION.md` | What to ship and how | Last |
 
 Limits this work keeps: no paid GPU or inference APIs without Zack's authorization; no private
