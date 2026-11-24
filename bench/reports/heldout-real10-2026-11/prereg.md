@@ -86,3 +86,41 @@ as held out for it.
 - dpw.lacounty.gov (notice-01) refuses about half of requests with HTTP 403,
   so a run may need fetch.py run again or that file saved by hand; a run
   without it scores 49.
+
+## Addendum 1: the whole-value confidence score at 0.60 (written 2026-11-24, before the run)
+
+Written before any model has read a document of the set, and committed
+before the run starts, so the commit's time is the time this was fixed. The
+coordinator named the candidate under Zack's standing go-ahead ("Once it's
+done, get going"). This is the set's only planned use; any later run needs
+its own addendum and is reported as made with this run's results in view.
+
+- **Candidate:** commit `95f4ad551e71151d01185f63233c1c0e39ef6ca4` on branch
+  `claude/project-thread-n242vm` (draft PR 92): the whole-value token score
+  with its own threshold, 0.60 (`tiers::REVIEW_BELOW_WHOLE_VALUE_CONFIDENCE`),
+  fixed on real sets 1 to 9 by the rule in
+  `bench/reports/whole-value-confidence-2026-11/README.md` at that commit,
+  which is authoritative where this summary differs.
+- **Comparison:** today's least-token gate, `--min-token-confidence 0.7`.
+- **The run:** one live run of all 50 documents by the Qwen3.5 9B as the
+  manifest pins it, the pinned Linux runtime, `--no-repack`, four threads,
+  token traces on (`INTERN_BENCH_TOKEN_TRACE=1`, which asks for two
+  alternatives per token), built from the candidate commit. The recording is
+  then replayed at `--review-level strict` twice: once with
+  `--min-token-confidence 0.7` and once with the same plus
+  `--confidence-score whole-value`. A reply with no trace falls back to the
+  least-token gate. It runs in a 4-vCPU cloud container, as set 9's run did,
+  not a GitHub runner; Zack allowed running the tests on this device.
+- **Judging:** names are judged by
+  `review-levels-2026-11/policy/severity.py`, then every filed name that is
+  not exactly right is read by hand against the document. Where the script
+  and the hand count differ, the larger really-wrong count decides.
+- **Pass:** all three must hold. (1) The candidate files no more
+  really-wrong names than the 0.7 gate files on set 10. (2) Really-wrong
+  names are no more than 10% of the names the candidate files. (3) The
+  candidate files at least 2 more right names than the 0.7 gate. If (1) or
+  (2) fails, the candidate is rejected and 0.60 is not tuned on this set. If
+  only (3) fails, the result is inconclusive and the score stays off.
+- **Reported whatever it shows:** the figures listed above for both replays,
+  every filed name that is not exactly right with its least-token and
+  whole-value scores, and documents that did not fetch or read.
