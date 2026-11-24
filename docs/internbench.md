@@ -335,7 +335,8 @@ Inputs:
   (`sample-heldout.json`), `real3` (`sample-heldout2.json`), `real4`
   (`sample-heldout3.json`), `real5` (`sample-heldout4.json`), `real6`
   (`sample-heldout5.json`), `real7` (`sample-heldout6.json`), `real8`
-  (`sample-heldout7.json`) and `real9` (`sample-heldout8.json`), the real
+  (`sample-heldout7.json`), `real9` (`sample-heldout8.json`) and `real10`
+  (`sample-heldout9.json`), the real
   documents fetched by
   `scripts/realdocs-eval/fetch.py` from their public sources; a source that
   is down costs its document, not the run.

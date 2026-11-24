@@ -1,0 +1,112 @@
+# Set 10 adjudication log
+
+First reader's gold against the three blind second readers, point by point. Written 2026-11-24, before any model read the set.
+
+- real10-contract-05: primary gold 2025-08-01 with 08-29 forbidden as a filing stamp was wrong: second reader showed the signature page 'EXECUTED on this the 29 day of August, 2025' (checked on the render). Gold now 2025-08-29 (execution), 2025-08-27 and 2025-08-01 accepted, readiness ready -> either.
+- real10-letter-04: party sets: reader named the Climate Change portfolio (the signature block uses it); both portfolios on the letterhead accepted
+- real10-minutes-02: party sets: board name accepted
+- real10-minutes-05: party sets: board name accepted
+- real10-minutes-03: party sets: board name accepted
+- real10-minutes-04: party sets: board name accepted
+- real10-form-01: party sets: 'for' relation accepted
+- real10-form-02: party sets: 'for' relation accepted
+- real10-form-03: party sets: 'for' relation accepted
+- real10-form-04: party sets: 'for' relation accepted
+- real10-form-05: party sets: 'for' relation accepted
+- real10-statement-02: party sets: 'for' relation accepted
+- real10-statement-04: party sets: 'for' relation accepted
+- real10-statement-01: party sets: office name accepted
+- real10-report-01: party sets: office name accepted
+- real10-memo-03: party sets: office name accepted
+- real10-letter-01: party sets: office name accepted
+- real10-letter-02: party sets: office name accepted
+- real10-letter-05: party sets: short names accepted
+- real10-notice-05: party sets: name order variant accepted
+- real10-purchase_order-01: party sets: reader filed under the buyer; already accepted as 'from'
+- real10-invoice-05: party sets: 'to' contractor accepted
+- real10-contract-05: party sets: between-set accepted
+- real10-contract-04: party sets: between-set accepted
+- real10-letter-06: type 'Notice of Award Recommendation' accepted
+- real10-contract-02: readiness kept either (reader: needs_review): signature dates are printed by the e-signature tool, the City Manager date completes execution
+- real10-contract-04: readiness kept ready (reader: either): the effective date is stated; the lessor/lessee swap does not change the name
+- real10-form-02: readiness kept either (reader: ready): the corporation name is in form fields that the text layer lacks
+- real10-form-03: readiness kept either (reader: ready): the execution date is visible only on the render
+- real10-invoice-01: readiness kept either (reader: ready): issuer name only in the logo and web address
+- real10-invoice-05: readiness kept either (reader: needs_review): issuer and run date are printed; date choice debatable, period end accepted
+- real10-memo-04: readiness kept either (reader: ready): institution named only in the logo image
+- real10-letter-03: readiness kept either (reader: ready): Task Force vs NC DOJ sender
+- real10-letter-05: readiness kept ready (reader: either): one printed date, sender in letterhead
+- real10-contract-01: forbidden dates added from second reader: 2025-01-13, 2025-10-23
+- real10-contract-01: forbidden names added from second reader: Marista Jorve, Caleb Coville, Marsh, City of Everett Public Works
+- real10-contract-02: forbidden dates added from second reader: 2024-10-21, 2024-02-07, 2028-12-13
+- real10-contract-02: forbidden names added from second reader: Xavier Vigil
+- real10-contract-04: forbidden dates added from second reader: 2030-09-30, 2025-09-30, 2025-09-23, 2025-10-03
+- real10-contract-04: forbidden names added from second reader: Chris Hill, Yoon Kim, Sandeep Kathuria
+- real10-contract-05: forbidden dates added from second reader: 2030-08-31, 2030-07-31, 2027-10-01, 2025-09-02
+- real10-contract-05: forbidden names added from second reader: Bobby Stovall, Holly Gray, Greenville Exchange Building, Commissioners Court, Department of Labor, Bureau of Labor Statistics
+- real10-form-01: forbidden names added from second reader: 3M Company, AT&T Louisiana and its Subsidiaries, Blue Cross and Blue Shield of Louisiana, yes. every kid, Inc.
+- real10-form-02: forbidden dates added from second reader: 2025-01-09
+- real10-form-02: forbidden names added from second reader: Crepin Nzenguet, Internal Revenue Service
+- real10-form-03: forbidden dates added from second reader: 2016-01-01
+- real10-form-03: forbidden names added from second reader: Fair Political Practices Commission, FPPC
+- real10-form-04: forbidden dates added from second reader: 2025-10-19, 2025-09-21, 2025-10-21
+- real10-form-04: forbidden names added from second reader: Arizona Secretary of State
+- real10-form-05: forbidden dates added from second reader: 2026-01-23
+- real10-form-05: forbidden names added from second reader: Indiana Election Division, Democratic
+- real10-invoice-01: forbidden dates added from second reader: 2025-09-05
+- real10-invoice-02: forbidden dates added from second reader: 2024-11-07, 2025-01-10
+- real10-invoice-03: forbidden dates added from second reader: 2025-08-27, 2025-09-25, 2025-09-22, 2025-10-03
+- real10-invoice-03: forbidden names added from second reader: Todd Rutledge, Kenneth Olson, Ross Nixon
+- real10-invoice-04: forbidden dates added from second reader: 2024-09-09, 2024-11-03
+- real10-invoice-04: forbidden names added from second reader: Benesch, Erik Lewis, I Akinwande
+- real10-invoice-05: forbidden dates added from second reader: 2025-07-11
+- real10-invoice-05: forbidden names added from second reader: Delta County, PMWeb
+- real10-letter-01: forbidden names added from second reader: Food and Drug Administration
+- real10-letter-02: forbidden dates added from second reader: 2025-04-28
+- real10-letter-02: forbidden names added from second reader: Plan C, Ethics and Public Policy Center
+- real10-letter-03: forbidden dates added from second reader: 2025-08-06, 2023-03-17, 2023-05-19
+- real10-letter-04: forbidden names added from second reader: Minister Responsible for RMA Reform
+- real10-letter-05: forbidden names added from second reader: Treasury of Guam
+- real10-letter-06: forbidden names added from second reader: Atlantic Awnings & Metal Works, Inc., Eventstar Structures, Corp.
+- real10-letter-07: forbidden names added from second reader: Clerk/Treasurer
+- real10-letter-08: forbidden dates added from second reader: 2025-06-15, 2025-05-16
+- real10-letter-08: forbidden names added from second reader: Appeals2
+- real10-memo-01: forbidden names added from second reader: Mark Swann, Bilierae Johnson
+- real10-memo-02: forbidden names added from second reader: Governor Newsom
+- real10-memo-03: forbidden dates added from second reader: 2028-08-16
+- real10-memo-03: forbidden names added from second reader: Andre-Denis G. Wright, Sarah Ellis, University of Oklahoma Board of Regents, Deans, Associate Deans, Chairs, and Directors
+- real10-memo-04: forbidden dates added from second reader: 2025-04-12
+- real10-memo-04: forbidden names added from second reader: Sandy French, Christopher Sabine, Manoa Office of Business and Finance
+- real10-minutes-01: forbidden dates added from second reader: 2025-04-07, 2025-05-20, 2025-06-25
+- real10-minutes-01: forbidden names added from second reader: OPSBA
+- real10-minutes-02: forbidden dates added from second reader: 2025-05-16, 2025-05-19
+- real10-minutes-02: forbidden names added from second reader: U.S. Department of Housing and Urban Development, Pennsylvania Housing Finance Agency, Andrea Bowman
+- real10-minutes-03: forbidden dates added from second reader: 2025-09-17, 2025-05-21, 2025-08-26, 2025-10-20, 2025-11-20
+- real10-minutes-03: forbidden names added from second reader: State Fiscal Accountability Authority, National Council of State Housing Agencies
+- real10-minutes-04: forbidden names added from second reader: John Bosen
+- real10-minutes-05: forbidden dates added from second reader: 2025-08-28, 2025-08-19, 2026-01-01, 2025-10-24
+- real10-minutes-05: forbidden names added from second reader: Eric Braun, Arne Morris, Ashley Lommers-Johnson, U.S. Department of Housing and Urban Development
+- real10-notice-01: forbidden names added from second reader: California Air Resources Board
+- real10-notice-04: forbidden names added from second reader: Mission Economic Development Agency, Castro/Upper Market Community Benefit District, Noise Pop Industries LLC, Office of Small Business, Community Economic Development
+- real10-notice-05: forbidden dates added from second reader: 2025-06-04
+- real10-notice-06: forbidden names added from second reader: Bremerton School District, Puget Sound Energy
+- real10-order-01: forbidden dates added from second reader: 2025-07-03, 2021-04-07, 2026-01-29, 2025-07-24
+- real10-order-01: forbidden names added from second reader: Kevin Meenan, Notary Public
+- real10-order-02: forbidden dates added from second reader: 2023-04-27
+- real10-order-02: forbidden names added from second reader: Edie Nugent
+- real10-order-03: forbidden dates added from second reader: 2025-03-06, 2025-01-08, 2025-02-24
+- real10-order-03: forbidden names added from second reader: John A. Alexy, Steven Ritardi, Brenda B. Alves, Brandon Garcia, Carlos Minacapelli, Appellate Division of the Superior Court
+- real10-purchase_order-01: forbidden dates added from second reader: 2020-10-26, 2021-08-31
+- real10-purchase_order-01: forbidden names added from second reader: Erin Perry, Lamar R. Garcia, Miguel Castro, Texas Department of Criminal Justice, Texas Correctional Industries
+- real10-purchase_order-02: forbidden names added from second reader: Board of Regents of the Texas A&M University System
+- real10-report-01: forbidden dates added from second reader: 2025-09-09, 2025-12-03
+- real10-report-01: forbidden names added from second reader: Troy Elliott, Frost, City Council
+- real10-report-02: forbidden names added from second reader: Ricky Hatch, James H. Harvey, Sharon Bolos, Gage Froerer, Pfizer, Medico-Mart Inc, Weber Morgan Health Department
+- real10-statement-01: forbidden dates added from second reader: 2026-04-15, 2025-12-31
+- real10-statement-01: forbidden names added from second reader: Angelina County Commissioners Court, TexPool
+- real10-statement-02: forbidden dates added from second reader: 2025-09-19
+- real10-statement-03: forbidden dates added from second reader: 2025-11-12
+- real10-statement-04: forbidden names added from second reader: Hayfield Park
+- real10-letter-04: the second reader's 'to Mayors, Chairs and Chief Executives' set was not taken; a class of addressee stays forbidden
+- real10-memo-03: dropped forbidden name 'Andre-Denis G. Wright' (Provost who sends (second reader)): it is an accepted party
+- real10-memo-04: dropped forbidden name 'Sandy French' (Chief Business Officer, a signer (second reader)): it is an accepted party

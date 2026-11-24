@@ -1,0 +1,5408 @@
+{
+ "notice": "A ninth held-out set of real documents (the tenth set in all), none in the nine earlier samples (sample.json, sample-heldout.json through sample-heldout8.json), from hosts those samples did not use (no URL, host or SHA-256 of their 498 documents recurs). 50 documents from 48 hosts: 8 letters, 1 e-mail, 6 notices, 5 contracts, 3 orders (two consent orders and a records-council decision), 5 sets of minutes, 4 memoranda, 5 invoices, 2 purchase orders, 5 forms, 4 statements, 2 reports. Gold expects 28 ready, 18 either and 4 needs_review, so readiness is judged on 32. No synthetic document is in the set. Concentration: no host gives more than 2 documents (www.nj.gov: real10-order-02 and -03, from two different bodies; oronocotownship-mn.gov: real10-invoice-01 and -02, from two different vendors); 6 documents are from outside the United States (New Zealand, Ireland, Northern Ireland, England, Ontario). Hosts that are close kin of earlier ones are these: www.dgs.ca.gov, www.auburn.ca.gov and www.eldoradocounty.ca.gov (real10-notice-03, real10-memo-02, real10-notice-05) are under ca.gov, which earlier samples drew on through four other bodies' sites; web.sos.ky.gov (real10-form-02) is under ky.gov, as are psc.ky.gov and transportation.ky.gov; www.whitestown.in.gov and laporteco.in.gov (real10-invoice-03, real10-form-05) are under in.gov, which an earlier sample used directly; the three gov.uk parish and borough sites and gw.govt.nz share only the national suffix with earlier hosts. Party strings an earlier sample also carries are these: 'Office of the Attorney General' and 'OAG' (accepted for New York's office on real10-letter-01) name other offices in real6-letter-06, real8-letter-13, real9-letter-07 and real4-office-08; 'Department of General Services', 'DGS', 'California Department of General Services' and 'State of California' (accepted on real10-notice-03) are carried by real4-office-10 and -11 (the same California department, from a 2016 FOIA release on law.resource.org) and by real4-notice-01 and real7-form-02. How gold was made: one reader wrote gold for each document from its own text (page renders read for scanned or image-only parts: real10-contract-02, real10-contract-05, real10-order-02, real10-minutes-04, real10-letter-08, real10-form-02, real10-form-03, real10-form-05, real10-statement-01 and the logos of real10-invoice-01, real10-memo-04 and real10-statement-02), without any model's reading of it; three second readers each read a third of the set blind, given only the documents and a brief, and wrote gold independently; the two readings were adjudicated against the documents. One primary label was wrong and changed: real10-contract-05, where the first reader took 29 August 2025 for the recording stamp only and the second showed the signature page 'EXECUTED on this the 29 day of August, 2025' (gold now 2025-08-29, with 27 August and 1 August accepted). Otherwise the second readers agreed with the first on type, date and party for all 50 in the sense that each reading accepts the other's answer, after accepted name variants were added (office names such as 'City of San Antonio Office of the City Auditor', board names on minutes, 'for' on filings); they differed on readiness for 9 more documents (kept as the first reader set them, reasons logged), on the sender of real10-notice-01 (the district that issued the notice versus the landfill it was issued to; both accepted, the issuer primary), and on purchase orders (named 'to' the vendor, as earlier samples do; 'from' the buyer accepted); their extra forbidden dates and names were merged, except where a name is an accepted party. The second readers are AI readers of the same family as the first, not people, so the second reading is weaker evidence of independence than a human one, and the adjudicator saw the second readers' lists of documents they marked unsure before adjudicating. Known hard cases: an Irish day-month date (real10-letter-08, 09/06/2025 is 9 June); an undated ministerial letter (real10-letter-04, gold date null); a handwritten notice of violation with violation and service dates (real10-notice-01); publication versus hearing dates (real10-notice-05, -06); cover memos bundled before contracts and awards (real10-contract-02, real10-letter-06); a lease with a recording stamp and hand-amended dates (real10-contract-05); an undated board order (real10-order-02); an e-mail printed from a mailbox whose owner is not the sender (real10-email-01); filled form values that are form fields absent from the text layer (real10-form-02, where a text-only reader cannot see the corporation's name); issuers named only in a logo image (real10-invoice-01, real10-memo-04, real10-statement-02); a bank reconciliation that names no body at all (real10-statement-03, parties empty); and a state pay estimate rather than a vendor invoice (real10-invoice-05). Fetching: every URL was fetched with fetch.py's own user agent and matched its pinned size and SHA-256 on 2026-11-24, but dpw.lacounty.gov (real10-notice-01) answers HTTP 403 to about half of requests, whatever the user agent, so fetch.py may need running again or that file saving by hand; a run without it scores 49. source.page is null throughout: the documents were found by web search, not from a listing page. Hosts that refused or failed while the set was gathered, and so gave nothing: bbhe.az.gov, ourair.org, fremont.gov, vancouver.ca and permits.puyallupwa.gov (403), cityofhomer-ak.gov (connection reset), the City of Berkeley site (502), and several 404s. Licences are per document under source.license; all are public-sector or public-university publications with no licence stated on the file. Only URLs, pins, notes and gold are committed; no document text is. The set was sealed for one candidate, the whole-value confidence score being built on a separate draft branch; no model has read it, and no rule, threshold or prompt has been written from it.",
+ "documents": [
+  {
+   "id": "real10-contract-01",
+   "file": "real10-contract-01.pdf",
+   "title": "Professional Services Agreement between the City of Everett, Washington and Consor North America, Inc. for CIP tool deployment and on-call support, dated 11/20/2025 (born-digital PDF, 21 pages)",
+   "kind": "contract",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 21,
+   "categories": [
+    "contract",
+    "born_digital",
+    "effective_on_last_signature",
+    "scope_exhibit",
+    "completion_date_trap",
+    "named_signers",
+    "us_local",
+    "modern"
+   ],
+   "notes": "Title 'PROFESSIONAL SERVICES AGREEMENT', 'effective as of the date of last signature below and is between the City of Everett, a Washington municipal corporation ... and the Service Provider identified in the Basic Provisions'. Basic Provisions: Service Provider 'Consor North America, Inc', Seattle; City Project Manager Amie Campbell, Public Works; Completion Date December 31, 2028; maximum $184,196.00. Signature page: City of Everett, Cassie Franklin, Mayor, with '11/20/2025' under the city's line; Consor signed by Adam Schuyler, Principal Engineer (no date beside it). Exhibit A scope footer 'Consor - September 2025'. The only signature date is 11/20/2025, which the agreement makes its effective date. Traps: the completion date; the scope's month; the mayor; the signer; the project manager.",
+   "source": {
+    "name": "City of Everett, Washington (Laserfiche portal), website",
+    "url": "https://lfportal.everettwa.gov/WebLink/0/edoc/2022111/Consor,%20Inc.%2011202025.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 665794,
+    "sha256": "720d556abd788918021c4c0a4698457b15b5d3f163b802b3c65a02941d89870f"
+   },
+   "gold": {
+    "document_type": "Professional Services Agreement",
+    "acceptable_types": [
+     "Agreement",
+     "Services Agreement",
+     "Contract"
+    ],
+    "document_date": "2025-11-20",
+    "acceptable_dates": [],
+    "date_role": "effective",
+    "forbidden_dates": [
+     {
+      "date": "2028-12-31",
+      "why": "completion date"
+     },
+     {
+      "date": "2025-01-13",
+      "why": "City Attorney approved-as-to-form date of the standard document (second reader)"
+     },
+     {
+      "date": "2025-10-23",
+      "why": "PDF creation date (metadata) (second reader)"
+     }
+    ],
+    "parties": [
+     "City of Everett",
+     "Consor North America, Inc."
+    ],
+    "party_relation": "between",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Consor North America, Inc."
+      ],
+      "relation": "with"
+     },
+     {
+      "parties": [
+       "City of Everett"
+      ],
+      "relation": "with"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "City of Everett",
+      "role": "counterparty"
+     },
+     {
+      "name": "Consor North America, Inc.",
+      "role": "vendor"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Cassie Franklin",
+      "why": "mayor who signs"
+     },
+     {
+      "name": "Adam Schuyler",
+      "why": "principal engineer who signs"
+     },
+     {
+      "name": "Amie Campbell",
+      "why": "city project manager"
+     },
+     {
+      "name": "Marista Jorve",
+      "why": "City clerk staff in audit trail (second reader)"
+     },
+     {
+      "name": "Caleb Coville",
+      "why": "insurance contact (second reader)"
+     },
+     {
+      "name": "Marsh",
+      "why": "insurance contact's firm (second reader)"
+     },
+     {
+      "name": "City of Everett Public Works",
+      "why": "department of the project manager; the City is the party (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-contract-02",
+   "file": "real10-contract-02.pdf",
+   "title": "City of Santa Fe Professional Services Contract 24-0698 with Kashiwagi Solution Model, Inc., behind a November 15, 2024 approval memorandum; signed November 8 (contractor) and November 26, 2024 (City Manager), attested December 13, 2024 (mostly scanned PDF, 33 pages)",
+   "kind": "contract",
+   "format": "pdf",
+   "text_layer": "scan",
+   "pages": 33,
+   "categories": [
+    "contract",
+    "scanned",
+    "bundle",
+    "cover_memo",
+    "multiple_signature_dates",
+    "e_signature_audit",
+    "approval_stamp",
+    "us_local",
+    "modern"
+   ],
+   "notes": "Page 1: City of Santa Fe memorandum 'Date: November 15, 2024, To: John Blair, City Manager, From: Travis Dutton-Leyda, Chief Procurement Officer ... Vendor Name: Kashiwagi Solution Model, Inc. (KSM)'. Pages with stamps '11/21/2024' and item 24-0697. The contract: 'CITY OF SANTA FE / PROFESSIONAL SERVICES CONTRACT ... between the City of Santa Fe, New Mexico ... and Kashiwagi Solution Model, Inc. (KSM) ... effective as of the date set forth below upon which it is executed by the Parties'; footer 'Version 7 08.27.2024'. Signature page: 'Randy Randall (Nov 26, 2024 20:35 CST)', Interim City Manager; contractor Joseph Kashiwagi, President, 'DATE: Nov 8, 2024'; attest 'Andrea Salazar (Dec 13, 2024)', City Clerk; Marcos Martinez (Nov 8, 2024), Senior Assistant City Attorney; Emily Oster, Finance Director. Last page: Adobe 'Final Audit Report 2024-12-13'. The contract is executed when the parties sign: the City Manager's November 26, 2024 completes it; the contractor's date and the clerk's attest are accepted. Many dates and a cover memo: 'either'. Traps: the memo date; the approval stamp; the form version date; PDF dates (2024-12-02, 2025-04-10); all signers.",
+   "source": {
+    "name": "City of Santa Fe, New Mexico, website",
+    "url": "https://santafenm.gov/media/sunshine_contracts/24-0698_Kashiwagi_Solution_Model%2C_Inc.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 10706809,
+    "sha256": "4d8b2268bb8a4285e2d59434cfdfa7c23e9a7fa91ca95f78b2703b80abed5586"
+   },
+   "gold": {
+    "document_type": "Professional Services Contract",
+    "acceptable_types": [
+     "Contract",
+     "Professional Services Agreement",
+     "Agreement"
+    ],
+    "document_date": "2024-11-26",
+    "acceptable_dates": [
+     "2024-11-08",
+     "2024-12-13"
+    ],
+    "date_role": "execution",
+    "forbidden_dates": [
+     {
+      "date": "2024-11-15",
+      "why": "date of the cover memorandum"
+     },
+     {
+      "date": "2024-11-21",
+      "why": "approval stamp"
+     },
+     {
+      "date": "2024-08-27",
+      "why": "form version date in the footer"
+     },
+     {
+      "date": "2024-12-02",
+      "why": "PDF creation date (metadata)"
+     },
+     {
+      "date": "2024-10-21",
+      "why": "version date in the memo footer (second reader)"
+     },
+     {
+      "date": "2024-02-07",
+      "why": "date of the business license exemption declaration (second reader)"
+     },
+     {
+      "date": "2028-12-13",
+      "why": "computed termination, four years from final signature (second reader)"
+     }
+    ],
+    "parties": [
+     "City of Santa Fe",
+     "Kashiwagi Solution Model, Inc."
+    ],
+    "party_relation": "between",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Kashiwagi Solution Model, Inc."
+      ],
+      "relation": "with"
+     },
+     {
+      "parties": [
+       "KSM"
+      ],
+      "relation": "with"
+     },
+     {
+      "parties": [
+       "City of Santa Fe"
+      ],
+      "relation": "with"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "City of Santa Fe",
+      "role": "counterparty"
+     },
+     {
+      "name": "Kashiwagi Solution Model, Inc.",
+      "role": "vendor"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Randy Randall",
+      "why": "interim City Manager who signs"
+     },
+     {
+      "name": "Joseph Kashiwagi",
+      "why": "president who signs"
+     },
+     {
+      "name": "Andrea Salazar",
+      "why": "city clerk who attests"
+     },
+     {
+      "name": "Travis Dutton-Leyda",
+      "why": "procurement officer, memo author"
+     },
+     {
+      "name": "John Blair",
+      "why": "city manager addressed in the memo"
+     },
+     {
+      "name": "Emily Oster",
+      "why": "finance director"
+     },
+     {
+      "name": "Marcos Martinez",
+      "why": "assistant city attorney"
+     },
+     {
+      "name": "Kashiwagi Solution Group",
+      "why": "name used in the memo body"
+     },
+     {
+      "name": "Xavier Vigil",
+      "why": "created the Adobe Sign transaction (second reader)"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real10-contract-03",
+   "file": "real10-contract-03.pdf",
+   "title": "Professional Services Agreement among the City of Lawrence, Indiana (Board of Public Works and Safety), City of Lawrence Utilities and United Consulting, signed by the contractor April 16, 2025, term from May 12, 2025 (born-digital PDF, 11 pages)",
+   "kind": "contract",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 11,
+   "categories": [
+    "contract",
+    "born_digital",
+    "three_parties",
+    "one_signature_dated",
+    "term_start_trap",
+    "us_local",
+    "modern"
+   ],
+   "notes": "Title 'PROFESSIONAL SERVICES AGREEMENT' 'entered into by and between the City of Lawrence, Indiana, by and through its Board of Public Works and Safety (the City), the City of Lawrence Utilities, by and through the Utility Service Board ... (Utilities), and United Consulting (Contractor)'. Term 'shall begin on May 12, 2025, and terminate on December 31, 2025'. Signature page: contractor signed by Michael Rowe, President, and Jeromy A. Richardson, Vice President, 'DATE: April 16, 2025'; City (Jim Perron, Chair) and Utilities (Tracy Boyd, Chair) lines with no date. PDF created 2025-04-17. The only execution date is the contractor's; the term start is accepted. 'either'. Traps: the term end; signers.",
+   "source": {
+    "name": "City of Lawrence, Indiana, website",
+    "url": "https://cityoflawrence.org/sites/default/files/attachments/USI%20-%20professionial%20services%20agreement.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 301734,
+    "sha256": "f1371c3f136eaccd149399f63bf1d239e834afb4d693e60a8a2da849be1888e2"
+   },
+   "gold": {
+    "document_type": "Professional Services Agreement",
+    "acceptable_types": [
+     "Agreement",
+     "Contract",
+     "Services Agreement"
+    ],
+    "document_date": "2025-04-16",
+    "acceptable_dates": [
+     "2025-05-12"
+    ],
+    "date_role": "execution",
+    "forbidden_dates": [
+     {
+      "date": "2025-12-31",
+      "why": "term end date"
+     },
+     {
+      "date": "2025-04-17",
+      "why": "PDF creation date (metadata)"
+     }
+    ],
+    "parties": [
+     "City of Lawrence",
+     "United Consulting"
+    ],
+    "party_relation": "between",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "United Consulting"
+      ],
+      "relation": "with"
+     },
+     {
+      "parties": [
+       "City of Lawrence"
+      ],
+      "relation": "with"
+     },
+     {
+      "parties": [
+       "City of Lawrence Utilities",
+       "United Consulting"
+      ],
+      "relation": "between"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "City of Lawrence",
+      "role": "counterparty"
+     },
+     {
+      "name": "City of Lawrence Utilities",
+      "role": "counterparty"
+     },
+     {
+      "name": "United Consulting",
+      "role": "vendor"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Michael Rowe",
+      "why": "contractor's president who signs"
+     },
+     {
+      "name": "Jeromy A. Richardson",
+      "why": "contractor's vice president who signs"
+     },
+     {
+      "name": "Jim Perron",
+      "why": "chair of the Board of Public Works and Safety"
+     },
+     {
+      "name": "Tracy Boyd",
+      "why": "chair of the Utility Service Board"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real10-contract-04",
+   "file": "real10-contract-04.pdf",
+   "title": "Commercial Lease Agreement effective September 22, 2025 between Collin County (County Clerk) as lessor and the Collin County Healthcare Foundation as lessee (scanned with OCR, 4 pages)",
+   "kind": "contract",
+   "format": "pdf",
+   "text_layer": "ocr",
+   "pages": 4,
+   "categories": [
+    "contract",
+    "lease",
+    "ocr",
+    "effective_date_in_text",
+    "commencement_trap",
+    "same_family_parties",
+    "us_local",
+    "modern"
+   ],
+   "notes": "'THIS COMMERCIAL LEASE AGREEMENT (\"Agreement\") is entered into as of the 22nd day of September. 2025 (\"Effective Date\"), by and between: Lessor: Collin County, County Clerk ... Lessee: Collin County Healthcare Foundation ...'. Term commences 'October 1. 2025'; rent $1,356.25. Premises use 'solely for Collin County, County Clerk'. Signature block begins 'LESSEE: Collin County', a muddle in the form. Notices to 900 E. Park Blvd., Plano. Traps: the commencement date; 'County Clerk' (a division).",
+   "source": {
+    "name": "Collin County, Texas (agenda portal), website",
+    "url": "https://eagenda.collincountytx.gov/docs/2025/CC/20250922_3137/58719%5F990%20%2D%2058719%20Lease%20Agreement%2Epdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 1194905,
+    "sha256": "237795e5618664563a1e4624cc10b0327cd426dea06b175146a127e2d4a306c2"
+   },
+   "gold": {
+    "document_type": "Commercial Lease Agreement",
+    "acceptable_types": [
+     "Lease Agreement",
+     "Lease",
+     "Agreement"
+    ],
+    "document_date": "2025-09-22",
+    "acceptable_dates": [],
+    "date_role": "effective",
+    "forbidden_dates": [
+     {
+      "date": "2025-10-01",
+      "why": "lease commencement date"
+     },
+     {
+      "date": "2030-09-30",
+      "why": "expiry of initial term (second reader)"
+     },
+     {
+      "date": "2025-09-30",
+      "why": "date of the Healthcare Foundation-side signature (second reader)"
+     },
+     {
+      "date": "2025-09-23",
+      "why": "date of the County Judge's signature (second reader)"
+     },
+     {
+      "date": "2025-10-03",
+      "why": "PDF creation/modification date (metadata) (second reader)"
+     }
+    ],
+    "parties": [
+     "Collin County",
+     "Collin County Healthcare Foundation"
+    ],
+    "party_relation": "between",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Collin County Healthcare Foundation"
+      ],
+      "relation": "with"
+     },
+     {
+      "parties": [
+       "Collin County"
+      ],
+      "relation": "with"
+     },
+     {
+      "parties": [
+       "Collin County",
+       "Collin County Healthcare Foundation"
+      ],
+      "relation": "between"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Collin County",
+      "role": "landlord"
+     },
+     {
+      "name": "Collin County Healthcare Foundation",
+      "role": "tenant"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Chris Hill",
+      "why": "County Judge who signs (second reader)"
+     },
+     {
+      "name": "Yoon Kim",
+      "why": "County Administrator who signs (second reader)"
+     },
+     {
+      "name": "Sandeep Kathuria",
+      "why": "Director of Building Projects in notices (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-contract-05",
+   "file": "real10-contract-05.pdf",
+   "title": "Office Lease Agreement dated August 1, 2025 between Hunt County, Texas (landlord) and the Greenville Board of Development (tenant), stamped filed for record August 29, 2025 (scanned with OCR, 10 pages)",
+   "kind": "contract",
+   "format": "pdf",
+   "text_layer": "ocr",
+   "pages": 10,
+   "categories": [
+    "contract",
+    "lease",
+    "ocr",
+    "recording_stamp",
+    "handwriting",
+    "us_local",
+    "modern"
+   ],
+   "notes": "Recording stamp '_FILED FOR RECORD ... AUG 2 9 2025, BECKY LANDRUM, County Clerk, Hunt County, Tex.'. 'OFFICE LEASE AGREEMENT / TERMS AND DEFINITIONS / Date: August 1, 2025 / Landlord: Hunt County, Texas / Tenant: Greenville Board of Development'; premises the 2nd floor of the Greenville Exchange Building; 60 months. Acknowledgment page: 'the Lease dated the [handwritten] day of [handwritten]-2025 by and between Hunt County, Landlord, and Tenant, Greenville Board of Development' and 'EXECUTED on this the [handwritten, 27?] day of August, 2025'. The lease's own date is August 1, 2025. Traps: the filing stamp; the county clerk; the CPI examples (1999, 2000). ADJUDICATED: the signature page reads 'EXECUTED on this the 29 day of August, 2025' (handwritten 29) and 'the Lease dated the 27 day of August'; the county clerk also filed it August 29. Execution 2025-08-29 is gold; the 'Lease dated' 27 August and the typed 'Date: August 1, 2025' are accepted; commencement amended to September 1 is forbidden. Several dates: 'either'.",
+   "source": {
+    "name": "Hunt County, Texas, website",
+    "url": "https://apps.huntcounty.net/minutes/LinkedDir/2025/Links%202025-07-29-Special/19621.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 268431,
+    "sha256": "308ead2714da3d4d646ab916cf65962afcb2513ee90a3c42c9976b6b464a713f"
+   },
+   "gold": {
+    "document_type": "Office Lease Agreement",
+    "acceptable_types": [
+     "Lease Agreement",
+     "Lease",
+     "Agreement"
+    ],
+    "document_date": "2025-08-29",
+    "acceptable_dates": [
+     "2025-08-27",
+     "2025-08-01"
+    ],
+    "date_role": "execution",
+    "forbidden_dates": [
+     {
+      "date": "2030-08-31",
+      "why": "termination date (amended from July 31, 2030) (second reader)"
+     },
+     {
+      "date": "2030-07-31",
+      "why": "struck original termination date (second reader)"
+     },
+     {
+      "date": "2027-10-01",
+      "why": "first rent escalation date (second reader)"
+     },
+     {
+      "date": "2025-09-02",
+      "why": "PDF creation date (metadata) (second reader)"
+     }
+    ],
+    "parties": [
+     "Hunt County",
+     "Greenville Board of Development"
+    ],
+    "party_relation": "between",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Greenville Board of Development"
+      ],
+      "relation": "with"
+     },
+     {
+      "parties": [
+       "Hunt County"
+      ],
+      "relation": "with"
+     },
+     {
+      "parties": [
+       "Hunt County, Texas",
+       "Greenville Board of Development"
+      ],
+      "relation": "between"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Hunt County",
+      "role": "landlord"
+     },
+     {
+      "name": "Greenville Board of Development",
+      "role": "tenant"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Becky Landrum",
+      "why": "county clerk on the recording stamp"
+     },
+     {
+      "name": "Bobby Stovall",
+      "why": "Hunt County Judge who signs (second reader)"
+     },
+     {
+      "name": "Holly Gray",
+      "why": "tenant's chairman who signs (second reader)"
+     },
+     {
+      "name": "Greenville Exchange Building",
+      "why": "the premises, not a party (second reader)"
+     },
+     {
+      "name": "Commissioners Court",
+      "why": "county body named in signage clauses (second reader)"
+     },
+     {
+      "name": "Department of Labor, Bureau of Labor Statistics",
+      "why": "CPI publisher named in escalation clause (second reader)"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real10-email-01",
+   "file": "real10-email-01.pdf",
+   "title": "E-mail of 24 November 2025 from a member of the public signed 'David' to a council planning mailbox asking that an attached photograph be shown to committee, printed with the photograph (born-digital PDF, 2 pages)",
+   "kind": "email",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 2,
+   "categories": [
+    "email",
+    "born_digital",
+    "sender_unnamed",
+    "printed_mailbox_owner",
+    "attachment_image",
+    "united_kingdom",
+    "day_month_order",
+    "modern"
+   ],
+   "notes": "Printed from Laura Crawford's mailbox (her name heads the print). 'From:' is blank; 'Sent: 24 November 2025 07:18'; 'To: Planning'; 'Subject: Re: RE: Request to speak'; 'Attachments: 1000030225.jpg'. Body asks to show the attached photograph during his presentation to the committee; signed 'Regards David'. Page 2 is the photograph. Published by Causeway Coast and Glens Borough Council; the sender's surname appears only in the host's file name, not in the document. The sender is a private individual known only by first name; the only organisation is the 'Planning' mailbox (recipient). needs_review. Traps: Laura Crawford, the mailbox owner who printed it.",
+   "source": {
+    "name": "Causeway Coast and Glens Borough Council (Northern Ireland), website",
+    "url": "https://causewaycoastandglens.gov.uk/assets/minutes/Item-5.8-LA01.2023.0418.F-Correspondence-from-David-Alexander-24.11.2025.pdf",
+    "page": null,
+    "license": "UK local-authority planning record; no licence stated on the file",
+    "size": 287225,
+    "sha256": "04cec0f3df5c99d92d23fc45106a1c282a557d660bc606390a6ae1f9744331a4"
+   },
+   "gold": {
+    "document_type": "Email",
+    "acceptable_types": [
+     "E-mail",
+     "Email Correspondence",
+     "Correspondence"
+    ],
+    "document_date": "2025-11-24",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [],
+    "parties": [
+     "Planning"
+    ],
+    "party_relation": "to",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "David"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Causeway Coast and Glens Borough Council"
+      ],
+      "relation": "to"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Planning",
+      "role": "recipient"
+     },
+     {
+      "name": "David",
+      "role": "sender"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Laura Crawford",
+      "why": "mailbox owner who printed the e-mail, not sender or recipient"
+     }
+    ],
+    "expected_readiness": "needs_review"
+   }
+  },
+  {
+   "id": "real10-form-01",
+   "file": "real10-form-01.pdf",
+   "title": "Louisiana Board of Ethics lobbyist registration for William G. (Bud) Courson, registration year 2025, submitted 1/28/2025 (born-digital, 16 pages)",
+   "kind": "form",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 16,
+   "categories": [
+    "form",
+    "born_digital",
+    "long_client_list",
+    "many_start_dates",
+    "us_state",
+    "modern"
+   ],
+   "notes": "'Louisiana Board of Ethics: Lobbyist Registration Form Registration Year: 2025 ... Lobbyist's Name: MR. WILLIAM G. (BUD) COURSON ... Employer Name: Courson Nickel, LLC'. Every page footer 'Date Submitted: 1/28/2025'. Many clients with lobbying start dates (1/23/2009 ... 9/24/2024) and first-action dates 1/01/2025. The filer is the lobbyist; the clients are traps.",
+   "source": {
+    "name": "Louisiana Board of Ethics, website",
+    "url": "https://eap.ethics.la.gov/Lobbyist/upload/496/20250128_115243_496Year2025.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 163423,
+    "sha256": "dc73d695e418de570af493a596e13eaf36444bfed705b110c8c991469edf17d4"
+   },
+   "gold": {
+    "document_type": "Lobbyist Registration",
+    "acceptable_types": [
+     "Lobbyist Registration Form",
+     "Registration",
+     "Registration Form"
+    ],
+    "document_date": "2025-01-28",
+    "acceptable_dates": [],
+    "date_role": "filing",
+    "forbidden_dates": [
+     {
+      "date": "2025-01-01",
+      "why": "date of first lobbying action"
+     },
+     {
+      "date": "2009-01-23",
+      "why": "a client's lobbying start date"
+     },
+     {
+      "date": "2024-09-24",
+      "why": "a client's lobbying start date"
+     }
+    ],
+    "parties": [
+     "William G. Courson"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Bud Courson"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "William G. (Bud) Courson"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Courson Nickel, LLC"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Louisiana Board of Ethics"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "William G. Courson"
+      ],
+      "relation": "for"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "William G. Courson",
+      "role": "filer"
+     },
+     {
+      "name": "Courson Nickel, LLC",
+      "role": "employer"
+     },
+     {
+      "name": "Louisiana Board of Ethics",
+      "role": "recipient agency"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "3M Company",
+      "why": "one of the represented clients (second reader)"
+     },
+     {
+      "name": "AT&T Louisiana and its Subsidiaries",
+      "why": "represented client (second reader)"
+     },
+     {
+      "name": "Blue Cross and Blue Shield of Louisiana",
+      "why": "represented client (second reader)"
+     },
+     {
+      "name": "yes. every kid, Inc.",
+      "why": "represented client (last listed) (second reader)"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real10-form-02",
+   "file": "real10-form-02.pdf",
+   "title": "Kentucky Articles of Incorporation (non-profit) for Foundation Ma Banniere Inc., signed and filed 01/24/2025 (2 pages; filled values are form fields absent from the text layer)",
+   "kind": "form",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 2,
+   "categories": [
+    "form",
+    "born_digital",
+    "form_fields_not_in_text_layer",
+    "filing_stamp",
+    "registered_agent_trap",
+    "us_state",
+    "modern"
+   ],
+   "notes": "Rendered page: 'Articles of Incorporation Non-profit Corporation ... Article I: The name of the corporation is Foundation Ma Banniere Inc.'; registered agent Northwest Registered Agent LLC; incorporator Nat Smith; signed 01/24/2025 by incorporator and by Taylor Newman for the agent; stamp 'Michael G. Adams Kentucky Secretary of State Received and Filed: 1/24/2025 3:47 PM'. The extracted text layer holds the blank form plus the agent name, stamp and attached purpose page: the corporation's name is not in it. A text-only reader cannot name the corporation, so 'either'. Traps: the Secretary of State; the registered agent; form revision '(1/25)'.",
+   "source": {
+    "name": "Kentucky Secretary of State, website",
+    "url": "https://web.sos.ky.gov/corpscans/97/1424597-09-99999-20250124-11335809-PU.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 386319,
+    "sha256": "b5763d5c244ce0286e1a6b9941765139f52ede9d775b2b672b25d1f5a520e8fc"
+   },
+   "gold": {
+    "document_type": "Articles of Incorporation",
+    "acceptable_types": [
+     "Articles of Incorporation (Non-profit)",
+     "Articles"
+    ],
+    "document_date": "2025-01-24",
+    "acceptable_dates": [],
+    "date_role": "filing",
+    "forbidden_dates": [
+     {
+      "date": "2025-01-09",
+      "why": "PDF creation date (metadata) (second reader)"
+     }
+    ],
+    "parties": [
+     "Foundation Ma Banniere Inc."
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Foundation Ma Banniere"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Foundation Ma Banniere Inc."
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "Foundation Ma Banniere Inc.",
+       "Kentucky Secretary of State"
+      ],
+      "relation": "with"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Foundation Ma Banniere Inc.",
+      "role": "filer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Northwest Registered Agent LLC",
+      "why": "registered agent"
+     },
+     {
+      "name": "Michael G. Adams",
+      "why": "secretary of state on the stamp"
+     },
+     {
+      "name": "Nat Smith",
+      "why": "incorporator"
+     },
+     {
+      "name": "Taylor Newman",
+      "why": "agent's representative"
+     },
+     {
+      "name": "Crepin Nzenguet",
+      "why": "director (second reader)"
+     },
+     {
+      "name": "Internal Revenue Service",
+      "why": "named in form note (second reader)"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real10-form-03",
+   "file": "real10-form-03.pdf",
+   "title": "California FPPC Form 460 recipient committee campaign statement (preelection) for Perez for City Council 2025, period through 08/10/2025, executed 08/15/2025 (5 pages, DocuSign)",
+   "kind": "form",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 5,
+   "categories": [
+    "form",
+    "born_digital",
+    "period_dates",
+    "election_date_trap",
+    "date_in_image_only",
+    "us_local",
+    "modern"
+   ],
+   "notes": "'Recipient Committee Campaign Statement Cover Page ... CALIFORNIA FORM 460'; covers 01/01/2025 through 08/10/2025; date of election 08/26/2025; Preelection Statement; committee 'Perez for City Council 2025' (misspelled 'Counsil' on a later page); treasurer Mitzy Perez; 'Executed on 08/15/2025' visible on the render. A later page shows 'through 08/10/2525' (typo). Execution date gold; period end accepted. 'either'.",
+   "source": {
+    "name": "City of Los Banos, California, website",
+    "url": "https://losbanos.org/wp-content/uploads/2025/07/460-Signed-Mitzy.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 551973,
+    "sha256": "cbde5a1405faeb78e296d5f535104ead9c14ab0f47b723cc1fffe48cb304ae4d"
+   },
+   "gold": {
+    "document_type": "Campaign Statement",
+    "acceptable_types": [
+     "Form 460",
+     "Recipient Committee Campaign Statement",
+     "Campaign Finance Report",
+     "Form 460 Campaign Statement"
+    ],
+    "document_date": "2025-08-15",
+    "acceptable_dates": [
+     "2025-08-10"
+    ],
+    "date_role": "execution",
+    "forbidden_dates": [
+     {
+      "date": "2025-08-26",
+      "why": "date of the election"
+     },
+     {
+      "date": "2025-01-01",
+      "why": "start of the period"
+     },
+     {
+      "date": "2016-01-01",
+      "why": "form revision date (Jan/2016) (second reader)"
+     }
+    ],
+    "parties": [
+     "Perez for City Council 2025"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Perez for City Council"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Perez for City Council 2025"
+      ],
+      "relation": "for"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Perez for City Council 2025",
+      "role": "filer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Mitzy Perez",
+      "why": "treasurer"
+     },
+     {
+      "name": "Fair Political Practices Commission",
+      "why": "publisher of the form (second reader)"
+     },
+     {
+      "name": "FPPC",
+      "why": "publisher of the form (second reader)"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real10-form-04",
+   "file": "real10-form-04.pdf",
+   "title": "Arizona committee campaign finance report for Play it Forward Casa Grande (PAC-25-01), 2025 November PAC pre-election report, signed 10/20/2025 (10 pages, DocuSign)",
+   "kind": "form",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 10,
+   "categories": [
+    "form",
+    "born_digital",
+    "period_table_trap",
+    "contribution_dates",
+    "form_revision_date",
+    "us_local",
+    "modern"
+   ],
+   "notes": "'STATE OF ARIZONA COMMITTEE CAMPAIGN FINANCE REPORT ... COMMITTEE ID NUMBER PAC-25-01 ... Committee Name: Play it Forward Casa Grande'. Checked period '2025 November PAC Pre-Election Report: October 1, 2025 to October 18, 2025'. Treasurer Victor Fuentes signs '10/20/2025'. Footer 'Arizona Secretary of State Revision 9/29/2025'. Schedules list contributions 10/01-10/14/2025 and disbursements. Traps: the reporting-period table; revision date; contributors.",
+   "source": {
+    "name": "City of Casa Grande, Arizona, website",
+    "url": "https://casagrandeaz.gov/DocumentCenter/View/4280/Play-it-Forward--2025-November-PAC-Pre-Election-Report",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 627905,
+    "sha256": "00de8210d3062260596a4b2eb542cc339fb88370a10bbd1bef14079b89eec2d2"
+   },
+   "gold": {
+    "document_type": "Campaign Finance Report",
+    "acceptable_types": [
+     "Committee Campaign Finance Report",
+     "Report"
+    ],
+    "document_date": "2025-10-20",
+    "acceptable_dates": [
+     "2025-10-18"
+    ],
+    "date_role": "execution",
+    "forbidden_dates": [
+     {
+      "date": "2025-09-29",
+      "why": "form revision date"
+     },
+     {
+      "date": "2025-10-01",
+      "why": "start of the period"
+     },
+     {
+      "date": "2025-10-14",
+      "why": "a contribution date"
+     },
+     {
+      "date": "2025-10-06",
+      "why": "a contribution date"
+     },
+     {
+      "date": "2025-10-19",
+      "why": "start of report due window (second reader)"
+     },
+     {
+      "date": "2025-09-21",
+      "why": "PDF creation date (metadata) (second reader)"
+     },
+     {
+      "date": "2025-10-21",
+      "why": "PDF modification date (metadata) (second reader)"
+     }
+    ],
+    "parties": [
+     "Play it Forward Casa Grande"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Play it Forward Casa Grande"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Play it Forward Casa Grande"
+      ],
+      "relation": "for"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Play it Forward Casa Grande",
+      "role": "filer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Victor Fuentes",
+      "why": "treasurer"
+     },
+     {
+      "name": "Larry Yount",
+      "why": "contributor"
+     },
+     {
+      "name": "Imprint Inc",
+      "why": "payee"
+     },
+     {
+      "name": "Arizona Secretary of State",
+      "why": "form publisher in footer (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-form-05",
+   "file": "real10-form-05.pdf",
+   "title": "Indiana CFA-4 report of receipts and expenditures (annual) for Hoosiers for Kora, period 1/1/2025-12/31/2025, signed 1-16-26, received January 16, 2026 (handwritten scan, 1 page)",
+   "kind": "form",
+   "format": "pdf",
+   "text_layer": "scan",
+   "pages": 1,
+   "categories": [
+    "form",
+    "scanned",
+    "handwritten",
+    "received_stamp",
+    "period_dates",
+    "us_local",
+    "modern"
+   ],
+   "notes": "Scan: 'REPORT OF RECEIPTS AND EXPENDITURES OF A POLITICAL COMMITTEE (CFA-4) Summary Sheet'; handwritten committee 'Hoosiers for Kora', candidate Vidya Kora, City Council at Large, LaPorte; Annual; period 1/1/2025 through 12/31/2025; treasurer and candidate dates 1-16-26; stamp 'LaPorte County Received JAN 16 2026 Election Board'. Text layer is poor OCR. 'either'.",
+   "source": {
+    "name": "LaPorte County, Indiana, website",
+    "url": "https://laporteco.in.gov/wp-content/uploads/2026/01/Hoosiers-for-Kora.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 68693,
+    "sha256": "d44cb2e77420d0c553a6aaf6cd7174f4192cc87f188fd708dcf8a9131aa1249b"
+   },
+   "gold": {
+    "document_type": "Report of Receipts and Expenditures",
+    "acceptable_types": [
+     "CFA-4",
+     "Campaign Finance Report",
+     "Report",
+     "Report of Receipts and Expenditures of a Political Committee"
+    ],
+    "document_date": "2026-01-16",
+    "acceptable_dates": [
+     "2025-12-31"
+    ],
+    "date_role": "filing",
+    "forbidden_dates": [
+     {
+      "date": "2025-01-01",
+      "why": "start of the period"
+     },
+     {
+      "date": "2026-01-23",
+      "why": "PDF creation date (metadata) (second reader)"
+     }
+    ],
+    "parties": [
+     "Hoosiers for Kora"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Hoosiers for Kora"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Vidya Kora"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Hoosiers for Kora"
+      ],
+      "relation": "for"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Hoosiers for Kora",
+      "role": "filer"
+     },
+     {
+      "name": "Vidya Kora",
+      "role": "candidate"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "LaPorte County Election Board",
+      "why": "receiving office"
+     },
+     {
+      "name": "Indiana Election Division",
+      "why": "form publisher (second reader)"
+     },
+     {
+      "name": "Democratic",
+      "why": "party affiliation, not a party to the document (second reader)"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real10-invoice-01",
+   "file": "real10-invoice-01.pdf",
+   "title": "Schumacher Excavating invoice 35269 to Oronoco Township, 09/30/2025 (born-digital, 2 pages)",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 2,
+   "categories": [
+    "invoice",
+    "born_digital",
+    "issuer_only_in_logo_and_url",
+    "line_dates",
+    "us_local",
+    "modern"
+   ],
+   "notes": "'Invoice Invoice#: 35269 Date: 09/30/2025'; address 50 Warren Avenue, Zumbrota, MN; 'www.schumacherexcavating.com' (company name otherwise appears only in the logo); 'Billed To: Oronoco Township'. Line dates 9/3/25 to 9/30/25. Traps: billed-to party; line dates.",
+   "source": {
+    "name": "Oronoco Township, Minnesota, website",
+    "url": "https://oronocotownship-mn.gov/wp-content/uploads/2025/10/9_Schumacher-Inv-35269-10132025.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 215620,
+    "sha256": "ad9e3537e14a229b1c5eb53f16a5012200ec8a82f8849729f70ca8973c800a0f"
+   },
+   "gold": {
+    "document_type": "Invoice",
+    "acceptable_types": [
+     "Bill"
+    ],
+    "document_date": "2025-09-30",
+    "acceptable_dates": [],
+    "date_role": "invoice",
+    "forbidden_dates": [
+     {
+      "date": "2025-09-03",
+      "why": "first line-item work date"
+     },
+     {
+      "date": "2025-09-24",
+      "why": "line-item work date"
+     },
+     {
+      "date": "2025-09-05",
+      "why": "line-item work date (second reader)"
+     }
+    ],
+    "parties": [
+     "Schumacher Excavating"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Schumacher Excavating"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Schumacher Excavating, Inc."
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Oronoco Township"
+      ],
+      "relation": "to"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Schumacher Excavating",
+      "role": "issuer"
+     },
+     {
+      "name": "Oronoco Township",
+      "role": "customer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Bruening",
+      "why": "supplier of crushed rock in a line item"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real10-invoice-02",
+   "file": "real10-invoice-02.pdf",
+   "title": "Arborists of Rochester, LLC invoice 7109 to Oronoco Township, 11/19/2025 (born-digital, 1 page)",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 1,
+   "categories": [
+    "invoice",
+    "born_digital",
+    "due_date_trap",
+    "service_date_after_invoice_date",
+    "us_local",
+    "modern"
+   ],
+   "notes": "'ARBORISTS OF ROCHESTER, LLC ... BILL TO Oronoco Township ... INVOICE 7109 DATE 11/19/2025 DUE DATE 12/19/2025'. Lines dated 11/17/2025 and 11/26/2025 (one later than the invoice date). Traps: due date; service dates; customer named Ken Murgan in a line.",
+   "source": {
+    "name": "Oronoco Township, Minnesota, website",
+    "url": "https://oronocotownship-mn.gov/wp-content/uploads/2025/12/8_Arborist-of-Rochester-INV-7109-12082025.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 90449,
+    "sha256": "944de9d004021597091dd5e1febe47a96a2ab5a78320754f7a38fcb6aafae2b6"
+   },
+   "gold": {
+    "document_type": "Invoice",
+    "acceptable_types": [
+     "Bill"
+    ],
+    "document_date": "2025-11-19",
+    "acceptable_dates": [],
+    "date_role": "invoice",
+    "forbidden_dates": [
+     {
+      "date": "2025-12-19",
+      "why": "payment due date"
+     },
+     {
+      "date": "2025-11-17",
+      "why": "service date"
+     },
+     {
+      "date": "2025-11-26",
+      "why": "service date"
+     },
+     {
+      "date": "2024-11-07",
+      "why": "PDF creation date (metadata) (second reader)"
+     },
+     {
+      "date": "2025-01-10",
+      "why": "PDF modification date (metadata) (second reader)"
+     }
+    ],
+    "parties": [
+     "Arborists of Rochester, LLC"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Arborists of Rochester"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Arborists of Rochester, LLC",
+      "role": "issuer"
+     },
+     {
+      "name": "Oronoco Township",
+      "role": "customer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Ken Murgan",
+      "why": "person named in a line item"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-invoice-03",
+   "file": "real10-invoice-03.pdf",
+   "title": "American Structurepoint, Inc. invoice 197199 to the Town of Whitestown, Indiana, October 30, 2025, with timesheets (born-digital)",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 5,
+   "categories": [
+    "invoice",
+    "born_digital",
+    "service_period",
+    "timesheet_backup",
+    "us_local",
+    "modern"
+   ],
+   "notes": "'Remit to: ... www.structurepoint.com ... October 30, 2025 Invoice No: 197199'; addressed to Sri Venugopalan, PE, Town of Whitestown; 'Services from September 1, 2025 through September 30, 2025'. Backup timesheets 'American Structurepoint, Inc.' for 'the Period Ending 9/15/2025'. Traps: service period; timesheet dates; employees.",
+   "source": {
+    "name": "Town of Whitestown, Indiana, website",
+    "url": "https://whitestown.in.gov/wp-content/uploads/2025/12/Invoice-197199.2025.10.30.2022.02996.Town-of-Whitestown-CR-575E-Roadway-Project-from-Perry-Worth-Road.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 141094,
+    "sha256": "9e0c7f74ccac62371f5c6c3e830eda3b263856042eef4ba61db82d684dfa3dc2"
+   },
+   "gold": {
+    "document_type": "Invoice",
+    "acceptable_types": [
+     "Bill"
+    ],
+    "document_date": "2025-10-30",
+    "acceptable_dates": [],
+    "date_role": "invoice",
+    "forbidden_dates": [
+     {
+      "date": "2025-09-01",
+      "why": "start of the service period"
+     },
+     {
+      "date": "2025-09-30",
+      "why": "end of the service period"
+     },
+     {
+      "date": "2025-09-15",
+      "why": "timesheet period end"
+     },
+     {
+      "date": "2025-08-27",
+      "why": "date of earlier outstanding invoice 194603 (second reader)"
+     },
+     {
+      "date": "2025-09-25",
+      "why": "date of earlier outstanding invoice 195890 (second reader)"
+     },
+     {
+      "date": "2025-09-22",
+      "why": "timesheet print date (second reader)"
+     },
+     {
+      "date": "2025-10-03",
+      "why": "timesheet print date (second reader)"
+     }
+    ],
+    "parties": [
+     "American Structurepoint, Inc."
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "American Structurepoint"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Structurepoint"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "American Structurepoint, Inc.",
+      "role": "issuer"
+     },
+     {
+      "name": "Town of Whitestown",
+      "role": "customer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Sri Venugopalan",
+      "why": "customer contact"
+     },
+     {
+      "name": "Tanner McKinney",
+      "why": "employee"
+     },
+     {
+      "name": "Eric Wickersham",
+      "why": "employee"
+     },
+     {
+      "name": "Todd Rutledge",
+      "why": "signer (second reader)"
+     },
+     {
+      "name": "Kenneth Olson",
+      "why": "timesheet approver (second reader)"
+     },
+     {
+      "name": "Ross Nixon",
+      "why": "timesheet approver (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-invoice-04",
+   "file": "real10-invoice-04.pdf",
+   "title": "Union Pacific Railroad Company bill 90143098 to Fort Bend County, issued 2/10/2025, with the engineering consultant's backup invoice (born-digital, 6 pages)",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 6,
+   "categories": [
+    "invoice",
+    "born_digital",
+    "bundle",
+    "backup_invoice_from_third_party",
+    "due_date_trap",
+    "us_local",
+    "modern"
+   ],
+   "notes": "'UNION PACIFIC RAILROAD COMPANY ... DATE ISSUED 2/10/2025 DUE DATE 3/12/2025 BILL NUMBER 90143098 ... FORT BEND COUNTY OF'. Backup: SourceHub voucher for vendor 'ALFRED BENESCH COMPANY', Invoice Date 11/11/2024, and Benesch 'Invoice 300669 Dated 11/7/2024' with 2024 time entries. Traps: Benesch as issuer; due date; backup dates.",
+   "source": {
+    "name": "Fort Bend County, Texas (agenda portal), website",
+    "url": "https://agendalink.fortbendcountytx.gov/docs/2025/CCTR/20250225_3971/63573%5FE6%2D20250210%2DInvoice%2D90143098%2DUPRR%2DWest%2DSycamore%2D17123x%2Epdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 147162,
+    "sha256": "5b564d89b02ce42a85e4edd8a24d3e1409b1fea9529e510aa4caf8dca23d7a41"
+   },
+   "gold": {
+    "document_type": "Bill",
+    "acceptable_types": [
+     "Invoice"
+    ],
+    "document_date": "2025-02-10",
+    "acceptable_dates": [],
+    "date_role": "invoice",
+    "forbidden_dates": [
+     {
+      "date": "2025-03-12",
+      "why": "payment due date"
+     },
+     {
+      "date": "2024-11-11",
+      "why": "date of the consultant invoice in the backup"
+     },
+     {
+      "date": "2024-11-07",
+      "why": "date of the consultant invoice in the backup"
+     },
+     {
+      "date": "2024-09-09",
+      "why": "start of the consultant service period (second reader)"
+     },
+     {
+      "date": "2024-11-03",
+      "why": "end of the consultant service period (second reader)"
+     }
+    ],
+    "parties": [
+     "Union Pacific Railroad Company"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Union Pacific Railroad"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Union Pacific"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Union Pacific Railroad Company",
+      "role": "issuer"
+     },
+     {
+      "name": "Fort Bend County",
+      "role": "customer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Alfred Benesch & Company",
+      "why": "consultant whose invoice is attached as backup"
+     },
+     {
+      "name": "Fort Bend County",
+      "why": "the customer, not the issuer"
+     },
+     {
+      "name": "Benesch",
+      "why": "consultant whose invoice is attached as backup (second reader)"
+     },
+     {
+      "name": "Erik Lewis",
+      "why": "UP addressee of the consultant invoice (second reader)"
+     },
+     {
+      "name": "I Akinwande",
+      "why": "attention line (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-invoice-05",
+   "file": "real10-invoice-05.pdf",
+   "title": "Colorado Department of Transportation progress estimate No. 0002 (Estimate Summary) for contract C25236 with Oldcastle SW Group, Inc., run 7/23/2025 (born-digital report, 9 pages)",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 9,
+   "categories": [
+    "invoice",
+    "born_digital",
+    "pay_estimate",
+    "many_dates",
+    "system_report",
+    "us_state",
+    "modern"
+   ],
+   "notes": "'COLORADO DEPARTMENT OF TRANSPORTATION Estimate Summary Estimate Run 7/23/2025'; 'Estimate No: 0002 PROGRESS'; Contractor OLDCASTLE SW GROUP, INC.; pay period 5/18/2025 to 06/21/2025; Date Let 09/12/2024, Awarded 09/23/2024, Contract Executed 10/02/2024, Notice to Proceed 10/03/2024, Work Began 05/12/2025, Date Accepted 7/11/2025; 'Approved for Payment By Sean Maloney 07/09/2025'; footer 'Printed on 7/23/2025'. A payment estimate, not a vendor invoice: CDOT issues it, the contractor is paid. The run date is gold; pay period end and approval accepted. 'either'. Traps: contract milestone dates.",
+   "source": {
+    "name": "Colorado Department of Transportation, website",
+    "url": "https://www.codot.gov/content/payestimates/25236_02.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 33108,
+    "sha256": "c074124346d4b2fb8dadc59373a57ab1cbeeb66cfdc7ecbcf90c9ad6e8b27454"
+   },
+   "gold": {
+    "document_type": "Progress Estimate",
+    "acceptable_types": [
+     "Estimate Summary",
+     "Pay Estimate",
+     "Payment Estimate",
+     "Estimate"
+    ],
+    "document_date": "2025-07-23",
+    "acceptable_dates": [
+     "2025-06-21",
+     "2025-07-09"
+    ],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2024-09-12",
+      "why": "date the contract was let"
+     },
+     {
+      "date": "2024-09-23",
+      "why": "date awarded"
+     },
+     {
+      "date": "2024-10-02",
+      "why": "date the contract was executed"
+     },
+     {
+      "date": "2024-10-03",
+      "why": "notice to proceed"
+     },
+     {
+      "date": "2025-05-12",
+      "why": "date work began"
+     },
+     {
+      "date": "2025-05-18",
+      "why": "pay period start"
+     },
+     {
+      "date": "2025-07-11",
+      "why": "date accepted (second reader)"
+     }
+    ],
+    "parties": [
+     "Colorado Department of Transportation"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Colorado Department of Transportation"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "CDOT"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Oldcastle SW Group, Inc."
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "Colorado Department of Transportation",
+       "Oldcastle SW Group, Inc."
+      ],
+      "relation": "between"
+     },
+     {
+      "parties": [
+       "Oldcastle SW Group, Inc."
+      ],
+      "relation": "to"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Colorado Department of Transportation",
+      "role": "issuer"
+     },
+     {
+      "name": "Oldcastle SW Group, Inc.",
+      "role": "contractor paid"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Sean Maloney",
+      "why": "approver"
+     },
+     {
+      "name": "Delta County",
+      "why": "project county (second reader)"
+     },
+     {
+      "name": "PMWeb",
+      "why": "software name in footer (second reader)"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real10-letter-01",
+   "file": "real10-letter-01.pdf",
+   "title": "New York State Attorney General cease and desist notification of October 7, 2025 to AleenaCosmetics Inc. on cosmetics containing mercury (born-digital PDF, 3 pages)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 3,
+   "categories": [
+    "letter",
+    "born_digital",
+    "cease_and_desist",
+    "us_state",
+    "named_person_at_org",
+    "recipient_is_subject",
+    "attachment_table",
+    "modern"
+   ],
+   "notes": "Letterhead 'Office of the New York State Attorney General / Letitia James, Attorney General'. Dated 'October 7, 2025'. Addressed to 'Ammad Sarwar-Agent, AleenaCosmetics Inc.' and the company c/o Corporation Service Company. Title in the body 'CEASE AND DESIST NOTIFICATION', 'Re: Sale of Cosmetic Products Containing Mercury'. Signed '/s/ Marie Chery-Sekhobo, Assistant Attorney General, Environmental Protection Bureau'. Attachment A lists products and mercury results (lab: Legends Technical Services). The company is recipient and subject; 'to' accepted. Traps: the signer, the agent, the laboratory, Letitia James (the Attorney General in the letterhead, not the signer).",
+   "source": {
+    "name": "New York State Office of the Attorney General, website",
+    "url": "https://ag.ny.gov/sites/default/files/2025-10/aleenacosmetics-inc-cease-and-desist-2025.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 177519,
+    "sha256": "05e09fc811dd449225aab8a005bdbe15911e4f63fa777a42beb90aa0b38bc7fc"
+   },
+   "gold": {
+    "document_type": "Cease and Desist Notification",
+    "acceptable_types": [
+     "Cease and Desist Letter",
+     "Cease and Desist",
+     "Letter",
+     "Cease and Desist Notice"
+    ],
+    "document_date": "2025-10-07",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [],
+    "parties": [
+     "New York State Attorney General"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Office of the New York State Attorney General"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "New York Attorney General"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Office of the Attorney General"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "OAG"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "AleenaCosmetics Inc."
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "Aleena Cosmetics, Inc."
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "New York State Attorney General",
+       "AleenaCosmetics Inc."
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "New York State Office of the Attorney General"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "New York State Attorney General",
+      "role": "issuer"
+     },
+     {
+      "name": "Office of the New York State Attorney General",
+      "role": "issuer"
+     },
+     {
+      "name": "AleenaCosmetics Inc.",
+      "role": "recipient"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Marie Chery-Sekhobo",
+      "why": "Assistant Attorney General who signs"
+     },
+     {
+      "name": "Ammad Sarwar",
+      "why": "agent, the addressee in person"
+     },
+     {
+      "name": "Legends Technical Services, Inc.",
+      "why": "testing laboratory named in the body"
+     },
+     {
+      "name": "Corporation Service Company",
+      "why": "registered agent address"
+     },
+     {
+      "name": "Letitia James",
+      "why": "Attorney General named in the letterhead, not the signer"
+     },
+     {
+      "name": "Food and Drug Administration",
+      "why": "agency whose trace-amount definition is cited (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-letter-02",
+   "file": "real10-letter-02.pdf",
+   "title": "South Dakota Attorney General cease and desist letter of December 10, 2025 to Mayday Medicines Inc. (born-digital PDF, 2 pages)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 2,
+   "categories": [
+    "letter",
+    "born_digital",
+    "cease_and_desist",
+    "us_state",
+    "named_person_at_org",
+    "recipient_is_subject",
+    "deadline_in_body",
+    "modern"
+   ],
+   "notes": "Letterhead 'STATE OF SOUTH DAKOTA / OFFICE OF ATTORNEY GENERAL', Marty J. Jackley, Attorney General. Dated 'December 10, 2025', to 'Olivia Raisner, Mayday Medicines Inc., New York'; 'RE: CEASE AND DESIST'. Signed by Marty J. Jackley, South Dakota Attorney General. Response demanded 'by December 19, 2025'. The AG is the office; Jackley is both the officeholder and signer, so the office is named. Traps: the response deadline; the addressee; Abuzz (a resource named in the body).",
+   "source": {
+    "name": "South Dakota Office of Attorney General, website",
+    "url": "https://atg.sd.gov/docs/December%2010%202025%20MJJ.LTR%20Mayday%20Cease%20and%20Desist%20Demand.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 129642,
+    "sha256": "08ea0cb575f9ac49ee5b02e5d998103ba5ef260b9f7a03feadaee10c4b5f2154"
+   },
+   "gold": {
+    "document_type": "Cease and Desist Letter",
+    "acceptable_types": [
+     "Cease and Desist",
+     "Letter",
+     "Cease and Desist Demand"
+    ],
+    "document_date": "2025-12-10",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-12-19",
+      "why": "deadline for the written response"
+     },
+     {
+      "date": "2025-04-28",
+      "why": "publication date of a study cited in the body (second reader)"
+     }
+    ],
+    "parties": [
+     "South Dakota Attorney General"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Office of Attorney General"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "South Dakota Office of Attorney General"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "State of South Dakota"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Mayday Medicines Inc."
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "South Dakota Attorney General",
+       "Mayday Medicines Inc."
+      ],
+      "relation": "to"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "South Dakota Attorney General",
+      "role": "issuer"
+     },
+     {
+      "name": "Office of Attorney General",
+      "role": "issuer"
+     },
+     {
+      "name": "Mayday Medicines Inc.",
+      "role": "recipient"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Olivia Raisner",
+      "why": "the addressee in person"
+     },
+     {
+      "name": "Marty J. Jackley",
+      "why": "Attorney General who signs"
+     },
+     {
+      "name": "Brent K. Kempema",
+      "why": "Chief Deputy in the letterhead"
+     },
+     {
+      "name": "Abuzz",
+      "why": "resource named in the body"
+     },
+     {
+      "name": "Plan C",
+      "why": "third party named in body (second reader)"
+     },
+     {
+      "name": "Ethics and Public Policy Center",
+      "why": "publisher of cited study (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-letter-03",
+   "file": "real10-letter-03.pdf",
+   "title": "Notice of August 7, 2025 from the Anti-Robocall Multistate Litigation Task Force, signed by a North Carolina Special Deputy Attorney General, to Stacy Newsome LNCC LLC (born-digital PDF, 7 pages)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 7,
+   "categories": [
+    "letter",
+    "born_digital",
+    "multistate",
+    "us_state",
+    "named_person_at_org",
+    "recipient_is_subject",
+    "footnotes",
+    "sender_ambiguous",
+    "modern"
+   ],
+   "notes": "Letterhead 'JEFF JACKSON, ATTORNEY GENERAL' and 'TRACY NAYER, SPECIAL DEPUTY ATTORNEY GENERAL' (North Carolina Department of Justice; ncdoj.gov). Dated 'August 7, 2025', to 'Kevin Arnold, CTO, Stacy Newsome LNCC LCC'. 'Re: NOTICE from the Anti-Robocall Multistate Litigation Task Force Concerning Stacy Newsome LNCC LLC's Failures to Comply ...'. Running footer 'August 2025 Notice to Stacy Newsome from Anti-Robocall Multistate Task Force'. Signed Tracy Nayer, Special Deputy Attorney General, Consumer Protection Division, North Carolina Department of Justice. The sender is the Task Force (51 AGs) on North Carolina letterhead: either is defensible, so readiness 'either'. Traps: the CTO; the signer; FCC (the regulator whose rules are cited); Indiana and Ohio (co-leads in a footnote).",
+   "source": {
+    "name": "North Carolina Department of Justice, website",
+    "url": "https://ncdoj.gov/wp-content/uploads/2025/08/State-AG-Task-Force-NOTICE-Letter-to-Stacy-Newsome-Aug-2025.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 240957,
+    "sha256": "5cf1b97e7c784b4cc756c2a3a4cbc96e4f81f0c3f73d997993ff359b0d6b1db1"
+   },
+   "gold": {
+    "document_type": "Notice",
+    "acceptable_types": [
+     "Letter",
+     "Notice Letter",
+     "Task Force Notice"
+    ],
+    "document_date": "2025-08-07",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-08-06",
+      "why": "date of the FCC removal order cited in the body (second reader)"
+     },
+     {
+      "date": "2023-03-17",
+      "why": "date of an FCC order cited in a footnote (second reader)"
+     },
+     {
+      "date": "2023-05-19",
+      "why": "date of an FCC order cited in a footnote (second reader)"
+     }
+    ],
+    "parties": [
+     "Anti-Robocall Multistate Litigation Task Force"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "North Carolina Department of Justice"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "North Carolina Attorney General"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Anti-Robocall Multistate Task Force"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Stacy Newsome LNCC LLC"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "Stacy Newsome LNCC"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "Anti-Robocall Multistate Litigation Task Force",
+       "Stacy Newsome LNCC LLC"
+      ],
+      "relation": "to"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Anti-Robocall Multistate Litigation Task Force",
+      "role": "issuer"
+     },
+     {
+      "name": "North Carolina Department of Justice",
+      "role": "issuer"
+     },
+     {
+      "name": "Stacy Newsome LNCC LLC",
+      "role": "recipient"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Kevin Arnold",
+      "why": "CTO, the addressee in person"
+     },
+     {
+      "name": "Tracy Nayer",
+      "why": "Special Deputy Attorney General who signs"
+     },
+     {
+      "name": "Jeff Jackson",
+      "why": "Attorney General in the letterhead"
+     },
+     {
+      "name": "Federal Communications Commission",
+      "why": "regulator whose rules are cited"
+     },
+     {
+      "name": "FCC",
+      "why": "regulator whose rules are cited"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real10-letter-04",
+   "file": "real10-letter-04.pdf",
+   "title": "Undated letter from Hon Simon Watts, New Zealand Minister of Climate Change and of Local Government, to mayors, chairs and chief executives on climate change assumptions in council planning, as published by Greater Wellington (born-digital PDF, 2 pages)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 2,
+   "categories": [
+    "letter",
+    "born_digital",
+    "undated",
+    "minister",
+    "class_addressee",
+    "new_zealand",
+    "host_not_party",
+    "metadata_date_trap",
+    "modern"
+   ],
+   "notes": "Heading 'Hon Simon Watts / Minister of Climate Change / Minister of Local Government / Minister of Revenue / Minister for Auckland'; 'Dear Mayors, Chairs and Chief Executives'. No date is printed on either page. Signed 'Hon Simon Watts, Minister of Climate Change'; 'Cc: Hon Chris Bishop, Minister Responsible for RMA Reform'. PDF created 2026-06-28, modified 2026-06-30; the host's path says 2026/07. Published on Greater Wellington Regional Council's site, which is a recipient class, not the sender. With no date the name cannot be settled: needs_review. The minister's office is the party; the minister's own name is accepted because the letter is in the officeholder's name.",
+   "source": {
+    "name": "Greater Wellington Regional Council (New Zealand), website",
+    "url": "https://www.gw.govt.nz/assets/Documents/Documents/2026/07/Letter-from-Minister-Watts-regarding-climate-change-assumptions-in-council-planning-v2.pdf",
+    "page": null,
+    "license": "New Zealand public-sector publication; no licence stated on the file",
+    "size": 119246,
+    "sha256": "24501791ac222d440a30e8bf9551179ff23de9a688d9effe6a0eae3c6dc02d5d"
+   },
+   "gold": {
+    "document_type": "Letter",
+    "acceptable_types": [
+     "Ministerial Letter",
+     "Letter to Mayors, Chairs and Chief Executives"
+    ],
+    "document_date": null,
+    "acceptable_dates": [],
+    "date_role": null,
+    "forbidden_dates": [
+     {
+      "date": "2026-06-28",
+      "why": "PDF creation date (metadata)"
+     },
+     {
+      "date": "2026-06-30",
+      "why": "PDF modification date (metadata)"
+     }
+    ],
+    "parties": [
+     "Minister of Local Government"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Minister of Climate Change"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Simon Watts"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Hon Simon Watts"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Minister of Local Government"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Minister of Climate Change Simon Watts"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Minister of Local Government",
+      "role": "issuer"
+     },
+     {
+      "name": "Minister of Climate Change",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Greater Wellington Regional Council",
+      "why": "the publishing council, one of the recipients"
+     },
+     {
+      "name": "Chris Bishop",
+      "why": "minister in cc"
+     },
+     {
+      "name": "Minister Responsible for RMA Reform",
+      "why": "cc'd office (second reader)"
+     },
+     {
+      "name": "Mayors, Chairs and Chief Executives",
+      "why": "class of addressee"
+     }
+    ],
+    "expected_readiness": "needs_review"
+   }
+  },
+  {
+   "id": "real10-letter-05",
+   "file": "real10-letter-05.pdf",
+   "title": "Guam Department of Administration letter of December 23, 2025 to the Speaker of I Mina'trentai Ocho Na Liheslaturan Guahan transmitting the Monthly Cash Balance Report for November 2025 (born-digital PDF, 4 pages)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 4,
+   "categories": [
+    "letter",
+    "born_digital",
+    "transmittal",
+    "attached_report",
+    "us_territory",
+    "bilingual",
+    "named_person_at_org",
+    "period_trap",
+    "modern"
+   ],
+   "notes": "Letterhead 'DEPARTMENT OF ADMINISTRATION / DIPATTAMENTON ATMENESTRASION / DIRECTOR'S OFFICE', Edward M. Birn, Director. Dated 'December 23, 2025', to 'The Honorable Frank F. Blas Jr., Speaker, I Mina'trentai Ocho Na Liheslaturan Guahan'; 'Re: Monthly Cash Balance Report' for 'the month of November 2025'. Signed Edward M. Birn, Director; cc DOA officers. Pages 2-4 are the cash balance tables (account open dates back to 2009). A transmittal letter: the letter is the document; the report attached is accepted as type. Traps: the reporting month (November 2025); account opening dates in the tables; the Speaker; the Governor in the letterhead.",
+   "source": {
+    "name": "Government of Guam Department of Administration, website",
+    "url": "https://da.doa.guam.gov/wp-content/uploads/2026/01/Cash-Bal-Nov-2025.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 1779600,
+    "sha256": "0d6b9d670b4de11556f4c9a221fb3e2960bb8e58b7aa2f8f3b4533a93486b33d"
+   },
+   "gold": {
+    "document_type": "Letter",
+    "acceptable_types": [
+     "Transmittal Letter",
+     "Monthly Cash Balance Report",
+     "Cash Balance Report"
+    ],
+    "document_date": "2025-12-23",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-11-30",
+      "why": "end of the reporting month"
+     },
+     {
+      "date": "2026-01-06",
+      "why": "PDF creation date (metadata)"
+     }
+    ],
+    "parties": [
+     "Guam Department of Administration"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Department of Administration"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Guam Legislature"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "I Mina'trentai Ocho Na Liheslaturan Guahan"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "Government of Guam"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Guam Department of Administration",
+      "role": "issuer"
+     },
+     {
+      "name": "Department of Administration",
+      "role": "issuer"
+     },
+     {
+      "name": "I Mina'trentai Ocho Na Liheslaturan Guahan",
+      "role": "recipient"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Edward M. Birn",
+      "why": "Director who signs"
+     },
+     {
+      "name": "Frank F. Blas Jr.",
+      "why": "Speaker, the addressee in person"
+     },
+     {
+      "name": "Lourdes A. Leon Guerrero",
+      "why": "Governor in the letterhead"
+     },
+     {
+      "name": "Mary Grace Edrosa",
+      "why": "contact named in the body"
+     },
+     {
+      "name": "Bank of Guam",
+      "why": "bank in the tables"
+     },
+     {
+      "name": "US Bank",
+      "why": "bank in the tables"
+     },
+     {
+      "name": "Treasury of Guam",
+      "why": "named in body (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-letter-06",
+   "file": "real10-letter-06.pdf",
+   "title": "City of Coral Gables notice of award letter of February 12, 2025 to all bidders on RFQT 2025-002, with the attached award recommendation memorandum of February 6, 2025 (born-digital PDF, 2 pages)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 2,
+   "categories": [
+    "letter",
+    "born_digital",
+    "notice_of_award",
+    "procurement",
+    "class_addressee",
+    "bundled_memo",
+    "digital_signature",
+    "modern"
+   ],
+   "notes": "Page 1: 'February 12, 2025', 'All Responding Bidders (See Distribution List)', 'SUBJECT: RFQT 2025-002 Canopy Structure with Shade - Fabrication and Installation'; digitally signed 'Celeste S. Walker-Harmon, Chief Procurement Officer', signature stamp 2025.02.12. Distribution list: Atlantic Awnings & Metal Works, Inc., Awnings Universal, Inc., Eventstar Structures, Corp. Page 2 is the attached 'CITY OF CORAL GABLES -MEMORANDUM-' of 'February 6, 2025' to the City Manager (Alberto N. Parjus) recommending award to Awnings Universal, Inc. ($73,300); advertised January 21, responses January 31, 2025. The filed document is the letter. Traps: the memo's date; the advertise and response dates; the winning bidder (not the sender); the signer and City Manager.",
+   "source": {
+    "name": "City of Coral Gables, Florida, website",
+    "url": "https://coralgables.com/sites/default/files/2025-02/Notice%20of%20Award%20Letter%20-%20%20RFQT%202025-002%20-%20All%20Bidders.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 213374,
+    "sha256": "32dd982194d275a3563db479ce46e56a9fa582cde38f0da7e6aa213ebb8f284b"
+   },
+   "gold": {
+    "document_type": "Notice of Award Letter",
+    "acceptable_types": [
+     "Notice of Award",
+     "Letter",
+     "Award Notice",
+     "Award Letter",
+     "Notice of Award Recommendation"
+    ],
+    "document_date": "2025-02-12",
+    "acceptable_dates": [],
+    "date_role": "notice",
+    "forbidden_dates": [
+     {
+      "date": "2025-02-06",
+      "why": "date of the attached award recommendation memorandum"
+     },
+     {
+      "date": "2025-01-21",
+      "why": "date the RFQT was advertised"
+     },
+     {
+      "date": "2025-01-31",
+      "why": "date responses were received"
+     }
+    ],
+    "parties": [
+     "City of Coral Gables"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Coral Gables"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "City of Coral Gables",
+      "role": "issuer"
+     },
+     {
+      "name": "Awnings Universal, Inc.",
+      "role": "subject"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Celeste S. Walker-Harmon",
+      "why": "Chief Procurement Officer who signs"
+     },
+     {
+      "name": "Alberto N. Parjus",
+      "why": "City Manager, addressee of the attached memo"
+     },
+     {
+      "name": "Awnings Universal, Inc.",
+      "why": "recommended bidder, not the sender"
+     },
+     {
+      "name": "Eduardo Hernandez",
+      "why": "contact named in the body"
+     },
+     {
+      "name": "All Responding Bidders",
+      "why": "class of addressee"
+     },
+     {
+      "name": "Atlantic Awnings & Metal Works, Inc.",
+      "why": "bidder on the distribution list (second reader)"
+     },
+     {
+      "name": "Eventstar Structures, Corp.",
+      "why": "bidder on the distribution list (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-letter-07",
+   "file": "real10-letter-07.pdf",
+   "title": "Village of Alvo, Nebraska letter of July 12, 2025 to residents on water and sewer rate changes and billing corrections (born-digital PDF, 1 page)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 1,
+   "categories": [
+    "letter",
+    "born_digital",
+    "class_addressee",
+    "us_local",
+    "ordinal_date",
+    "referenced_dates",
+    "modern"
+   ],
+   "notes": "Header 'Village of Alvo'; 'July 12th, 2025'; 'Dear Resident,'. Announces new water and sewer base rates approved at the public meeting of 'May 20, 2025' (Ordinances 2025-001 to -007, Resolution 2025-001); changes reflected from 'August 2025'. Signed 'Village of Alvo Board of Trustees'. Traps: the approval meeting date; the class addressee 'Resident'.",
+   "source": {
+    "name": "Village of Alvo, Nebraska, website",
+    "url": "https://www.alvo.gov/_files/ugd/dca37c_5ea119b40a59472b8a3ae21ed89a36d6.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 118572,
+    "sha256": "dd34920123fb29d180db75f1d0c0b501c6ebd491af1f9b7d56182effec5ab329"
+   },
+   "gold": {
+    "document_type": "Letter",
+    "acceptable_types": [
+     "Resident Letter",
+     "Notice",
+     "Rate Change Notice",
+     "Letter to Residents"
+    ],
+    "document_date": "2025-07-12",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-05-20",
+      "why": "date of the board meeting that approved the rates"
+     }
+    ],
+    "parties": [
+     "Village of Alvo"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Village of Alvo Board of Trustees"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Alvo"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Village of Alvo",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Resident",
+      "why": "class of addressee"
+     },
+     {
+      "name": "Clerk/Treasurer",
+      "why": "office named in body (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-letter-08",
+   "file": "real10-letter-08.pdf",
+   "title": "Cork County Council planning authority letter of 9 June 2025 to An Bord Pleanála on appeal ABP-322540-25, filed behind the Board's correspondence form and the forwarding e-mails (scanned PDF with OCR, 4 pages)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "ocr",
+   "pages": 4,
+   "categories": [
+    "letter",
+    "scanned",
+    "ocr_noisy",
+    "bundle",
+    "cover_form",
+    "forwarded_email",
+    "ireland",
+    "day_month_order",
+    "handwriting",
+    "modern"
+   ],
+   "notes": "Page 1: An Bord Pleanála's 'LARGE RESIDENTIAL DEVELOPMENT CORRESPONDENCE FORM' with handwriting and a date stamp; below it an e-mail 'From: Bord, Sent: Tuesday 10 June 2025 08:24, To: Appeals2' forwarding 'From: Niamh McDonnell <...@CorkCoCo.ie>, Sent: Monday, June 9, 2025 4:59 PM'. Pages 2-3: Cork County Council Planning & Development letterhead (Irish and English), to 'An Bord Pleanala, 64 Marlborough Street, Dublin 1', dated '09/06/2025', 'Our Ref: 24/06036', 'Your Ref: ABP-322540-25', 'RE/ Appeal re: A ten year Permission ... Castlepark ... Mallow, Co. Cork'; refers to grounds of appeal forwarded 'on the 10th of May 2025'; 'no further comment'; signed Niamh McDonnell, Clerical Officer. The document filed is the council's response letter; 09/06/2025 is 9 June (Irish day-month order), which the e-mail's 'June 9, 2025' confirms. Readiness 'either': a bundle with cover form. Traps: 2025-09-06 (month-day misreading); the forwarding date; the appeal grounds date; the clerk; Castlelands (applicant's site name).",
+   "source": {
+    "name": "An Coimisiún Pleanála (Ireland), website",
+    "url": "https://www.pleanala.ie/publicaccess/Case%20Documentation/322540/Responses/PA%20Response.pdf",
+    "page": null,
+    "license": "Irish public planning record; no licence stated on the file",
+    "size": 569566,
+    "sha256": "191d03abfb3576b12e99d16382f3d830cc4e0fbff04df32490b0a1bfbd8e3116"
+   },
+   "gold": {
+    "document_type": "Letter",
+    "acceptable_types": [
+     "Planning Authority Response",
+     "Response Letter",
+     "Correspondence",
+     "Appeal Response"
+    ],
+    "document_date": "2025-06-09",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-09-06",
+      "why": "09/06/2025 read month-first; the e-mail confirms 9 June"
+     },
+     {
+      "date": "2025-06-10",
+      "why": "date the Board's mailbox forwarded the e-mail"
+     },
+     {
+      "date": "2025-05-10",
+      "why": "date the grounds of appeal were forwarded to the council"
+     },
+     {
+      "date": "2025-06-15",
+      "why": "dates written on the Board's internal correspondence form (second reader)"
+     },
+     {
+      "date": "2025-05-16",
+      "why": "date the grounds of appeal were forwarded to the council (second reader)"
+     }
+    ],
+    "parties": [
+     "Cork County Council"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Comhairle Contae Chorcaí"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "An Bord Pleanála"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "Cork County Council",
+       "An Bord Pleanála"
+      ],
+      "relation": "to"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Cork County Council",
+      "role": "sender"
+     },
+     {
+      "name": "An Bord Pleanála",
+      "role": "recipient"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Niamh McDonnell",
+      "why": "clerical officer who signs and sends the e-mail"
+     },
+     {
+      "name": "Maeve Holly",
+      "why": "council officer in cc"
+     },
+     {
+      "name": "Catherine Flynn",
+      "why": "Board staff whose mailbox printed the e-mail"
+     },
+     {
+      "name": "Castlelands",
+      "why": "development name in the body"
+     },
+     {
+      "name": "Appeals2",
+      "why": "internal Board mailbox (second reader)"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real10-memo-01",
+   "file": "real10-memo-01.pdf",
+   "title": "City of Dallas memorandum to the Mayor and City Council, Executive Liaison Assignments Update, August 22, 2025 (born-digital, 2 pages)",
+   "kind": "memo",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 2,
+   "categories": [
+    "memo",
+    "born_digital",
+    "long_cc_list",
+    "us_local",
+    "modern"
+   ],
+   "notes": "'Memorandum DATE August 22, 2025 ... CITY OF DALLAS TO Honorable Mayor and Members of the City Council SUBJECT Executive Liaison Assignments Update'. Signed Kimberly Bizor Tolbert, City Manager. Long liaison table and cc list. Traps: council members and executives in the table.",
+   "source": {
+    "name": "City of Dallas, website",
+    "url": "https://dallascityhall.com/government/citymanager/Documents/FY24-25%20Memos/Executive%20Liaison%20Assignments%20Update.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 169585,
+    "sha256": "eb6daadd0de4f72bfa32fc2c292eb45abcb3127fee45162ad18e94e620778d2c"
+   },
+   "gold": {
+    "document_type": "Memorandum",
+    "acceptable_types": [
+     "Memo"
+    ],
+    "document_date": "2025-08-22",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [],
+    "parties": [
+     "City of Dallas"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "City of Dallas"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Kimberly Bizor Tolbert"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "City of Dallas",
+      "role": "issuer"
+     },
+     {
+      "name": "Kimberly Bizor Tolbert",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Ahmad Goree",
+      "why": "chief of staff, contact"
+     },
+     {
+      "name": "Tammy Palomino",
+      "why": "cc"
+     },
+     {
+      "name": "Mark Swann",
+      "why": "cc (second reader)"
+     },
+     {
+      "name": "Bilierae Johnson",
+      "why": "cc (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-memo-02",
+   "file": "real10-memo-02.pdf",
+   "title": "City of Auburn (California) memorandum, City Manager Report for the September 22nd City Council Meeting, September 22, 2025 (born-digital)",
+   "kind": "memo",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 5,
+   "categories": [
+    "memo",
+    "born_digital",
+    "no_city_name_in_header",
+    "many_dates",
+    "us_local",
+    "modern"
+   ],
+   "notes": "'MEMORANDUM TO: Honorable Mayor and Members of the City Council FROM: Sean Rabé, City Manager DATE: September 22, 2025 SUBJECT: City Manager Report for the September 22nd City Council Meeting'. Footer 'Endurance Capital of the World'; text mentions 'Here in Auburn'. Body dates: July 10, 2024 ordinance; fiscal year ended June 30, 2025; reorganization effective July 1, 2025. Traps: those dates; staff names.",
+   "source": {
+    "name": "City of Auburn, California, website",
+    "url": "https://www.auburn.ca.gov/DocumentCenter/View/4194/City-Manager-Report-September-22-2025",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 4102360,
+    "sha256": "66be7ce16d2a80f863b43221c0ce7893bdcc26afdb0f46cec1bd75d1ea282553"
+   },
+   "gold": {
+    "document_type": "Memorandum",
+    "acceptable_types": [
+     "City Manager Report",
+     "Memo",
+     "Report"
+    ],
+    "document_date": "2025-09-22",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2024-07-10",
+      "why": "effective date of an earlier ordinance"
+     },
+     {
+      "date": "2025-06-30",
+      "why": "end of the prior fiscal year"
+     },
+     {
+      "date": "2025-07-01",
+      "why": "effective date of a reorganization"
+     }
+    ],
+    "parties": [
+     "City of Auburn"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "City of Auburn"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Sean Rabé"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Auburn"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "City of Auburn",
+      "role": "issuer"
+     },
+     {
+      "name": "Sean Rabé",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Jonathan Wright",
+      "why": "staff named"
+     },
+     {
+      "name": "Tia Klumpp",
+      "why": "staff named"
+     },
+     {
+      "name": "Governor Newsom",
+      "why": "named in body (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-memo-03",
+   "file": "real10-memo-03.pdf",
+   "title": "University of Oklahoma, Office of the Senior Vice President and Provost memorandum, Post-Tenure Review Deadlines, November 11, 2025 (born-digital)",
+   "kind": "memo",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 2,
+   "categories": [
+    "memo",
+    "born_digital",
+    "deadline_table",
+    "prior_memo_cited",
+    "university",
+    "modern"
+   ],
+   "notes": "'Office of the Senior Vice President and Provost MEMORANDUM TO: Deans, Associate Deans, Chairs, and Directors - Norman Campus FROM: André-Denis G. Wright ... DATE: November 11, 2025 SUBJECT: Post-Tenure Review Deadlines'. Cites 'the memo from November 21, 2024'; deadline table April 1, April 6, May 22, 2026; August 16, 2028. Traps: those dates.",
+   "source": {
+    "name": "University of Oklahoma, website",
+    "url": "https://www.ou.edu/content/dam/provost/provost-new/files/communications/Post-Tenure-Review-Memo-2025.pdf",
+    "page": null,
+    "license": "public university publication; no licence stated",
+    "size": 196027,
+    "sha256": "b69eb20e063901b823dcd6cbda6d8c73152740d0f127ff90561fce394be50743"
+   },
+   "gold": {
+    "document_type": "Memorandum",
+    "acceptable_types": [
+     "Memo"
+    ],
+    "document_date": "2025-11-11",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2024-11-21",
+      "why": "date of an earlier memo cited"
+     },
+     {
+      "date": "2026-04-01",
+      "why": "notification deadline"
+     },
+     {
+      "date": "2026-04-06",
+      "why": "workflow opening date"
+     },
+     {
+      "date": "2026-05-22",
+      "why": "dossier deadline"
+     },
+     {
+      "date": "2028-08-16",
+      "why": "resignation/retirement cutoff (second reader)"
+     }
+    ],
+    "parties": [
+     "University of Oklahoma"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "University of Oklahoma"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "André-Denis G. Wright"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Office of the Senior Vice President and Provost"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "University of Oklahoma Office of the Senior Vice President and Provost"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "University of Oklahoma",
+      "role": "issuer"
+     },
+     {
+      "name": "André-Denis G. Wright",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Sarah Ellis",
+      "why": "contact named (second reader)"
+     },
+     {
+      "name": "University of Oklahoma Board of Regents",
+      "why": "body that approved the policy, named in body (second reader)"
+     },
+     {
+      "name": "Deans, Associate Deans, Chairs, and Directors",
+      "why": "class of recipients (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-memo-04",
+   "file": "real10-memo-04.pdf",
+   "title": "University of Hawaiʻi at Mānoa memorandum from the Provost and Chief Business Officer on financial planning measures, April 14, 2025 (born-digital)",
+   "kind": "memo",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 2,
+   "categories": [
+    "memo",
+    "born_digital",
+    "two_senders",
+    "prior_memo_cited",
+    "no_institution_in_text",
+    "university",
+    "modern"
+   ],
+   "notes": "'April 14, 2025 MEMORANDUM TO: Vice Provosts, Mānoa Deans and Directors FROM: Michael Bruno, Provost; Sandy French, Chief Business Officer SUBJECT: General Financial Planning ...'. Cites 'the President's ... memo dated April 10, 2025'. The institution is named only as 'Mānoa' and 'UHF' in the text (letterhead may be an image). Traps: the earlier memo date.",
+   "source": {
+    "name": "University of Hawaiʻi at Mānoa, website",
+    "url": "https://manoa.hawaii.edu/ovprs/wp-content/uploads/2025/04/Provost-CBO-Financial-Mitigation-Memo-04-14-2025_signed-2.pdf",
+    "page": null,
+    "license": "public university publication; no licence stated",
+    "size": 326994,
+    "sha256": "2cf14823735c5b832873309d76231b6cd87cb4b8ac1e4437eac4b0cda6d2fe64"
+   },
+   "gold": {
+    "document_type": "Memorandum",
+    "acceptable_types": [
+     "Memo"
+    ],
+    "document_date": "2025-04-14",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-04-10",
+      "why": "date of the President's memo cited"
+     },
+     {
+      "date": "2025-04-12",
+      "why": "PDF creation date (metadata) (second reader)"
+     }
+    ],
+    "parties": [
+     "University of Hawaiʻi at Mānoa"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "University of Hawaii at Manoa"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "University of Hawaiʻi at Mānoa"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Michael Bruno"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Mānoa"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "University of Hawaiʻi at Mānoa",
+      "role": "issuer"
+     },
+     {
+      "name": "Michael Bruno",
+      "role": "issuer"
+     },
+     {
+      "name": "Sandy French",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Christopher Sabine",
+      "why": "Vice Provost named in body (second reader)"
+     },
+     {
+      "name": "Manoa Office of Business and Finance",
+      "why": "contact office named in body (second reader)"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real10-minutes-01",
+   "file": "real10-minutes-01.pdf",
+   "title": "Superior-Greenstone District School Board, Regular Board Meeting 2025/06 minutes, April 28, 2025 (unapproved draft, born-digital, 8 pages)",
+   "kind": "minutes",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 8,
+   "categories": [
+    "minutes",
+    "born_digital",
+    "unapproved_draft",
+    "blank_approval_line",
+    "future_meeting_list",
+    "prior_minutes_cited",
+    "canada",
+    "modern"
+   ],
+   "notes": "Header 'Regular Board Meeting 2025/06 M I N U T E S, Monday, April 28, 2025 - 6:30 p.m.'; Board Chair Pinky McRae, Director Will Goodman, Recorder G. Christianson. Item approving the earlier minutes 'Regular Board Meeting 2025/05: March 24, 2025'. A schedule lists later meeting dates (May 26 ... December 1, 2025, one misprinted 'November 17, 20245'). Closing 'APPROVED THIS ____ DAY OF ____, 2025' left blank. Traps: prior minutes date; scheduled dates; people.",
+   "source": {
+    "name": "Superior-Greenstone District School Board (Ontario), website",
+    "url": "https://www.sgdsb.on.ca/upload/documents/board/meeting-minutes/2025-06-reg-april-28-25-minutes-final.pdf",
+    "page": null,
+    "license": "Ontario school board public record; no licence stated",
+    "size": 371926,
+    "sha256": "e67df85e15a8495504516ab3908143cf3ad1e300df4fc75f8421d32221fd4a88"
+   },
+   "gold": {
+    "document_type": "Board Meeting Minutes",
+    "acceptable_types": [
+     "Minutes",
+     "Regular Board Meeting Minutes",
+     "Meeting Minutes"
+    ],
+    "document_date": "2025-04-28",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-03-24",
+      "why": "date of the earlier minutes approved at this meeting"
+     },
+     {
+      "date": "2025-05-26",
+      "why": "a later scheduled meeting"
+     },
+     {
+      "date": "2025-12-01",
+      "why": "a later scheduled meeting"
+     },
+     {
+      "date": "2025-04-07",
+      "why": "date of the prior special meeting (second reader)"
+     },
+     {
+      "date": "2025-05-20",
+      "why": "date of a next committee meeting (second reader)"
+     },
+     {
+      "date": "2025-06-25",
+      "why": "effective date of a student trustee resignation (second reader)"
+     }
+    ],
+    "parties": [
+     "Superior-Greenstone District School Board"
+    ],
+    "party_relation": "for",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Superior-Greenstone DSB"
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "Superior-Greenstone District School Board"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Superior-Greenstone District School Board",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Pinky McRae",
+      "why": "board chair"
+     },
+     {
+      "name": "Will Goodman",
+      "why": "director"
+     },
+     {
+      "name": "G. Christianson",
+      "why": "recorder"
+     },
+     {
+      "name": "OPSBA",
+      "why": "organization to which delegates were appointed (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-minutes-02",
+   "file": "real10-minutes-02.pdf",
+   "title": "Philadelphia Housing Authority Board of Commissioners Annual Meeting minutes, May 15, 2025 (born-digital, 3 pages)",
+   "kind": "minutes",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 20,
+   "categories": [
+    "minutes",
+    "born_digital",
+    "next_meeting_date",
+    "us_local",
+    "modern"
+   ],
+   "notes": "'PHILADELPHIA HOUSING AUTHORITY BOARD OF COMMISSIONERS ANNUAL MEETING MINUTES Thursday, May 15, 2025'. Chair Lynette Brown-Sow; CEO Kelvin Jeremiah; submitted by Laurence M. Redican, General Counsel. Mentions April 2025 minutes and the next meeting 'Wednesday, June 18, 2025'. Traps: next-meeting date; people; resolution numbers.",
+   "source": {
+    "name": "Philadelphia Housing Authority, website",
+    "url": "https://www.pha.phila.gov/wp-content/uploads/2025/06/MinutesBdMtgMAY2025.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 846883,
+    "sha256": "d07699e57c2418df3f5591f9d93afdc115cd3ad9be0f5d909aaaff595f017617"
+   },
+   "gold": {
+    "document_type": "Board Meeting Minutes",
+    "acceptable_types": [
+     "Annual Meeting Minutes",
+     "Minutes",
+     "Meeting Minutes"
+    ],
+    "document_date": "2025-05-15",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-06-18",
+      "why": "date of the next meeting"
+     },
+     {
+      "date": "2025-06-19",
+      "why": "Juneteenth holiday mentioned"
+     },
+     {
+      "date": "2025-05-16",
+      "why": "PDF creation date (metadata) (second reader)"
+     },
+     {
+      "date": "2025-05-19",
+      "why": "PDF modification date (metadata) (second reader)"
+     }
+    ],
+    "parties": [
+     "Philadelphia Housing Authority"
+    ],
+    "party_relation": "for",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Philadelphia Housing Authority"
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "PHA"
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "Philadelphia Housing Authority"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Philadelphia Housing Authority Board of Commissioners"
+      ],
+      "relation": "for"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Philadelphia Housing Authority",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Lynette Brown-Sow",
+      "why": "chair"
+     },
+     {
+      "name": "Kelvin Jeremiah",
+      "why": "CEO"
+     },
+     {
+      "name": "Laurence M. Redican",
+      "why": "general counsel who submits"
+     },
+     {
+      "name": "Kydia Bond",
+      "why": "public commenter"
+     },
+     {
+      "name": "U.S. Department of Housing and Urban Development",
+      "why": "agency named in a resolution (second reader)"
+     },
+     {
+      "name": "Pennsylvania Housing Finance Agency",
+      "why": "agency named in a resolution (second reader)"
+     },
+     {
+      "name": "Andrea Bowman",
+      "why": "presenter (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-minutes-03",
+   "file": "real10-minutes-03.pdf",
+   "title": "South Carolina State Housing Finance and Development Authority Commission Meeting minutes, October 15, 2025, approved November 19, 2025 (born-digital, 9 pages)",
+   "kind": "minutes",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 8,
+   "categories": [
+    "minutes",
+    "born_digital",
+    "approval_date_trap",
+    "us_state",
+    "modern"
+   ],
+   "notes": "Letterhead South Carolina State Housing Finance and Development Authority; 'COMMISSION MEETING ... convened a regular meeting on Wednesday, October 15, 2025'; footer 'Minutes, October 15, 2025'; last line 'Approved: November 19, 2025'. Chairman C. Todd Latiff, Executive Director Richard Hutto. Traps: approval date; MRB 2025C; people.",
+   "source": {
+    "name": "South Carolina State Housing Finance and Development Authority, website",
+    "url": "https://www.schousing.sc.gov/sites/schousing/files/Documents/About/Board%20Meeting%20Schedule/Approved_Minutes_10.15.2025.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 689358,
+    "sha256": "daf3bb5b89248bb0a91c001aabaf83afb0cb54ef50cbf5c84461ab3c460d5d97"
+   },
+   "gold": {
+    "document_type": "Commission Meeting Minutes",
+    "acceptable_types": [
+     "Minutes",
+     "Meeting Minutes",
+     "Board Meeting Minutes"
+    ],
+    "document_date": "2025-10-15",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-11-19",
+      "why": "date the minutes were approved"
+     },
+     {
+      "date": "2025-09-17",
+      "why": "date of the previous meeting whose minutes were approved (second reader)"
+     },
+     {
+      "date": "2025-05-21",
+      "why": "earlier board meeting named in body (second reader)"
+     },
+     {
+      "date": "2025-08-26",
+      "why": "SFAA meeting named in body (second reader)"
+     },
+     {
+      "date": "2025-10-20",
+      "why": "PDF creation date (metadata) (second reader)"
+     },
+     {
+      "date": "2025-11-20",
+      "why": "PDF modification date (metadata) (second reader)"
+     }
+    ],
+    "parties": [
+     "South Carolina State Housing Finance and Development Authority"
+    ],
+    "party_relation": "for",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "SC Housing"
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "South Carolina State Housing Finance and Development Authority"
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "South Carolina State Housing Finance and Development Authority"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "South Carolina State Housing Finance and Development Authority Board of Commissioners"
+      ],
+      "relation": "for"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "South Carolina State Housing Finance and Development Authority",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "C. Todd Latiff",
+      "why": "chairman"
+     },
+     {
+      "name": "Richard A. Hutto",
+      "why": "executive director"
+     },
+     {
+      "name": "State Fiscal Accountability Authority",
+      "why": "other agency named in body (second reader)"
+     },
+     {
+      "name": "National Council of State Housing Agencies",
+      "why": "organization named in reports (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-minutes-04",
+   "file": "real10-minutes-04.pdf",
+   "title": "Portsmouth Housing Authority (NH) Board of Commissioners regular meeting minutes, June 11, 2025, signed and dated 7/9/25 (page 1 born-digital, pages 2-5 scanned)",
+   "kind": "minutes",
+   "format": "pdf",
+   "text_layer": "mixed",
+   "pages": 5,
+   "categories": [
+    "minutes",
+    "mixed_text_layer",
+    "handwritten_date",
+    "acceptance_date_trap",
+    "prior_minutes_cited",
+    "us_local",
+    "modern"
+   ],
+   "notes": "Page 1 text: 'MINUTES FINAL REGULAR MEETING BOARD OF COMMISSIONERS PORTSMOUTH HOUSING AUTHORITY 245 MIDDLE STREET, PORTSMOUTH, NH June 11, 2025'; waives reading of 'minutes dated May 14, 2025'; footer 'PHA JUNE 2025 MINUTES'. Pages 2-5 are scans with no text layer. Page 5: signed by Craig W. Welch, Secretary; 'Accepted by: Kara Rodenhizer, Vice Chair / Thomas G. Ferrini, Chair'; handwritten date '7/9/25'. Traps: acceptance date; prior minutes date; ribbon cutting June 22; people.",
+   "source": {
+    "name": "City of Portsmouth, New Hampshire, website",
+    "url": "https://files.portsmouthnh.gov/agendas/2025/PHA/06.11.2025%20PHA%20Board%20Minutes.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 131684,
+    "sha256": "04e81ccf05f03cebb351638b4ecb6d0f26f451cd4b0049b8c036360894e6bc5a"
+   },
+   "gold": {
+    "document_type": "Board Meeting Minutes",
+    "acceptable_types": [
+     "Minutes",
+     "Regular Meeting Minutes",
+     "Meeting Minutes"
+    ],
+    "document_date": "2025-06-11",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-07-09",
+      "why": "handwritten date the minutes were accepted"
+     },
+     {
+      "date": "2025-05-14",
+      "why": "date of the earlier minutes"
+     },
+     {
+      "date": "2025-06-22",
+      "why": "ribbon cutting mentioned"
+     }
+    ],
+    "parties": [
+     "Portsmouth Housing Authority"
+    ],
+    "party_relation": "for",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Portsmouth Housing Authority"
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "PHA"
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "Portsmouth Housing Authority"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Portsmouth Housing Authority Board of Commissioners"
+      ],
+      "relation": "for"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Portsmouth Housing Authority",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Thomas G. Ferrini",
+      "why": "chair"
+     },
+     {
+      "name": "Craig W. Welch",
+      "why": "secretary / executive director"
+     },
+     {
+      "name": "Kara Rodenhizer",
+      "why": "vice chair"
+     },
+     {
+      "name": "John Bosen",
+      "why": "attorney present (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-minutes-05",
+   "file": "real10-minutes-05.pdf",
+   "title": "Housing Authority of the City of Raleigh Board of Commissioners special meeting minutes, September 25, 2025 (born-digital, 19 pages with resolutions)",
+   "kind": "minutes",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 19,
+   "categories": [
+    "minutes",
+    "born_digital",
+    "resolutions_embedded",
+    "many_dates",
+    "us_local",
+    "modern"
+   ],
+   "notes": "'MINUTES OF A SPECIAL MEETING OF THE HOUSING AUTHORITY OF THE CITY OF RALEIGH BOARD OF COMMISSIONERS SEPTEMBER 25, 2025'; met 'Thursday, September 25, 2025'. Contains resolutions (No. 64, 65 (2025)) citing earlier dates; 'RHA to select partner by Friday, September 26, 2025'. Visitors from law firms and investors are named. Traps: those firms; resolution dates; the partner deadline.",
+   "source": {
+    "name": "Housing Authority of the City of Raleigh, website",
+    "url": "https://rhanc.gov/wp-content/uploads/2025/10/9-25-25-Minutes.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 162733,
+    "sha256": "1ff56e793bbe14c28fd9203ac43cd216bdabcf1c76f51a68487d290a28e6c3f5"
+   },
+   "gold": {
+    "document_type": "Special Meeting Minutes",
+    "acceptable_types": [
+     "Minutes",
+     "Board Meeting Minutes",
+     "Meeting Minutes"
+    ],
+    "document_date": "2025-09-25",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-09-26",
+      "why": "deadline to select a partner"
+     },
+     {
+      "date": "2025-08-28",
+      "why": "date of the prior regular meeting whose minutes were approved (second reader)"
+     },
+     {
+      "date": "2025-08-19",
+      "why": "occupancy report as-of date (second reader)"
+     },
+     {
+      "date": "2026-01-01",
+      "why": "effective date of adopted schedules (second reader)"
+     },
+     {
+      "date": "2025-10-24",
+      "why": "PDF creation date (metadata) (second reader)"
+     }
+    ],
+    "parties": [
+     "Housing Authority of the City of Raleigh"
+    ],
+    "party_relation": "for",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Raleigh Housing Authority"
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "RHA"
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "Housing Authority of the City of Raleigh"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Housing Authority of the City of Raleigh Board of Commissioners"
+      ],
+      "relation": "for"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Housing Authority of the City of Raleigh",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "McGuireWoods LLP",
+      "why": "visitor's firm"
+     },
+     {
+      "name": "Francis Law Firm",
+      "why": "visitor's firm"
+     },
+     {
+      "name": "Oppidan Investment Company",
+      "why": "visitor's firm"
+     },
+     {
+      "name": "NC Green",
+      "why": "visitor's organization"
+     },
+     {
+      "name": "Eric Braun",
+      "why": "elected Chair (second reader)"
+     },
+     {
+      "name": "Arne Morris",
+      "why": "elected Vice Chair (second reader)"
+     },
+     {
+      "name": "Ashley Lommers-Johnson",
+      "why": "Secretary of the Board (second reader)"
+     },
+     {
+      "name": "U.S. Department of Housing and Urban Development",
+      "why": "agency named in discussion (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-notice-01",
+   "file": "real10-notice-01.pdf",
+   "title": "South Coast Air Quality Management District Notice of Violation P79876 to Chiquita Canyon Landfill, violation date 06/02/25, served 06/03/25 (scanned handwritten form, 1 page)",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "ocr",
+   "pages": 1,
+   "categories": [
+    "notice",
+    "scanned",
+    "handwriting",
+    "form_filled_by_hand",
+    "regulator",
+    "recipient_is_subject",
+    "two_dates",
+    "host_not_party",
+    "modern"
+   ],
+   "notes": "Pre-printed 'South Coast Air Quality Management District / NOTICE OF VIOLATION', No. 'P 79876'. Boxes: 'DATE OF VIOLATION Month 06 Day 02 Year 25'; facility 'CHIQUITA CANYON LANDFILL, 29201 Henry Mayo Dr, Castaic', Facility ID 119219. Violations of Rule 402 and H&SC 41700, handwritten. 'Served To: Steven Cassulo, District Manager' (wasteconnections.com address); 'Served By: Alexander Carr'; 'Date Notice Served: 06/03/25'; certified mail. Published by LA County Public Works as a task-force attachment (not a party). The notice's own date is the service date; the violation date in the header (and in the host's file name) is accepted, so readiness 'either'. Traps: the district manager served; the inspector; Waste Connections (the operator's e-mail domain); LA County.",
+   "source": {
+    "name": "Los Angeles County Public Works, website",
+    "url": "https://dpw.lacounty.gov/epd/tf/Attachments/Minutes_Attachments/2025_Attachments/06022025_CCL_NOV_P79876.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 814914,
+    "sha256": "2e5ed28e3040fdd8d074a2f94b508c68fd537b4bf129fa9bb5bc2ccb6aec5606"
+   },
+   "gold": {
+    "document_type": "Notice of Violation",
+    "acceptable_types": [
+     "NOV",
+     "Violation Notice"
+    ],
+    "document_date": "2025-06-03",
+    "acceptable_dates": [
+     "2025-06-02"
+    ],
+    "date_role": "notice",
+    "forbidden_dates": [],
+    "parties": [
+     "South Coast Air Quality Management District"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "South Coast AQMD"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "SCAQMD"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "AQMD"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Chiquita Canyon Landfill"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "South Coast Air Quality Management District",
+       "Chiquita Canyon Landfill"
+      ],
+      "relation": "to"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "South Coast Air Quality Management District",
+      "role": "issuer"
+     },
+     {
+      "name": "Chiquita Canyon Landfill",
+      "role": "recipient"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Steven Cassulo",
+      "why": "district manager on whom the notice was served"
+     },
+     {
+      "name": "Alexander Carr",
+      "why": "inspector who served it"
+     },
+     {
+      "name": "Waste Connections",
+      "why": "operator named only in an e-mail address"
+     },
+     {
+      "name": "Los Angeles County Public Works",
+      "why": "publisher of the copy, not a party"
+     },
+     {
+      "name": "California Air Resources Board",
+      "why": "named only in the form's column heading (second reader)"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real10-notice-02",
+   "file": "real10-notice-02.pdf",
+   "title": "City of Springfield, Oregon Notice of Intent to Award of November 10, 2025 for RFP #4008 to Diamond Parking Services, LLC (born-digital PDF, 1 page)",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 1,
+   "categories": [
+    "notice",
+    "born_digital",
+    "procurement",
+    "awardee_not_party",
+    "protest_period",
+    "modern"
+   ],
+   "notes": "Title 'NOTICE OF INTENT TO AWARD'; 'DATE: November 10, 2025'; 'PROJECT: RFP #4008 Downtown On/Off Street Enforcement & Permit Management'. The City of Springfield intends to award to Diamond Parking Services, LLC; protests within seven days. Signed 'Yueyin Lin, Financial Analyst, City of Springfield Finance Department'; cc Nathan Bell, Allie Sederlin. Springfield is named with 'Oregon' only in the address (OR 97477). The awardee is the subject; 'to' accepted. Traps: signer; cc; the awardee as sender.",
+   "source": {
+    "name": "City of Springfield, Oregon, website",
+    "url": "https://springfield-or.gov/wp-content/uploads/2025/11/RFP4008-Intent-to-award-letter.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 125522,
+    "sha256": "6b42f12158d252fdcf1e3b9d750272dd44290d3aa9924f89be0c35bfd3f563e7"
+   },
+   "gold": {
+    "document_type": "Notice of Intent to Award",
+    "acceptable_types": [
+     "Intent to Award",
+     "Notice",
+     "Notice of Intent"
+    ],
+    "document_date": "2025-11-10",
+    "acceptable_dates": [],
+    "date_role": "notice",
+    "forbidden_dates": [
+     {
+      "date": "2025-11-17",
+      "why": "end of the seven-day protest period (computed)"
+     }
+    ],
+    "parties": [
+     "City of Springfield"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "City of Springfield Finance Department"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Springfield"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Diamond Parking Services, LLC"
+      ],
+      "relation": "to"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "City of Springfield",
+      "role": "issuer"
+     },
+     {
+      "name": "Diamond Parking Services, LLC",
+      "role": "subject"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Yueyin Lin",
+      "why": "financial analyst who signs"
+     },
+     {
+      "name": "Nathan Bell",
+      "why": "Finance Director in cc"
+     },
+     {
+      "name": "Allie Sederlin",
+      "why": "court supervisor in cc"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-notice-03",
+   "file": "real10-notice-03.pdf",
+   "title": "California Department of General Services notice of intent to award of November 3, 2025 for IFB Parking Lot Management (CR 25-270017) to Everpark Inc. (born-digital PDF, 1 page)",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 1,
+   "categories": [
+    "notice",
+    "born_digital",
+    "procurement",
+    "memo_layout",
+    "class_addressee",
+    "awardee_not_party",
+    "modern"
+   ],
+   "notes": "'SENT VIA EMAIL'; 'Date: November 3, 2025'; 'To: All Bidders of IFB Parking Lot Management (CR 25-270017)'; 'From: State of California (State) / California Department of General Services (DGS) / Office of Business and Acquisition Services (OBAS)'; 'Subject: NOTICE OF INTENT TO AWARD'. Lowest responsive responsible bidder: Everpark Inc. Contact Erica Alvarez, Acquisition Analyst. Traps: the analyst; the awardee; 'All Bidders' (class).",
+   "source": {
+    "name": "California Department of General Services, website",
+    "url": "https://www.dgs.ca.gov/-/media/Divisions/OBAS/NOIs/25-270017-Notice-of-Intent.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 92762,
+    "sha256": "7c1e1ed76a9b6b3c4778b8d649aa3c38dac92112d804b611de33c481c94f358b"
+   },
+   "gold": {
+    "document_type": "Notice of Intent to Award",
+    "acceptable_types": [
+     "Intent to Award",
+     "Notice",
+     "Notice of Intent"
+    ],
+    "document_date": "2025-11-03",
+    "acceptable_dates": [],
+    "date_role": "notice",
+    "forbidden_dates": [],
+    "parties": [
+     "California Department of General Services"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Department of General Services"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "DGS"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Office of Business and Acquisition Services"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "State of California"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "California Department of General Services",
+      "role": "issuer"
+     },
+     {
+      "name": "Everpark Inc.",
+      "role": "subject"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Erica Alvarez",
+      "why": "acquisition analyst named as contact"
+     },
+     {
+      "name": "Everpark Inc.",
+      "why": "awardee, not the sender"
+     },
+     {
+      "name": "All Bidders",
+      "why": "class of addressee"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-notice-04",
+   "file": "real10-notice-04.pdf",
+   "title": "San Francisco OEWD notice of intent to award contracts under RFP 236, footer-dated 06/30/2026 (born-digital PDF, 5 pages)",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 5,
+   "categories": [
+    "notice",
+    "born_digital",
+    "procurement",
+    "acronym_issuer",
+    "footer_date_only",
+    "many_names",
+    "modern"
+   ],
+   "notes": "Heading 'OEWD REQUEST FOR PROPOSALS (RFP) 236 / BUSINESS DEVELOPMENT, COMMUNITY ECONOMIC DEVELOPMENT, AND OFFICE OF SMALL BUSINESS DIVISIONS / NOTICE OF INTENT TO AWARD'. Tables of applicants, scores and 'Intent to Award' / 'Not Awarded' per program area (Kultivate Labs, SF New Deal and many others). The only date is the page footer '06/30/2026' on each page ('1 of 6' ... '5 of 6'). OEWD (the San Francisco Office of Economic and Workforce Development) is named only as 'OEWD'; 'the City' in the body. The footer date and the acronym make the name less certain: 'either'. Traps: the applicants.",
+   "source": {
+    "name": "City and County of San Francisco, website",
+    "url": "https://media.api.sf.gov/documents/RFP_236_Notice_of_Intent_to_Award.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 174301,
+    "sha256": "8d98e7ac0e75228ed1ea5cca4fed755ee36bddb420bd9c681607bbcfd2879f2b"
+   },
+   "gold": {
+    "document_type": "Notice of Intent to Award",
+    "acceptable_types": [
+     "Intent to Award",
+     "Notice",
+     "RFP 236 Notice of Intent to Award"
+    ],
+    "document_date": "2026-06-30",
+    "acceptable_dates": [],
+    "date_role": "notice",
+    "forbidden_dates": [],
+    "parties": [
+     "OEWD"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Office of Economic and Workforce Development"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "City and County of San Francisco"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "San Francisco Office of Economic and Workforce Development"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "OEWD",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Kultivate Labs",
+      "why": "applicant in the tables"
+     },
+     {
+      "name": "SF New Deal",
+      "why": "applicant in the tables"
+     },
+     {
+      "name": "Main Street Launch",
+      "why": "applicant in the tables"
+     },
+     {
+      "name": "Mission Economic Development Agency",
+      "why": "applicant listed (second reader)"
+     },
+     {
+      "name": "Castro/Upper Market Community Benefit District",
+      "why": "applicant listed (second reader)"
+     },
+     {
+      "name": "Noise Pop Industries LLC",
+      "why": "applicant listed (second reader)"
+     },
+     {
+      "name": "Office of Small Business",
+      "why": "division whose program area is listed (no proposals) (second reader)"
+     },
+     {
+      "name": "Community Economic Development",
+      "why": "division named in title (second reader)"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real10-notice-05",
+   "file": "real10-notice-05.pdf",
+   "title": "County of El Dorado Planning Commission notice of public hearing of June 13, 2025 on proposed zoning ordinance revisions, hearing June 26, 2025 (born-digital PDF, 1 page)",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 1,
+   "categories": [
+    "notice",
+    "born_digital",
+    "public_hearing",
+    "hearing_date_trap",
+    "signature_date_at_end",
+    "us_local",
+    "modern"
+   ],
+   "notes": "Letterhead 'PLANNING AND BUILDING DEPARTMENT, PLANNING DIVISION' of El Dorado County. 'NOTICE OF PUBLIC HEARING / SUMMARY OF PROPOSED ORDINANCE NO. XXX-2025 ADOPTING REVISIONS TO TITLE 2 ... AND TITLE 130 (ZONING ORDINANCE)'. The Planning Commission 'will, on June 26, 2025, at 8:30 am' hold the hearing. Ends 'COUNTY OF EL DORADO PLANNING COMMISSION / KAREN L. GARNER, Executive Secretary / June 13, 2025'. The notice date is the one at the foot. Traps: the hearing date; the executive secretary.",
+   "source": {
+    "name": "County of El Dorado, California, website",
+    "url": "https://www.eldoradocounty.ca.gov/files/assets/county/v/1/documents/land-use/public-notices/061325-azou-public-notice.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 142651,
+    "sha256": "967c149bff6a4b401a7d25cb3703b5c8776df7af62286ce6ac0f2cd36af6f9f7"
+   },
+   "gold": {
+    "document_type": "Notice of Public Hearing",
+    "acceptable_types": [
+     "Public Hearing Notice",
+     "Notice",
+     "Public Notice"
+    ],
+    "document_date": "2025-06-13",
+    "acceptable_dates": [],
+    "date_role": "notice",
+    "forbidden_dates": [
+     {
+      "date": "2025-06-26",
+      "why": "date of the public hearing"
+     },
+     {
+      "date": "2025-06-04",
+      "why": "PDF creation date (metadata) (second reader)"
+     }
+    ],
+    "parties": [
+     "County of El Dorado Planning Commission"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "El Dorado County Planning Commission"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "County of El Dorado"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "El Dorado County"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "El Dorado County Planning and Building Department"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "County of El Dorado Planning Commission",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Karen L. Garner",
+      "why": "executive secretary who signs"
+     },
+     {
+      "name": "Board of Supervisors",
+      "why": "body the recommendation goes to"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-notice-06",
+   "file": "real10-notice-06.pdf",
+   "title": "Kitsap County Department of Community Development notice of public hearing before the Planning Commission, publication date 09/08/2025, hearing 09/23/2025, on the Year of the Rural project (born-digital PDF, 3 pages)",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 3,
+   "categories": [
+    "notice",
+    "born_digital",
+    "public_hearing",
+    "labelled_dates",
+    "hearing_date_trap",
+    "distribution_list",
+    "us_local",
+    "modern"
+   ],
+   "notes": "Letterhead 'KITSAP COUNTY DEPARTMENT OF COMMUNITY DEVELOPMENT', Rafe Wysham, Director. 'Notice of Public Hearing / Before the Kitsap County Planning Commission'; 'Publication Date: 09/08/2025'; 'Hearing Date: 09/23/2025'; agenda item (G) 'Year of the Rural'; staff planner Heather Cleveland. Ends with a distribution list of agencies and districts (Dept of Ecology, water purveyors). The notice's date is the publication date. Traps: the hearing date; the director; the staff planner; the distribution list.",
+   "source": {
+    "name": "Kitsap County, Washington, website",
+    "url": "https://www.kitsap.gov/dcd/PCDocs/2025.09.23%20-%20PC%20Mtg%20-%20Year%20of%20the%20Rural_Notice%20of%20Public%20Hearing.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 216240,
+    "sha256": "abf9c2a9a5214f4de2d26387a6f7b949380484c2e92fc340884e78df7c0e5e02"
+   },
+   "gold": {
+    "document_type": "Notice of Public Hearing",
+    "acceptable_types": [
+     "Public Hearing Notice",
+     "Notice",
+     "Public Notice"
+    ],
+    "document_date": "2025-09-08",
+    "acceptable_dates": [],
+    "date_role": "notice",
+    "forbidden_dates": [
+     {
+      "date": "2025-09-23",
+      "why": "date of the hearing"
+     }
+    ],
+    "parties": [
+     "Kitsap County Department of Community Development"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Kitsap County"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Kitsap County Planning Commission"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Department of Community Development"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Kitsap County Department of Community Development",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Rafe Wysham",
+      "why": "director in the letterhead"
+     },
+     {
+      "name": "Heather Cleveland",
+      "why": "staff planner named as contact"
+     },
+     {
+      "name": "WA State Dept of Ecology",
+      "why": "on the distribution list"
+     },
+     {
+      "name": "Bremerton School District",
+      "why": "one of many cc recipients (second reader)"
+     },
+     {
+      "name": "Puget Sound Energy",
+      "why": "one of many cc recipients (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-order-01",
+   "file": "real10-order-01.pdf",
+   "title": "Maryland State Board of Social Work Examiners Consent Order in Case Number 2021-2955 concerning Monica Crockett, LMSW, signed by the Board Chair July 17, 2025 (scanned with OCR, 13 pages)",
+   "kind": "order",
+   "format": "pdf",
+   "text_layer": "ocr",
+   "pages": 13,
+   "categories": [
+    "order",
+    "consent_order",
+    "ocr",
+    "licensee_individual",
+    "received_stamp",
+    "many_dates",
+    "us_state",
+    "modern"
+   ],
+   "notes": "Caption 'IN THE MATTER OF MONICA CROCKETT, LMSW, License Number: 20166 * BEFORE THE MARYLAND STATE BOARD OF SOCIAL WORK EXAMINERS * Case Number: 2021-2955', title 'CONSENT ORDER'. 'On January 30, 2025, the Maryland State Board of Social Work Examiners ... charged' the respondent; a stamp 'JUL 14 2025'; Case Resolution Conference June 9, 2025; facts from 2021. Order signed 'July 17, 2025, Board Chair, Maryland State Board of Social Work Examiners'; respondent's consent and notary (June/July 2025, partly illegible). The order's date is the chair's signature. The licensee is an individual: named for the Board, with the respondent accepted with 'for'. Traps: the charge date; the stamp; the conference date; facts dates.",
+   "source": {
+    "name": "Maryland Department of Health, website",
+    "url": "https://health.maryland.gov/bswe/Documents/Orders/Crockett_M-20166.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 4806457,
+    "sha256": "4e2785663a24d2e8d6023ef347c8eb5a021d5eec0ac68698b7a2728f0d55e00a"
+   },
+   "gold": {
+    "document_type": "Consent Order",
+    "acceptable_types": [
+     "Order",
+     "Board Order"
+    ],
+    "document_date": "2025-07-17",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-01-30",
+      "why": "date the Board charged the respondent"
+     },
+     {
+      "date": "2025-07-14",
+      "why": "received stamp"
+     },
+     {
+      "date": "2025-06-09",
+      "why": "date of the case resolution conference"
+     },
+     {
+      "date": "2025-07-03",
+      "why": "respondent's signature and notary date (second reader)"
+     },
+     {
+      "date": "2021-04-07",
+      "why": "date the complaint was received (second reader)"
+     },
+     {
+      "date": "2026-01-29",
+      "why": "PDF modification date (metadata) (second reader)"
+     },
+     {
+      "date": "2025-07-24",
+      "why": "PDF creation date (metadata) (second reader)"
+     }
+    ],
+    "parties": [
+     "Maryland State Board of Social Work Examiners"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Monica Crockett"
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "Maryland State Board of Social Work Examiners",
+       "Monica Crockett"
+      ],
+      "relation": "for"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Maryland State Board of Social Work Examiners",
+      "role": "issuer"
+     },
+     {
+      "name": "Monica Crockett",
+      "role": "subject"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Kevin Meenan",
+      "why": "Board Chair who signs (second reader)"
+     },
+     {
+      "name": "Notary Public",
+      "why": "notary of the respondent's consent (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-order-02",
+   "file": "real10-order-02.pdf",
+   "title": "New Jersey State Board of Medical Examiners and Board of Massage and Bodywork Therapy Final Consent Order concerning Ana C. Velazco, MBT and Fabsilhouette (Medical Massage Network); board signatures undated, respondent signed 5/28/25 (scanned, 4 pages)",
+   "kind": "order",
+   "format": "pdf",
+   "text_layer": "scan",
+   "pages": 4,
+   "categories": [
+    "order",
+    "consent_order",
+    "scanned",
+    "two_issuers",
+    "undated_order",
+    "respondent_signature_date",
+    "attorney_general_caption",
+    "us_state",
+    "modern"
+   ],
+   "notes": "Caption block: 'MATTHEW J. PLATKIN, ATTORNEY GENERAL OF NEW JERSEY ... By: Michelle Mikelberg, Deputy Attorney General'; 'STATE OF NEW JERSEY / DEPARTMENT OF LAW AND PUBLIC SAFETY / DIVISION OF CONSUMER AFFAIRS / STATE BOARD OF MEDICAL EXAMINERS / BOARD OF MASSAGE AND BODYWORK THERAPY'; 'IN THE MATTER OF THE UNLICENSED PRACTICE OF MEDICINE AND THE LICENSE TO PRACTICE MASSAGE AND BODYWORK THERAPY OF ANA C. VELAZCO, MBT ... FABSILHOUETTE A/K/A MEDICAL MASSAGE NETWORK'; 'Administrative Action / FINAL CONSENT ORDER'. Inspection March 3, 2023. Signature lines for Chetan Shah, MD, Board President, and David Bank, Board Chair, undated and unsigned in this copy; respondent 'Dated: 5/28/25'; counsel Russell P. Trocano 'Dated: 5/29/25'. The order itself carries no entry date (the host's file name says 2025-0611 and 5-29-25), so the name cannot be settled: needs_review. Traps: the inspection date; the AG and deputy AG; signers.",
+   "source": {
+    "name": "State of New Jersey, website",
+    "url": "https://www.nj.gov/oag/newsreleases25/2025-0611_Final-Consent-Order-Suspension-5-29-25-Shah-corrected.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 1733280,
+    "sha256": "0b7873655aa036f20af17fef7212cc2753d15629440474194057a2a15db6bc6b"
+   },
+   "gold": {
+    "document_type": "Final Consent Order",
+    "acceptable_types": [
+     "Consent Order",
+     "Order"
+    ],
+    "document_date": "2025-05-29",
+    "acceptable_dates": [
+     "2025-05-28"
+    ],
+    "date_role": "execution",
+    "forbidden_dates": [
+     {
+      "date": "2023-03-03",
+      "why": "date of the investigators' inspection"
+     },
+     {
+      "date": "2023-04-27",
+      "why": "date of investigative inquiry (second reader)"
+     }
+    ],
+    "parties": [
+     "New Jersey State Board of Medical Examiners"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Board of Massage and Bodywork Therapy"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "New Jersey Board of Massage and Bodywork Therapy"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Division of Consumer Affairs"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Ana C. Velazco"
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "New Jersey State Board of Medical Examiners",
+       "Ana C. Velazco"
+      ],
+      "relation": "for"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "New Jersey State Board of Medical Examiners",
+      "role": "issuer"
+     },
+     {
+      "name": "New Jersey Board of Massage and Bodywork Therapy",
+      "role": "issuer"
+     },
+     {
+      "name": "Ana C. Velazco",
+      "role": "subject"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Matthew J. Platkin",
+      "why": "Attorney General in the caption"
+     },
+     {
+      "name": "Michelle Mikelberg",
+      "why": "deputy attorney general"
+     },
+     {
+      "name": "Chetan Shah",
+      "why": "board president signature line"
+     },
+     {
+      "name": "David Bank",
+      "why": "board chair signature line"
+     },
+     {
+      "name": "Russell P. Trocano",
+      "why": "respondent's attorney"
+     },
+     {
+      "name": "Antonia Winstead",
+      "why": "executive director payments go to"
+     },
+     {
+      "name": "Edie Nugent",
+      "why": "Executive Director named for return of license (second reader)"
+     }
+    ],
+    "expected_readiness": "needs_review"
+   }
+  },
+  {
+   "id": "real10-order-03",
+   "file": "real10-order-03.pdf",
+   "title": "New Jersey Government Records Council Final Decision of January 27, 2026 in Steve Clegg v. City of Trenton (Mercer), Complaint No. 2025-57, distributed February 2, 2026, with findings and recommendations (born-digital PDF, 5 pages)",
+   "kind": "order",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 5,
+   "categories": [
+    "order",
+    "decision",
+    "born_digital",
+    "distribution_date",
+    "individual_complainant",
+    "referenced_dates",
+    "us_state",
+    "modern"
+   ],
+   "notes": "Title 'FINAL DECISION / January 27, 2026 Government Records Council Meeting'; 'Steve Clegg, Complainant v. City of Trenton (Mercer), Custodian of Record', 'Complaint No. 2025-57'. The Council considered the 'January 20, 2026' Findings and Recommendations; the OPRA request of 'November 25, 2024', denied January 8, 2025. 'On The 27th Day of January 2026'; 'Decision Distribution Date: February 2, 2026'. Pages 3-5: the Executive Director's Findings and Recommendations. The decision's date is the meeting at which it was adopted. Traps: the distribution date; the findings date; the request dates; the complainant (an individual).",
+   "source": {
+    "name": "State of New Jersey, website",
+    "url": "https://www.nj.gov/grc/decisions/pdf/2025-57.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 208934,
+    "sha256": "32b2d9f6210c2b4866f8dd90ee6cab02b8c03f78cefd666368c58ff91104a683"
+   },
+   "gold": {
+    "document_type": "Final Decision",
+    "acceptable_types": [
+     "Decision",
+     "Order"
+    ],
+    "document_date": "2026-01-27",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2026-02-02",
+      "why": "decision distribution date"
+     },
+     {
+      "date": "2026-01-20",
+      "why": "date of the findings and recommendations"
+     },
+     {
+      "date": "2024-11-25",
+      "why": "date of the records request"
+     },
+     {
+      "date": "2025-03-06",
+      "why": "complaint filing date (second reader)"
+     },
+     {
+      "date": "2025-01-08",
+      "why": "date of the custodian's response/denial (second reader)"
+     },
+     {
+      "date": "2025-02-24",
+      "why": "statute-of-limitations expiry (second reader)"
+     }
+    ],
+    "parties": [
+     "Government Records Council"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "New Jersey Government Records Council"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "GRC"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Government Records Council",
+       "City of Trenton"
+      ],
+      "relation": "for"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Government Records Council",
+      "role": "issuer"
+     },
+     {
+      "name": "City of Trenton",
+      "role": "subject"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Steve Clegg",
+      "why": "complainant, a private individual"
+     },
+     {
+      "name": "John A. Alexy",
+      "why": "Chair who signs (second reader)"
+     },
+     {
+      "name": "Steven Ritardi",
+      "why": "Secretary who attests (second reader)"
+     },
+     {
+      "name": "Brenda B. Alves",
+      "why": "staff attorney who prepared findings (second reader)"
+     },
+     {
+      "name": "Brandon Garcia",
+      "why": "custodian of record (second reader)"
+     },
+     {
+      "name": "Carlos Minacapelli",
+      "why": "person named in the records request (second reader)"
+     },
+     {
+      "name": "Appellate Division of the Superior Court",
+      "why": "court named for appeals (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-purchase_order-01",
+   "file": "real10-purchase_order-01.pdf",
+   "title": "Texas Department of Motor Vehicles purchase order 0000016156 (Texas SmartBuy PO 25189642) to Staples, PO date 06/19/2025 (born-digital, 6 pages)",
+   "kind": "purchase_order",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 6,
+   "categories": [
+    "purchase_order",
+    "born_digital",
+    "po_end_date",
+    "renewal_history",
+    "us_state",
+    "modern"
+   ],
+   "notes": "'Texas Department of Motor Vehicles ... Texas SmartBuy PO # 25189642 ... Purchase Order # 0000016156'; PO Date 06/19/2025, PO End Date 06/30/2025; Vendor 'STAPLES DBA STAPLES BUSINESS ADVANTAGE'; purchaser Daphne Free. Later pages list renewal periods 2021-2025 and 'Overall Service Period: 06/01/2019 through 05/31/2023'. Traps: end date; renewal periods; ship-to contact.",
+   "source": {
+    "name": "Texas Department of Motor Vehicles, website",
+    "url": "https://ftp.txdmv.gov/pub/txdmv-info/fas/contract_reporting/60800%200000016156.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 41130,
+    "sha256": "d14d6fa949b0bc329816bdf7439b697ad59beedc7feff3ed6573162ccb363c02"
+   },
+   "gold": {
+    "document_type": "Purchase Order",
+    "acceptable_types": [
+     "PO",
+     "Order"
+    ],
+    "document_date": "2025-06-19",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-06-30",
+      "why": "PO end date"
+     },
+     {
+      "date": "2024-09-01",
+      "why": "start of a renewal period"
+     },
+     {
+      "date": "2025-08-31",
+      "why": "end of a renewal period"
+     },
+     {
+      "date": "2020-10-26",
+      "why": "boilerplate confirmation date in template text (second reader)"
+     },
+     {
+      "date": "2021-08-31",
+      "why": "boilerplate confirmation end date in template text (second reader)"
+     }
+    ],
+    "parties": [
+     "Staples"
+    ],
+    "party_relation": "to",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Texas Department of Motor Vehicles"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "TxDMV"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Staples Business Advantage"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "Texas Department of Motor Vehicles",
+       "Staples"
+      ],
+      "relation": "between"
+     },
+     {
+      "parties": [
+       "Texas Department of Motor Vehicles"
+      ],
+      "relation": "to"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Texas Department of Motor Vehicles",
+      "role": "issuer"
+     },
+     {
+      "name": "Staples",
+      "role": "vendor"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Daphne Free",
+      "why": "purchaser"
+     },
+     {
+      "name": "Erin Whitney Perry",
+      "why": "ship-to contact"
+     },
+     {
+      "name": "Erin Perry",
+      "why": "contract monitor / ship-to attention (second reader)"
+     },
+     {
+      "name": "Lamar R. Garcia",
+      "why": "vendor contact (second reader)"
+     },
+     {
+      "name": "Miguel Castro",
+      "why": "vendor alternate contact (second reader)"
+     },
+     {
+      "name": "Texas Department of Criminal Justice",
+      "why": "named in boilerplate (second reader)"
+     },
+     {
+      "name": "Texas Correctional Industries",
+      "why": "named in boilerplate (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-purchase_order-02",
+   "file": "real10-purchase_order-02.pdf",
+   "title": "Texas A&M Forest Service purchase order P500062 to Victoria County for the Victoria office lease, order date 08/21/2024, followed by the scanned lease (14 pages, mixed)",
+   "kind": "purchase_order",
+   "format": "pdf",
+   "text_layer": "mixed",
+   "pages": 14,
+   "categories": [
+    "purchase_order",
+    "mixed_text_layer",
+    "bundle",
+    "lease_attached",
+    "lease_term_trap",
+    "us_state",
+    "modern"
+   ],
+   "notes": "Page 1: 'PURCHASE ORDER TEXAS A&M FOREST SERVICE Order Date 08/21/2024 ... P500062 ... VENDOR ... VICTORIA COUNTY'; item 'Victoria office lease 9/1/2024 - 8/31/2025'; 'LEASE TERM: 9/1/2023 - 8/31/2028'; 'AH 07/13/23'; 'DOCUMENT DATE: 08/21/2024'. Pages 3-14: scanned lease between the A&M System and the landlord (Victoria County). The PO is the document; the lease is an attachment, so 'either'. Traps: lease terms; lease parties; 'Texas A&M University System'.",
+   "source": {
+    "name": "Texas A&M Forest Service, website",
+    "url": "https://tfsfinance.tamu.edu/modules/finance/admin/content/reports/biddocuments/P500062%20Victoria%20County.pdf",
+    "page": null,
+    "license": "Texas state agency public record; no licence stated",
+    "size": 3400127,
+    "sha256": "3de946d70a5c73395dce68f393c62571443b18f8c72eb5d9ebdd295694c2c1db"
+   },
+   "gold": {
+    "document_type": "Purchase Order",
+    "acceptable_types": [
+     "PO",
+     "Order"
+    ],
+    "document_date": "2024-08-21",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2024-09-01",
+      "why": "start of the billed lease year"
+     },
+     {
+      "date": "2025-08-31",
+      "why": "end of the billed lease year"
+     },
+     {
+      "date": "2023-09-01",
+      "why": "lease term start"
+     },
+     {
+      "date": "2028-08-31",
+      "why": "lease term end"
+     },
+     {
+      "date": "2023-07-13",
+      "why": "date in a buyer note"
+     }
+    ],
+    "parties": [
+     "Victoria County"
+    ],
+    "party_relation": "to",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Texas A&M Forest Service"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Texas A&M Forest Service",
+       "Victoria County"
+      ],
+      "relation": "between"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Texas A&M Forest Service",
+      "role": "issuer"
+     },
+     {
+      "name": "Victoria County",
+      "role": "vendor / landlord"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Carole Trawick",
+      "why": "department contact"
+     },
+     {
+      "name": "Benjamin Zeller",
+      "why": "vendor reference"
+     },
+     {
+      "name": "Board of Regents of the Texas A&M University System",
+      "why": "tenant party to the attached lease (second reader)"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real10-report-01",
+   "file": "real10-report-01.pdf",
+   "title": "City of San Antonio Office of the City Auditor, Audit of Finance Treasury Access and Authorization Controls (AU25-016), transmitted October 16, 2025 (born-digital, 13 pages)",
+   "kind": "report",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 13,
+   "categories": [
+    "report",
+    "born_digital",
+    "cover_letter",
+    "audit_period_dates",
+    "us_local",
+    "modern"
+   ],
+   "notes": "Cover letter 'CITY OF SAN ANTONIO ... October 16, 2025 ... SUBJECT: Audit Report of Finance Treasury Access and Authorization Controls'; 'began in October 2024 and concluded with an exit meeting ... in May 2025'; signed Buddy Vargas, City Auditor; long list of council members and distribution. Report 'PROJECT NO. AU25-016'. Traps: mayor and council; distribution list.",
+   "source": {
+    "name": "City of San Antonio, website",
+    "url": "https://www.sa.gov/files/assets/main/v/1/oca/documents/audit-reports/au25-016.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 2694354,
+    "sha256": "9042f3f87cd98ff2b58800322309aa2c8c0974cad3fb77392298091e85326a23"
+   },
+   "gold": {
+    "document_type": "Audit Report",
+    "acceptable_types": [
+     "Report"
+    ],
+    "document_date": "2025-10-16",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-09-09",
+      "why": "date of the management response letter in Appendix B (second reader)"
+     },
+     {
+      "date": "2025-12-03",
+      "why": "PDF modification date (metadata) (second reader)"
+     }
+    ],
+    "parties": [
+     "City of San Antonio"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "City of San Antonio Office of the City Auditor"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Office of the City Auditor"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "City of San Antonio"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "City of San Antonio",
+      "role": "issuer"
+     },
+     {
+      "name": "Office of the City Auditor",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Gina Ortiz Jones",
+      "why": "mayor, addressee"
+     },
+     {
+      "name": "Erik Walsh",
+      "why": "city manager, distribution"
+     },
+     {
+      "name": "Buddy Vargas",
+      "why": "city auditor who signs"
+     },
+     {
+      "name": "Troy Elliott",
+      "why": "CFO on distribution / response (second reader)"
+     },
+     {
+      "name": "Frost",
+      "why": "bank system named in findings (second reader)"
+     },
+     {
+      "name": "City Council",
+      "why": "addressee (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real10-report-02",
+   "file": "real10-report-02.pdf",
+   "title": "Weber County (Utah) PO Report for the 8/12/2025 commission meeting, purchase orders 8/4/2025-8/8/2025 (born-digital, 2 pages)",
+   "kind": "report",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 2,
+   "categories": [
+    "report",
+    "born_digital",
+    "meeting_date_header",
+    "period_dates",
+    "vendor_list",
+    "us_local",
+    "modern"
+   ],
+   "notes": "'Commission Meeting Date: 8/12/2025 Weber County PO Report ... approved by the Board of County commissioners at the public meeting held on 8/12/2025'; Summary Start Date 8/4/2025, End Date 8/8/2025, Count 13. Vendors listed (Bell Janitorial Supply, CompuCom ...). Purchasing Agent Jason Horne; Clerk/Auditor Ricky Hatch. Meeting date gold; period end accepted. 'either'.",
+   "source": {
+    "name": "Weber County, Utah, website",
+    "url": "https://www.webercountyutah.gov/commission/documents/uploads/WC%20Purchase%20Order%20Report%2008%2012%202025.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 232214,
+    "sha256": "c37e219c81345959227ca193cbdd78633d6d44f44b656d5f78f3da0aee2d1a43"
+   },
+   "gold": {
+    "document_type": "PO Report",
+    "acceptable_types": [
+     "Purchase Order Report",
+     "Report"
+    ],
+    "document_date": "2025-08-12",
+    "acceptable_dates": [
+     "2025-08-08"
+    ],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-08-04",
+      "why": "start of the period"
+     }
+    ],
+    "parties": [
+     "Weber County"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Weber County"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Weber County",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Bell Janitorial Supply LC",
+      "why": "vendor listed"
+     },
+     {
+      "name": "CompuCom Systems Inc",
+      "why": "vendor listed"
+     },
+     {
+      "name": "Jason Horne",
+      "why": "purchasing agent"
+     },
+     {
+      "name": "Ricky Hatch",
+      "why": "County Clerk/Auditor (second reader)"
+     },
+     {
+      "name": "James H. Harvey",
+      "why": "Commissioner (second reader)"
+     },
+     {
+      "name": "Sharon Bolos",
+      "why": "Commissioner (second reader)"
+     },
+     {
+      "name": "Gage Froerer",
+      "why": "Commissioner (second reader)"
+     },
+     {
+      "name": "Pfizer",
+      "why": "vendor listed (second reader)"
+     },
+     {
+      "name": "Medico-Mart Inc",
+      "why": "vendor listed (second reader)"
+     },
+     {
+      "name": "Weber Morgan Health Department",
+      "why": "requesting department (second reader)"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real10-statement-01",
+   "file": "real10-statement-01.pdf",
+   "title": "Angelina County (Texas) Treasurer's Monthly Report for March 2026, filed and approved April 28, 2026 (partly scanned, 5 pages)",
+   "kind": "statement",
+   "format": "pdf",
+   "text_layer": "scan",
+   "pages": 5,
+   "categories": [
+    "statement",
+    "scanned",
+    "period_vs_filing_date",
+    "maturity_dates",
+    "us_local",
+    "modern"
+   ],
+   "notes": "'Jill Brewer Angelina County Treasurer Monthly Report for March 2026'; affidavit 'Filed ... on this 28th day of April 2026'; Commissioners Court approval 'on this 28th day of April 2026'. Tables 'FOR THE MONTH ENDED MARCH 2026', CD maturities 5/22/2026 ... 2/11/2027. Filing date gold; month end accepted. 'either'.",
+   "source": {
+    "name": "Angelina County, Texas, website",
+    "url": "https://www.angelinacounty.net/files/pdf/treasurer/TR0326.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 273088,
+    "sha256": "40197a0162d5d4cfe460735eae134a18c870d8e2d519b15adb1000d9528cc16e"
+   },
+   "gold": {
+    "document_type": "Treasurer's Monthly Report",
+    "acceptable_types": [
+     "Monthly Report",
+     "Treasurer's Report",
+     "Report"
+    ],
+    "document_date": "2026-04-28",
+    "acceptable_dates": [
+     "2026-03-31"
+    ],
+    "date_role": "filing",
+    "forbidden_dates": [
+     {
+      "date": "2026-05-22",
+      "why": "a CD maturity date"
+     },
+     {
+      "date": "2027-02-11",
+      "why": "a CD maturity date"
+     },
+     {
+      "date": "2026-04-15",
+      "why": "system print date in the footer (second reader)"
+     },
+     {
+      "date": "2025-12-31",
+      "why": "as-of date of the waste management trust value (second reader)"
+     }
+    ],
+    "parties": [
+     "Angelina County"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Angelina County Treasurer"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Angelina County"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Jill Brewer"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Angelina County",
+      "role": "issuer"
+     },
+     {
+      "name": "Jill Brewer",
+      "role": "county treasurer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Trustar Bank",
+      "why": "depository"
+     },
+     {
+      "name": "Wings Financial CU",
+      "why": "depository"
+     },
+     {
+      "name": "Angelina County Commissioners Court",
+      "why": "body that approved the report (second reader)"
+     },
+     {
+      "name": "TexPool",
+      "why": "investment pool listed (second reader)"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real10-statement-02",
+   "file": "real10-statement-02.pdf",
+   "title": "Finger Lakes Library System Treasurer's Report, July - August 2025 (1 page; the issuer appears only in the logo image)",
+   "kind": "statement",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 1,
+   "categories": [
+    "statement",
+    "born_digital",
+    "issuer_only_in_logo",
+    "period_only",
+    "no_date",
+    "nonprofit",
+    "modern"
+   ],
+   "notes": "'Treasurer's Report July - August 2025 General Fund 7/1 Beginning Balance ... 8/1 Beginning Balance ...'. Issuer named only in the Finger Lakes Library System logo image; the text layer has no organisation name. Header '25 56' (likely agenda numbering). No issue date: period end used, role other. Issuer not in text: 'needs_review'.",
+   "source": {
+    "name": "Finger Lakes Library System (New York), website",
+    "url": "https://www.flls.org/wp-content/uploads/2025/09/25-56.TreasurersRpt.July-Aug2025.pdf",
+    "page": null,
+    "license": "US state or local public record (open-records law); no licence stated on the file",
+    "size": 809759,
+    "sha256": "18990dc685622703fd216121229a2dfc726a24e99fafd1b81cd5f163cf096600"
+   },
+   "gold": {
+    "document_type": "Treasurer's Report",
+    "acceptable_types": [
+     "Financial Report",
+     "Report",
+     "Statement"
+    ],
+    "document_date": "2025-08-31",
+    "acceptable_dates": [],
+    "date_role": "other",
+    "forbidden_dates": [
+     {
+      "date": "2025-07-01",
+      "why": "start of the period"
+     },
+     {
+      "date": "2025-09-19",
+      "why": "PDF creation/modification date (metadata) (second reader)"
+     }
+    ],
+    "parties": [
+     "Finger Lakes Library System"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Finger Lakes Library System"
+      ],
+      "relation": "for"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Finger Lakes Library System",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [],
+    "expected_readiness": "needs_review"
+   }
+  },
+  {
+   "id": "real10-statement-03",
+   "file": "real10-statement-03.pdf",
+   "title": "Parish council bank reconciliation, statement date 31-Oct-2025, prepared by the Clerk (1 page; the council is not named)",
+   "kind": "statement",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 1,
+   "categories": [
+    "statement",
+    "born_digital",
+    "no_issuer_named",
+    "previous_period_date",
+    "uk_local",
+    "modern"
+   ],
+   "notes": "'Bank Reconciliation Statement Date 31-Oct-2025 Previous Reconcilation Date 31-Aug-2025 Prepared by Elizabeth Worrall, Clerk'. Source is Siddington Parish Council's site, but no organisation is named in the file. Signed/Date lines blank. No party: a name without one is right.",
+   "source": {
+    "name": "Siddington Parish Council (England), website",
+    "url": "https://siddingtonparishcouncil.gov.uk/wp-content/uploads/2026/04/Bank-Rec-Siddington-end-October-2025.pdf",
+    "page": null,
+    "license": "English parish council public record; no licence stated",
+    "size": 112920,
+    "sha256": "c8923d92b9411c16edcd889f7d2551c9e608ba12165596664c5974f7f81cdb8c"
+   },
+   "gold": {
+    "document_type": "Bank Reconciliation",
+    "acceptable_types": [
+     "Bank Reconciliation Statement",
+     "Statement"
+    ],
+    "document_date": "2025-10-31",
+    "acceptable_dates": [],
+    "date_role": "other",
+    "forbidden_dates": [
+     {
+      "date": "2025-08-31",
+      "why": "previous reconciliation date"
+     },
+     {
+      "date": "2025-11-12",
+      "why": "PDF creation date (metadata) (second reader)"
+     }
+    ],
+    "parties": [],
+    "party_relation": null,
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Siddington Parish Council"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [],
+    "forbidden_parties": [
+     {
+      "name": "Elizabeth Worrall",
+      "why": "clerk who prepared it"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real10-statement-04",
+   "file": "real10-statement-04.pdf",
+   "title": "Auckley Parish Council bank reconciliation, period ended 30 June 2025 (1 page)",
+   "kind": "statement",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 1,
+   "categories": [
+    "statement",
+    "born_digital",
+    "uk_date_words",
+    "period_start_trap",
+    "uk_local",
+    "modern"
+   ],
+   "notes": "'AUCKLEY PARISH COUNCIL Bank Reconciliation Ended 30 June 2025 Balance brought forward 1st April 2025 ...'; accounts at Natwest and Cambridge & Counties. Traps: period start; the banks.",
+   "source": {
+    "name": "Auckley Parish Council (England), website",
+    "url": "https://www.auckleyparishcouncil.gov.uk/wp-content/uploads/2025/08/Bank-Reconciliation-25-26-Q1-for-web.pdf",
+    "page": null,
+    "license": "English parish council public record; no licence stated",
+    "size": 105108,
+    "sha256": "1f73869f26b3ee91d7bffbc2aeb1aabcdc28e6d05530e20abcaf52d99b3820f5"
+   },
+   "gold": {
+    "document_type": "Bank Reconciliation",
+    "acceptable_types": [
+     "Bank Reconciliation Statement",
+     "Statement"
+    ],
+    "document_date": "2025-06-30",
+    "acceptable_dates": [],
+    "date_role": "other",
+    "forbidden_dates": [
+     {
+      "date": "2025-04-01",
+      "why": "start of the period"
+     }
+    ],
+    "parties": [
+     "Auckley Parish Council"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Auckley Parish Council"
+      ],
+      "relation": "for"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Auckley Parish Council",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Natwest",
+      "why": "bank"
+     },
+     {
+      "name": "Cambridge & Counties",
+      "why": "bank"
+     },
+     {
+      "name": "Hayfield Park",
+      "why": "payments category (second reader)"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  }
+ ]
+}
