@@ -86,9 +86,26 @@ runner can, need a GPU. Everything else runs free on GitHub runners:
    model's own token probabilities, so the engine parses, gates and scores each reply exactly
    as it would live.
 
-The first `local` run (`teacher-runs/2026-11-24-local2b.json`) proves this path for free: the
-2B answers on a CPU runner through `answer.py`, and the replayed score must match the 2B's live
-score from screen1.
+The first `local` run (`teacher-runs/2026-11-24-local2b.json`, workflow run 45441020012) tested
+this path for free: the 2B answered every captured request on a CPU runner through `answer.py`,
+and the answers were scored by replay. Against the 2B's live run in screen1, on the 314
+documents both scored:
+
+| | Right | Ready | Unsafe ready |
+|---|---|---|---|
+| Qwen3.5 2B, live (screen1) | 104 | 17 | 5 |
+| Qwen3.5 2B, answered by `answer.py`, scored by replay | 107 | 16 | 7 |
+
+314 of the 320 prompts were byte for byte the ones the live run sent (the six others differ in
+their extracted text), so capture reproduces the app's requests. The totals agree within a few
+documents, but the two runs disagree on 25 individual documents (14 one way, 11 the other),
+more than the 9B's 7 of 301 between its two screens. The runs landed on different runner CPUs,
+whose arithmetic differs slightly, and a 2B is likely more sensitive to that than a 9B; the
+replay jobs did not record their CPU, which the workflow now does. For the teacher screen this
+means a difference of a few documents is noise, and only a clear lead over the 9B counts.
+
+Its captured requests (`results/teacher/2026-11-24-local2b/real1` to `real6`) are the ones the
+GPU job answers.
 
 ### Hardware
 
@@ -135,7 +152,7 @@ After a `capture` or `local` run has committed the requests at commit `C`:
 ```
 hf jobs run --flavor l40sx1 --timeout 60m \
   -e ATLAS_COMMIT=C \
-  -e ATLAS_REQUESTS=research/atlas-models/results/teacher/2026-11-24-local2b/real1/requests.jsonl.gz,...,real6/requests.jsonl.gz \
+  -e ATLAS_REQUESTS=research/atlas-models/results/teacher/2026-11-24-local2b/real1/requests.jsonl.gz,...(real2 to real6 the same way) \
   -e MODEL_REPO=unsloth/Qwen3.5-27B-GGUF -e MODEL_FILE=Qwen3.5-27B-Q8_0.gguf -e PARALLEL=4 \
   ghcr.io/ggml-org/llama.cpp:full-cuda-b11946 \
   python3 -c "import urllib.request; exec(urllib.request.urlopen('https://raw.githubusercontent.com/z-brenner/intern/C/research/atlas-models/teacher/hf_job.py').read())"

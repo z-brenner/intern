@@ -181,6 +181,7 @@ jobs:
         run: |
           research/atlas-models/teacher/bench_through_fake.sh "$LAB/capture" "" 18091
           sort -u "$LAB/capture/capture.jsonl" | gzip -9n > "$KEEP/$SET/requests.jsonl.gz"
+          lscpu > "$KEEP/$SET/lscpu.txt" || true
           echo "captured $(zcat "$KEEP/$SET/requests.jsonl.gz" | wc -l) requests"
       - name: Fetch the local model
         if: env.STAGE == 'local'
