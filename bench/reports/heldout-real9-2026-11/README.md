@@ -130,4 +130,4 @@ Caveats:
 
 The type reasons (TYPE_UNSUPPORTED, TYPE_INFERRED, TYPE_MISSING) and PARTY_UNSUPPORTED mostly sit
 on names that deserve holding: their really wrong and minor names outnumber their right ones,
-7 right against 25.
+7 right against 23, counting a name once for each reason it carries.
