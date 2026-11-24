@@ -16,6 +16,11 @@
 //!                                 the app does with the accurate model
 //! --review-level strict|balanced  which readings count as ready, as the
 //!                                 app's setting does (strict by default)
+//! --confidence-score min|whole-value
+//!                                 what --min-token-confidence is compared
+//!                                 with: the least probable token (the app's,
+//!                                 by default) or the whole-value figure
+//!                                 worked out from a traced recording
 //! ```
 //!
 //! The evidence pipeline's own measurements are here too
@@ -45,6 +50,7 @@ pub const KEYS: &[&str] = &[
     "prompt-profile",
     "min-token-confidence",
     "review-level",
+    "confidence-score",
 ];
 
 /// How a run's engine is configured.
@@ -70,6 +76,10 @@ pub struct EngineSettings {
     /// every level, so, like the threshold above, it is scoring alone: it
     /// is not in a recording's header and stales nothing.
     pub review_level: ReviewLevel,
+    /// Whether the threshold is compared with the whole-value figure
+    /// ([`Engine::with_whole_value_confidence`]) rather than the least
+    /// probable token. Off by default; scoring alone, like the threshold.
+    pub whole_value_confidence: bool,
 }
 
 impl Default for EngineSettings {
@@ -81,6 +91,7 @@ impl Default for EngineSettings {
             profile: None,
             min_token_confidence: None,
             review_level: ReviewLevel::Strict,
+            whole_value_confidence: false,
         }
     }
 }
@@ -139,6 +150,17 @@ impl EngineSettings {
             settings.review_level = ReviewLevel::parse(word)
                 .ok_or_else(|| format!("--review-level is strict or balanced, not {word}"))?;
         }
+        if let Some(word) = values.get("confidence-score") {
+            settings.whole_value_confidence = match word.as_str() {
+                "min" => false,
+                "whole-value" => true,
+                _ => {
+                    return Err(format!(
+                        "--confidence-score is min or whole-value, not {word}"
+                    ));
+                }
+            };
+        }
         Ok(settings)
     }
 
@@ -147,7 +169,8 @@ impl EngineSettings {
         let engine = engine
             .with_pipeline(self.pipeline)
             .with_retrieval(self.retrieval.clone())
-            .with_prompt_profile(self.profile);
+            .with_prompt_profile(self.profile)
+            .with_whole_value_confidence(self.whole_value_confidence);
         match self.min_token_confidence {
             Some(threshold) => engine.with_min_token_confidence(threshold),
             None => engine,
@@ -325,6 +348,16 @@ mod tests {
             EngineSettings::default()
         );
         assert_eq!(EngineSettings::default().review_level, ReviewLevel::Strict);
+        assert!(!EngineSettings::default().whole_value_confidence);
+        assert!(
+            EngineSettings::parse(&values(&[("confidence-score", "whole-value")]))
+                .unwrap()
+                .whole_value_confidence
+        );
+        assert_eq!(
+            EngineSettings::parse(&values(&[("confidence-score", "min")])).unwrap(),
+            EngineSettings::default()
+        );
         assert_eq!(settings.pipeline, Pipeline::Evidence);
         assert_eq!(settings.retrieval.id_style, IdStyle::Ordinal);
         assert_eq!(
@@ -350,6 +383,7 @@ mod tests {
             ("review-level", "relaxed"),
             ("review-level", "Balanced"),
             ("review-level", ""),
+            ("confidence-score", "product"),
         ] {
             assert!(
                 EngineSettings::parse(&values(&[(key, value)])).is_err(),

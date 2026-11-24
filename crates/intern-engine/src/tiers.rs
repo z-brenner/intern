@@ -1069,6 +1069,7 @@ mod tests {
                 min,
                 mean: 0.9,
                 tokens: 12,
+                value: None,
             }),
             facts: None,
         }

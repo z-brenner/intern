@@ -223,7 +223,8 @@ pub fn replay_document(
         settings.context(),
         allow_stale,
         log.clone(),
-    );
+    )
+    .with_whole_value_confidence(settings.whole_value_confidence);
     let misses = lookup.misses();
     let engine =
         settings.configure(Engine::with_proposer(Box::new(lookup)).with_budget(current_budget()));

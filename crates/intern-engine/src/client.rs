@@ -285,6 +285,7 @@ pub struct ModelClient {
     http: Client,
     token_confidence: bool,
     token_trace: bool,
+    whole_value: bool,
     context_tokens: usize,
     #[cfg(feature = "benchmark-transport")]
     benchmark_transport: Option<crate::benchmark_transport::BenchmarkTransport>,
@@ -388,6 +389,7 @@ impl ModelClient {
             benchmark_transport: None,
             token_confidence: false,
             token_trace: false,
+            whole_value: false,
             context_tokens: crate::server::CONTEXT_TOKENS as usize,
         })
     }
@@ -440,6 +442,19 @@ impl ModelClient {
     /// token and nothing that identifies a request.
     pub fn with_token_trace(mut self, enabled: bool) -> Self {
         self.token_trace = enabled;
+        self
+    }
+
+    /// Also works out the whole-value figure of a reply's token
+    /// probabilities ([`whole_value_confidence`], kept as
+    /// [`TokenConfidence::value`]), and asks for the two most probable
+    /// tokens at each position, which it merges. Off by default. Like
+    /// [`Self::with_token_confidence`] it changes no generated token.
+    pub fn with_whole_value_confidence(mut self, enabled: bool) -> Self {
+        self.whole_value = enabled;
+        if enabled {
+            self.token_confidence = true;
+        }
         self
     }
 
@@ -541,8 +556,15 @@ impl ModelClient {
         let _ = started;
         let completion: ChatCompletion = serde_json::from_slice(&bytes)
             .map_err(|_| AttemptError(EngineErrorCode::ModelResponseInvalid))?;
-        let token_confidence = completion.token_confidence();
+        let mut token_confidence = completion.token_confidence();
         let token_trace = self.token_trace.then(|| completion.token_trace()).flatten();
+        if self.whole_value
+            && let Some(confidence) = token_confidence.as_mut()
+        {
+            confidence.value = completion
+                .token_trace()
+                .and_then(|trace| whole_value_confidence(&trace));
+        }
         let timings = completion.model_timings();
         decode(completion, request.evidence.as_ref()).map(|proposal| ProposerReply {
             proposal,
@@ -573,7 +595,11 @@ impl ModelClient {
             // trace keeps two, so that a token the grammar forced over the
             // model's own choice can be told from one the model chose.
             body["logprobs"] = json!(true);
-            body["top_logprobs"] = json!(if self.token_trace { 2 } else { 1 });
+            body["top_logprobs"] = json!(if self.token_trace || self.whole_value {
+                2
+            } else {
+                1
+            });
         }
         body
     }
@@ -738,30 +764,7 @@ pub(crate) fn token_confidence(tokens: &[TokenLogprob]) -> Option<TokenConfidenc
         }
         ranges.push((start, text.len()));
     }
-    let mut spans = Vec::new();
-    for key in [&b"\"document_date\":"[..], &b"\"parties\":"[..]] {
-        if let Some(at) = find(&text, key) {
-            value_spans(&text, at + key.len(), &mut spans);
-        }
-    }
-    let date = &b"\"date\":"[..];
-    if let Some(at) = find(&text, date).map(|at| at + date.len()) {
-        if text.get(at) == Some(&b'[') {
-            fact_span(&text, at, &mut spans);
-        } else {
-            value_spans(&text, at, &mut spans);
-        }
-    }
-    // An evidence-pipeline reply names each party in a `"name"` of its own.
-    // The key cannot occur in the digest pipeline's reply, whose strings
-    // escape every quote, so that reply's spans are unchanged.
-    let name = &b"\"name\":"[..];
-    let mut from = 0;
-    while let Some(offset) = find(&text[from..], name) {
-        let at = from + offset + name.len();
-        value_spans(&text, at, &mut spans);
-        from = at;
-    }
+    let spans = answer_spans(&text);
     let mut count = 0_u32;
     let mut sum = 0.0_f64;
     let mut min = 1.0_f64;
@@ -777,7 +780,112 @@ pub(crate) fn token_confidence(tokens: &[TokenLogprob]) -> Option<TokenConfidenc
         min: min as f32,
         mean: (sum / f64::from(count)) as f32,
         tokens: count,
+        value: None,
     })
+}
+
+/// The byte spans of `text`, a reply, that [`token_confidence`] reads: the
+/// inside of the date and of each party's name, or a bare `null` or `[]`.
+/// One span per value.
+fn answer_spans(text: &[u8]) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    for key in [&b"\"document_date\":"[..], &b"\"parties\":"[..]] {
+        if let Some(at) = find(text, key) {
+            value_spans(text, at + key.len(), &mut spans);
+        }
+    }
+    let date = &b"\"date\":"[..];
+    if let Some(at) = find(text, date).map(|at| at + date.len()) {
+        if text.get(at) == Some(&b'[') {
+            fact_span(text, at, &mut spans);
+        } else {
+            value_spans(text, at, &mut spans);
+        }
+    }
+    // An evidence-pipeline reply names each party in a `"name"` of its own.
+    // The key cannot occur in the digest pipeline's reply, whose strings
+    // escape every quote, so that reply's spans are unchanged.
+    let name = &b"\"name\":"[..];
+    let mut from = 0;
+    while let Some(offset) = find(&text[from..], name) {
+        let at = from + offset + name.len();
+        value_spans(text, at, &mut spans);
+        from = at;
+    }
+    spans
+}
+
+/// How probable the model found each value of its date and parties as a
+/// whole, from a reply's token trace: the least, over the values, of the
+/// product of the probabilities of the tokens that write it. An off-by-
+/// default alternative to [`TokenConfidence::min`], which reads only the
+/// single least probable token ([`crate::engine::Engine::with_whole_value_confidence`]).
+///
+/// A token's probability counts the alternatives the server listed that
+/// would have written the same value, so that a choice the answer does not
+/// depend on costs nothing:
+///
+/// * one that closes the value the same way and differs only in what
+///   follows the closing quote (`.","` against `.",` after "Corp");
+/// * one that differs from the chosen token only in case or spacing
+///   ("art" against "ART" in "Hartwell").
+///
+/// Which party the model writes first is not merged: in November 2026 that
+/// let wrong names through on the real sets.
+///
+/// With no alternatives listed it is the plain product, never above
+/// [`TokenConfidence::min`]. None for a reply with no date or party value.
+pub fn whole_value_confidence(trace: &[TokenTraceEntry]) -> Option<f32> {
+    let mut text = Vec::new();
+    let mut ranges = Vec::with_capacity(trace.len());
+    for entry in trace {
+        let start = text.len();
+        text.extend_from_slice(entry.token.as_bytes());
+        ranges.push((start, text.len()));
+    }
+    let folded = |token: &str| -> String {
+        token
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    let mut least: Option<f64> = None;
+    for (a, b) in answer_spans(&text) {
+        let mut log_sum = 0.0_f64;
+        for (entry, &(start, end)) in trace.iter().zip(&ranges) {
+            if !(start < b && a < end) {
+                continue;
+            }
+            let mut p = f64::from(entry.p);
+            let others = entry.top.iter().filter(|alt| alt.token != entry.token);
+            // Past the value's end: an alternative that writes the same
+            // characters of the value and closes it there.
+            if end > b && start >= a {
+                let mine = &text[start..b];
+                p += others
+                    .clone()
+                    .filter(|alt| {
+                        alt.token
+                            .find('"')
+                            .is_some_and(|quote| alt.token.as_bytes()[..quote] == *mine)
+                    })
+                    .map(|alt| f64::from(alt.p))
+                    .sum::<f64>();
+            }
+            let chosen = folded(&entry.token);
+            if !chosen.is_empty() {
+                p += others
+                    .filter(|alt| folded(&alt.token) == chosen)
+                    .map(|alt| f64::from(alt.p))
+                    .sum::<f64>();
+            }
+            log_sum += p.clamp(1e-9, 1.0).ln();
+        }
+        let whole = log_sum.exp();
+        least = Some(least.map_or(whole, |least: f64| least.min(whole)));
+    }
+    least.map(|least| least as f32)
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -2146,6 +2254,85 @@ mod tests {
         assert_eq!(confidence.tokens, 4);
         assert!(close(confidence.min, 0.5), "{confidence:?}");
         assert!(close(confidence.mean, 0.7), "{confidence:?}");
+    }
+
+    fn traced(pieces: &[(&str, f32, &[(&str, f32)])]) -> Vec<TokenTraceEntry> {
+        pieces
+            .iter()
+            .map(|(token, p, top)| TokenTraceEntry {
+                token: (*token).to_owned(),
+                p: *p,
+                top: top
+                    .iter()
+                    .map(|(token, p)| TokenAlternative {
+                        token: (*token).to_owned(),
+                        p: *p,
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// The whole-value figure is the least, over the date and each party,
+    /// of the product of the value's token probabilities, so a value
+    /// written in several doubtful tokens is less sure than its least one.
+    #[test]
+    fn the_whole_value_figure_multiplies_a_values_tokens() {
+        let trace = traced(&[
+            (r#"{"type":["Invoice","p1.b1"],"date":[""#, 0.01, &[]),
+            ("2025-05", 0.8, &[]),
+            ("-01", 0.6, &[]),
+            (r#"","issued","p1.b2"],"parties":[{"name":""#, 0.02, &[]),
+            ("Acme", 0.9, &[]),
+            (" Corp", 0.9, &[]),
+            (r#"","role":"seller","id":"p1.b3"}]}"#, 0.03, &[]),
+        ]);
+        let value = whole_value_confidence(&trace).unwrap();
+        // The date, 0.8 x 0.6, against the party, 0.9 x 0.9.
+        assert!(close(value, 0.48), "{value}");
+    }
+
+    /// A choice the value does not depend on costs nothing: how the token
+    /// that ends the value goes on past its closing quote, and the case or
+    /// spacing of a token. Which party is written first is not merged.
+    #[test]
+    fn the_whole_value_figure_merges_only_choices_the_value_does_not_depend_on() {
+        let trace = traced(&[
+            (r#"{"type":["Notice","p1.b1"],"date":[""#, 0.01, &[]),
+            ("2025-05-01", 1.0, &[]),
+            (r#"","issued","p1.b2"],"parties":[{"name":""#, 0.01, &[]),
+            ("Bas", 0.6, &[("Bas", 0.6), ("Glass", 0.4)]),
+            ("alt Corp", 1.0, &[]),
+            (r#".",""#, 0.5, &[(r#".",""#, 0.5), (r#".","#, 0.45)]),
+            (r#"role":"issuer","id":"p1.b3"},{"name":""#, 0.01, &[]),
+            ("H", 1.0, &[]),
+            ("art", 0.7, &[("art", 0.7), ("ART", 0.3)]),
+            (
+                r#"well County","role":"recipient","id":"p1.b4"}]}"#,
+                1.0,
+                &[],
+            ),
+        ]);
+        let value = whole_value_confidence(&trace).unwrap();
+        // The first party: 0.6 for its order, kept, x 0.95 for its closing
+        // token merged. The second: 1.0, its case merged. The date: 1.0.
+        assert!(close(value, 0.57), "{value}");
+        let min = trace
+            .iter()
+            .filter(|entry| entry.p < 0.9)
+            .map(|entry| entry.p)
+            .fold(1.0_f32, f32::min);
+        assert!(value > min, "{value} against the least token, {min}");
+    }
+
+    /// A reply that names no date and no party has no whole-value figure,
+    /// as it has no token confidence.
+    #[test]
+    fn a_reply_with_no_values_has_no_whole_value_figure() {
+        assert_eq!(
+            whole_value_confidence(&traced(&[(r#"{"type":null}"#, 0.5, &[])])),
+            None
+        );
     }
 
     /// Choosing to say nothing is a choice too: a null date and an empty party

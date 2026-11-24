@@ -334,6 +334,9 @@ pub struct LookupProposer {
     context_tokens: Option<usize>,
     log: ExchangeLog,
     misses: Arc<Mutex<Vec<String>>>,
+    /// Whether a reply's [`TokenConfidence::value`] is worked out from its
+    /// recorded token trace ([`intern_engine::client::whole_value_confidence`]).
+    whole_value: bool,
 }
 
 impl LookupProposer {
@@ -354,7 +357,17 @@ impl LookupProposer {
             context_tokens,
             log,
             misses: Arc::new(Mutex::new(Vec::new())),
+            whole_value: false,
         }
+    }
+
+    /// Works out each reply's whole-value figure from its recorded token
+    /// trace, for a run scored with
+    /// [`intern_engine::Engine::with_whole_value_confidence`]. A reply
+    /// recorded without a trace keeps none.
+    pub fn with_whole_value_confidence(mut self, enabled: bool) -> Self {
+        self.whole_value = enabled;
+        self
     }
 
     /// A handle on the prompts that missed, readable after the engine has
@@ -406,7 +419,16 @@ impl Proposer for LookupProposer {
                 wall_micros: u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
             },
         );
-        reply.answer()
+        let mut answer = reply.answer()?;
+        if self.whole_value
+            && let (Some(confidence), Some(trace)) = (
+                answer.token_confidence.as_mut(),
+                answer.token_trace.as_deref(),
+            )
+        {
+            confidence.value = intern_engine::client::whole_value_confidence(trace);
+        }
+        Ok(answer)
     }
 
     fn context_tokens(&self) -> Option<usize> {

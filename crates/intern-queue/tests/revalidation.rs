@@ -44,6 +44,7 @@ const UNSURE: TokenConfidence = TokenConfidence {
     min: 0.6,
     mean: 0.9,
     tokens: 14,
+    value: None,
 };
 
 /// The review gate on token confidence that the later release brings.

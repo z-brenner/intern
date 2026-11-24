@@ -679,6 +679,13 @@ pub struct TokenConfidence {
     pub mean: f32,
     /// How many tokens the figures were taken over.
     pub tokens: u32,
+    /// The whole-value figure ([`crate::client::whole_value_confidence`]):
+    /// the least probable date or party value as a whole, with choices the
+    /// value does not depend on merged. Only set where it was asked for
+    /// ([`crate::Engine::with_whole_value_confidence`]); a reading stored
+    /// without it reads as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<f32>,
 }
 
 /// One generated token of a reply as the server reported it, for the

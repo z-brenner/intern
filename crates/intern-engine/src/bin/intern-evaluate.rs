@@ -2287,6 +2287,7 @@ mod tests {
             min: 0.3,
             mean: 0.8,
             tokens: 9,
+            value: None,
         };
         if let Some(RecordedReply::Proposed {
             token_confidence, ..
