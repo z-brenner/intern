@@ -75,6 +75,13 @@ pub struct DocumentRecord {
     pub stale: bool,
     #[serde(default)]
     pub filename: Option<String>,
+    /// The name the queue files the document under: the engine's name led
+    /// by the organization it is filed for ([`intern_engine::NameView`]),
+    /// with no own organization, house style or original file name, which
+    /// the bench has none of. What a person sees in the folder, where
+    /// `filename` is what the gold and the scores read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filed_name: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
     /// `ready`, `needs_review`, or `failed`.
@@ -308,6 +315,15 @@ pub fn scored_record(document: &GoldDocument, observation: Observation<'_>) -> D
             // score read from its readiness, is what the app would do.
             let ready = readiness(analysis, observation.review_level).ready;
             record.filename = Some(analysis.filename.clone());
+            let extension = std::path::Path::new(&analysis.filename)
+                .extension()
+                .map(|extension| extension.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            record.filed_name = Some(
+                intern_engine::NameView::of(&analysis.proposal, &[], analysis.facts.as_ref(), &[])
+                    .compose(&extension, &[])
+                    .value,
+            );
             record.description = Some(analysis.description.clone());
             record.readiness = Some(if ready { "ready" } else { "needs_review" }.to_owned());
             record.review_reasons = analysis

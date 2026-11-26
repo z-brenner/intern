@@ -43,15 +43,24 @@ pub enum ReviewLevel {
     /// description is worded, or about the model's token probabilities, and
     /// the reading has a date and a type. See [`readiness`] for the rule.
     Balanced,
+    /// Strict, except that a reading whose only doubt is which side its
+    /// parties are on ([`ReviewReason::PartyRoleUnconfirmed`]) is ready:
+    /// every party in the name is in the document, the date, the type and
+    /// the token probabilities passed, and only the joining word rests on
+    /// the reply's roles. Off unless a settings file names it; Settings does
+    /// not offer it. See [`readiness`] for the measurement behind it.
+    #[serde(rename = "strict_sides")]
+    StrictSides,
 }
 
 impl ReviewLevel {
-    pub const ALL: [Self; 2] = [Self::Strict, Self::Balanced];
+    pub const ALL: [Self; 3] = [Self::Strict, Self::Balanced, Self::StrictSides];
 
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Strict => "strict",
             Self::Balanced => "balanced",
+            Self::StrictSides => "strict_sides",
         }
     }
 
@@ -158,7 +167,10 @@ pub const MINOR: [ReviewReason; 4] = [
 ///    [`ReviewReason::TypeMissing`], [`ReviewReason::TypeUnsupported`] or
 ///    [`ReviewReason::LowConfidence`]. [`ReviewReason::PartyRoleUnconfirmed`]
 ///    holds at both levels: as a note at balanced it filed 89 more names on
-///    real sets 1 to 8, 19 of them really wrong (November 2026). Any other reason holds it: every date
+///    real sets 1 to 8, 19 of them really wrong (November 2026). At
+///    strict_sides it does not hold: with every other doubt held as at
+///    strict, it was the only hold on 19 names on the same sets, 1 of them
+///    really wrong (a date), 5 minor (the joining word). Any other reason holds it: every date
 ///    reason but a missing date the queue has filled in, every party
 ///    reason, a parser warning, the model's own request for review, the
 ///    quick model's readings ([`ReviewReason::FastModelReading`]), at strict
@@ -191,6 +203,7 @@ pub fn readiness(analysis: &DocumentAnalysis, level: ReviewLevel) -> Readiness {
     }
     let reasons = &analysis.review_reasons;
     let balanced = level == ReviewLevel::Balanced;
+    let sides = level == ReviewLevel::StrictSides;
     let has = |reason: ReviewReason| reasons.contains(&reason);
     let typed = names_a_type(analysis);
     let dated = dated(analysis);
@@ -213,6 +226,8 @@ pub fn readiness(analysis: &DocumentAnalysis, level: ReviewLevel) -> Readiness {
             ReviewReason::TypeMissing if balanced => !typed,
             ReviewReason::TypeUnsupported if balanced => !typed || title_stood_in,
             ReviewReason::LowConfidence if balanced => unsure_of_itself,
+            // The side alone, at strict_sides only.
+            ReviewReason::PartyRoleUnconfirmed if sides => false,
             _ => true,
         })
         .collect::<Vec<_>>();
@@ -565,6 +580,47 @@ mod tests {
         ] {
             assert!(!MINOR.contains(&reason), "{reason:?}");
         }
+    }
+
+    /// At strict_sides the side alone does not hold, and nothing else
+    /// changes: beside any other doubt it still waits for that doubt, and
+    /// the other levels still hold it.
+    #[test]
+    fn strict_sides_files_a_name_whose_only_doubt_is_the_side() {
+        let side = reading(&[ReviewReason::PartyRoleUnconfirmed]);
+        assert_eq!(
+            readiness(&side, ReviewLevel::StrictSides),
+            Readiness::ready()
+        );
+        for level in [ReviewLevel::Strict, ReviewLevel::Balanced] {
+            assert_eq!(
+                readiness(&side, level),
+                waits(&[ReviewReason::PartyRoleUnconfirmed]),
+                "{level:?}"
+            );
+        }
+        for other in [
+            ReviewReason::LowConfidence,
+            ReviewReason::TypeMissing,
+            ReviewReason::TypeUnsupported,
+            ReviewReason::PartyUnsupported,
+            ReviewReason::DateAmbiguous,
+        ] {
+            let both = reading(&[ReviewReason::PartyRoleUnconfirmed, other]);
+            assert_eq!(
+                readiness(&both, ReviewLevel::StrictSides),
+                waits(&[other]),
+                "{other:?}"
+            );
+        }
+        assert_eq!(
+            ReviewLevel::parse("strict_sides"),
+            Some(ReviewLevel::StrictSides)
+        );
+        assert_eq!(
+            serde_json::to_value(ReviewLevel::StrictSides).unwrap(),
+            serde_json::json!("strict_sides")
+        );
     }
 
     /// A missing date is minor only once the queue has given the reading a
