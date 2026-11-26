@@ -1,0 +1,516 @@
+{
+ "all": {
+  "date_recall": [
+   350,
+   397
+  ],
+  "party_recall": [
+   377,
+   412
+  ],
+  "qwen_date": [
+   344,
+   397
+  ],
+  "qwen_parties": [
+   314,
+   412
+  ],
+  "qwen_relation": [
+   311,
+   412
+  ],
+  "qwen_name": [
+   279,
+   412
+  ],
+  "clef_date": [
+   344,
+   395
+  ],
+  "clef_parties": [
+   293,
+   410
+  ],
+  "clef_relation": [
+   314,
+   410
+  ],
+  "clef_name": [
+   271,
+   410
+  ],
+  "slot_parties": [
+   294,
+   410
+  ],
+  "slot_relation": [
+   303,
+   410
+  ],
+  "slot_name": [
+   271,
+   410
+  ]
+ },
+ "internbench": {
+  "date_recall": [
+   76,
+   77
+  ],
+  "party_recall": [
+   77,
+   77
+  ],
+  "qwen_date": [
+   74,
+   77
+  ],
+  "qwen_parties": [
+   77,
+   77
+  ],
+  "qwen_relation": [
+   77,
+   77
+  ],
+  "qwen_name": [
+   77,
+   77
+  ],
+  "clef_date": [
+   74,
+   76
+  ],
+  "clef_parties": [
+   67,
+   76
+  ],
+  "clef_relation": [
+   63,
+   76
+  ],
+  "clef_name": [
+   58,
+   76
+  ],
+  "slot_parties": [
+   68,
+   76
+  ],
+  "slot_relation": [
+   69,
+   76
+  ],
+  "slot_name": [
+   63,
+   76
+  ]
+ },
+ "real1": {
+  "date_recall": [
+   50,
+   57
+  ],
+  "party_recall": [
+   53,
+   58
+  ],
+  "qwen_date": [
+   47,
+   57
+  ],
+  "qwen_parties": [
+   42,
+   58
+  ],
+  "qwen_relation": [
+   41,
+   58
+  ],
+  "qwen_name": [
+   37,
+   58
+  ],
+  "clef_date": [
+   50,
+   57
+  ],
+  "clef_parties": [
+   40,
+   58
+  ],
+  "clef_relation": [
+   46,
+   58
+  ],
+  "clef_name": [
+   40,
+   58
+  ],
+  "slot_parties": [
+   36,
+   58
+  ],
+  "slot_relation": [
+   43,
+   58
+  ],
+  "slot_name": [
+   35,
+   58
+  ]
+ },
+ "real2": {
+  "date_recall": [
+   52,
+   59
+  ],
+  "party_recall": [
+   53,
+   59
+  ],
+  "qwen_date": [
+   53,
+   59
+  ],
+  "qwen_parties": [
+   43,
+   59
+  ],
+  "qwen_relation": [
+   45,
+   59
+  ],
+  "qwen_name": [
+   39,
+   59
+  ],
+  "clef_date": [
+   51,
+   59
+  ],
+  "clef_parties": [
+   39,
+   59
+  ],
+  "clef_relation": [
+   47,
+   59
+  ],
+  "clef_name": [
+   39,
+   59
+  ],
+  "slot_parties": [
+   40,
+   59
+  ],
+  "slot_relation": [
+   43,
+   59
+  ],
+  "slot_name": [
+   39,
+   59
+  ]
+ },
+ "real3": {
+  "date_recall": [
+   43,
+   56
+  ],
+  "party_recall": [
+   51,
+   57
+  ],
+  "qwen_date": [
+   44,
+   56
+  ],
+  "qwen_parties": [
+   39,
+   57
+  ],
+  "qwen_relation": [
+   40,
+   57
+  ],
+  "qwen_name": [
+   32,
+   57
+  ],
+  "clef_date": [
+   42,
+   56
+  ],
+  "clef_parties": [
+   34,
+   57
+  ],
+  "clef_relation": [
+   45,
+   57
+  ],
+  "clef_name": [
+   33,
+   57
+  ],
+  "slot_parties": [
+   36,
+   57
+  ],
+  "slot_relation": [
+   39,
+   57
+  ],
+  "slot_name": [
+   34,
+   57
+  ]
+ },
+ "real4": {
+  "date_recall": [
+   46,
+   50
+  ],
+  "party_recall": [
+   53,
+   53
+  ],
+  "qwen_date": [
+   43,
+   50
+  ],
+  "qwen_parties": [
+   41,
+   53
+  ],
+  "qwen_relation": [
+   41,
+   53
+  ],
+  "qwen_name": [
+   37,
+   53
+  ],
+  "clef_date": [
+   45,
+   49
+  ],
+  "clef_parties": [
+   34,
+   52
+  ],
+  "clef_relation": [
+   41,
+   52
+  ],
+  "clef_name": [
+   32,
+   52
+  ],
+  "slot_parties": [
+   38,
+   52
+  ],
+  "slot_relation": [
+   43,
+   52
+  ],
+  "slot_name": [
+   37,
+   52
+  ]
+ },
+ "real5": {
+  "date_recall": [
+   44,
+   53
+  ],
+  "party_recall": [
+   48,
+   57
+  ],
+  "qwen_date": [
+   45,
+   53
+  ],
+  "qwen_parties": [
+   35,
+   57
+  ],
+  "qwen_relation": [
+   31,
+   57
+  ],
+  "qwen_name": [
+   26,
+   57
+  ],
+  "clef_date": [
+   43,
+   53
+  ],
+  "clef_parties": [
+   41,
+   57
+  ],
+  "clef_relation": [
+   38,
+   57
+  ],
+  "clef_name": [
+   36,
+   57
+  ],
+  "slot_parties": [
+   39,
+   57
+  ],
+  "slot_relation": [
+   32,
+   57
+  ],
+  "slot_name": [
+   31,
+   57
+  ]
+ },
+ "real6": {
+  "date_recall": [
+   39,
+   45
+  ],
+  "party_recall": [
+   42,
+   51
+  ],
+  "qwen_date": [
+   38,
+   45
+  ],
+  "qwen_parties": [
+   37,
+   51
+  ],
+  "qwen_relation": [
+   36,
+   51
+  ],
+  "qwen_name": [
+   31,
+   51
+  ],
+  "clef_date": [
+   39,
+   45
+  ],
+  "clef_parties": [
+   38,
+   51
+  ],
+  "clef_relation": [
+   34,
+   51
+  ],
+  "clef_name": [
+   33,
+   51
+  ],
+  "slot_parties": [
+   37,
+   51
+  ],
+  "slot_relation": [
+   34,
+   51
+  ],
+  "slot_name": [
+   32,
+   51
+  ]
+ },
+ "flips": {
+  "date": {
+   "clef_right_qwen_wrong": 12,
+   "qwen_right_clef_wrong": 10
+  },
+  "name": {
+   "clef_right_qwen_wrong": 51,
+   "qwen_right_clef_wrong": 57
+  },
+  "slot_name": {
+   "clef_right_qwen_wrong": 23,
+   "qwen_right_clef_wrong": 29
+  }
+ },
+ "ms_median": 98146,
+ "ms_p90": 275970,
+ "relation_confusion": [
+  [
+   "from->from",
+   122
+  ],
+  [
+   "to->to",
+   100
+  ],
+  [
+   "for->for",
+   56
+  ],
+  [
+   "from->to",
+   43
+  ],
+  [
+   "between->for",
+   22
+  ],
+  [
+   "between->between",
+   21
+  ],
+  [
+   "for->from",
+   9
+  ],
+  [
+   "from->for",
+   9
+  ],
+  [
+   "to->for",
+   9
+  ],
+  [
+   "None->from",
+   8
+  ],
+  [
+   "for->to",
+   5
+  ],
+  [
+   "between->to",
+   2
+  ],
+  [
+   "from->between",
+   1
+  ],
+  [
+   "for->between",
+   1
+  ],
+  [
+   "None->for",
+   1
+  ],
+  [
+   "to->from",
+   1
+  ]
+ ]
+}
