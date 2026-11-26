@@ -23,7 +23,14 @@ and the review gate's choice, with gold second-read by three readers and adjudic
 sample-heldout7.json, the eighth, 55 letters, notices, invoices, forms, memoranda, contracts,
 minutes, statements, a purchase order and a report from 45 hosts in seven countries and bodies of
 the European Union, none used by an earlier sample, gathered after the rules of alpha.18, with
-gold second-read blind and adjudicated. A live
+gold second-read blind and adjudicated; or sample-heldout8.json, the ninth, 39 letters, contracts,
+notices, memoranda, forms, minutes, invoices, purchase orders, a statement and a report from 19
+hosts, none used by an earlier sample, gathered after the rules of alpha.21, with gold second-read
+blind and adjudicated (its seven www.ed.gov documents refuse this script and are saved by hand); or
+sample-heldout9.json, the tenth, 50 letters, notices, contracts, orders, minutes, memoranda,
+invoices, purchase orders, forms, statements, reports and an e-mail from 48 hosts in six countries,
+none used by an earlier sample, with gold second-read blind and adjudicated, sealed for one
+candidate. A live
 run then records and scores it like any corpus, with InternBench's own filename score:
 
     CORPUS=OUT_DIR/corpus GOLD=OUT_DIR/gold.json MANIFEST= MODEL=... LLAMA_SERVER=... \\
